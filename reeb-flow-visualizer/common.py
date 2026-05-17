@@ -3,7 +3,7 @@ from pathlib import Path
 
 # ================= USER SETTINGS =================
 
-BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene/test")
+BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene")
 
 FV99 = Path(
     "/home/mohit/Desktop/postdoc/petars_fiber_flexing/"
@@ -26,6 +26,8 @@ RSI_DIR = BASE_DIR / "sheetInfo"
 
 OUTPUT_DIR = BASE_DIR / "sankey"
 RSI_JSON_DIR = OUTPUT_DIR / "rsi_json"
+VIEWER_DIR = OUTPUT_DIR / "interactive_sankey_viewer"
+SHEET_IMAGE_DIR = BASE_DIR / "sheetREndering"
 
 
 # Output files
