@@ -160,7 +160,14 @@ def write_index_html():
 
       <section>
         <h2>Ordering</h2>
-        <p class="hint">decreasing area</p>
+        <label>
+          Node ordering
+          <select id="ordering">
+            <option value="area" selected>decreasing area</option>
+            <option value="rank">increasing rank</option>
+            <option value="crossings">crossing-minimized</option>
+          </select>
+        </label>
       </section>
 
       <section>
@@ -348,7 +355,7 @@ function getControls() {
     threshold: +document.getElementById("threshold").value,
     percentMode: document.getElementById("percentMode").value,
     hideIsolated: document.getElementById("hideIsolated").checked,
-    ordering: "area",
+    ordering: document.getElementById("ordering").value,
     ranges: normalizedRanges()
   };
 }
@@ -467,6 +474,79 @@ function setZoomScale(nextScale, focus = null) {
 
 function orderNodes(nodes, links, mode) {
   const byTime = d3.group(nodes, d => +d.timestep_index);
+  const columns = [...byTime.entries()]
+    .sort((a, b) => d3.ascending(+a[0], +b[0]))
+    .map(([t, column]) => ({ t: +t, column }));
+
+  if (mode === "crossings") {
+    const nodeById = new Map(nodes.map(node => [node.id, node]));
+    const orderById = new Map();
+
+    const rankComparator = (a, b) =>
+      d3.ascending(a.rank ?? 999999, b.rank ?? 999999) ||
+      d3.descending(+a.area || 0, +b.area || 0) ||
+      d3.ascending(String(a.id), String(b.id));
+
+    for (const { column } of columns) {
+      column.sort(rankComparator);
+      column.forEach((node, i) => orderById.set(node.id, i));
+    }
+
+    const barycenter = (node, direction) => {
+      const neighbors = links
+        .filter(link =>
+          direction === "left"
+            ? link.target === node.id
+            : link.source === node.id
+        )
+        .map(link =>
+          direction === "left"
+            ? nodeById.get(link.source)
+            : nodeById.get(link.target)
+        )
+        .filter(neighbor =>
+          neighbor &&
+          (direction === "left"
+            ? +neighbor.timestep_index < +node.timestep_index
+            : +neighbor.timestep_index > +node.timestep_index)
+        );
+
+      if (!neighbors.length) return null;
+      return d3.mean(neighbors, neighbor => orderById.get(neighbor.id) ?? 0);
+    };
+
+    const compareByBarycenter = (a, b, direction) => {
+      const baryA = barycenter(a, direction);
+      const baryB = barycenter(b, direction);
+      const aKey = baryA === null ? Infinity : baryA;
+      const bKey = baryB === null ? Infinity : baryB;
+      return (
+        d3.ascending(aKey, bKey) ||
+        rankComparator(a, b)
+      );
+    };
+
+    for (let iter = 0; iter < 4; iter++) {
+      for (let i = 1; i < columns.length; i++) {
+        const column = columns[i].column;
+        column.sort((a, b) => compareByBarycenter(a, b, "left"));
+        column.forEach((node, order) => orderById.set(node.id, order));
+      }
+
+      for (let i = columns.length - 2; i >= 0; i--) {
+        const column = columns[i].column;
+        column.sort((a, b) => compareByBarycenter(a, b, "right"));
+        column.forEach((node, order) => orderById.set(node.id, order));
+      }
+    }
+
+    nodes.sort(
+      (a, b) =>
+        d3.ascending(+a.timestep_index, +b.timestep_index) ||
+        d3.ascending(orderById.get(a.id) ?? 0, orderById.get(b.id) ?? 0)
+    );
+    return;
+  }
 
   for (const [, column] of byTime) {
     column.sort((a, b) => {
@@ -1209,6 +1289,10 @@ function bindControls() {
       document.getElementById("thresholdValue").textContent = `${document.getElementById("threshold").value}%`;
       renderSankey({ preserveFocus: true });
     });
+  });
+
+  document.getElementById("ordering").addEventListener("change", () => {
+    renderSankey({ preserveFocus: true });
   });
 
   document.getElementById("addRange").addEventListener("click", () => {
