@@ -121,8 +121,9 @@ def write_index_html():
       <p>Filter overlaps, select timestep ranges, inspect sheet transitions.</p>
     </div>
     <div style="display:flex; gap:8px;">
+      <button id="zoomOut">Zoom out</button>
+      <button id="zoomIn">Zoom in</button>
       <button id="centerView">Center sankey</button>
-      <button id="resetView">Reset view</button>
     </div>
   </header>
 
@@ -229,6 +230,7 @@ main {
   height: calc(100vh - 76px);
   display: grid;
   grid-template-columns: 290px minmax(0, 1fr) 340px;
+  min-height: 0;
 }
 aside {
   overflow: auto;
@@ -252,9 +254,9 @@ label.inline { display: flex; align-items: center; gap: 8px; }
 .range-row.selected { border-color: #2f80c9; background: #edf6ff; }
 .range-row input { width: 100%; cursor: text; }
 .hint { font-size: 12px; color: #71808f; }
-#viewer { min-width: 0; display: grid; grid-template-rows: 88px minmax(0, 1fr); }
+#viewer { min-width: 0; min-height: 0; display: grid; grid-template-rows: 88px minmax(0, 1fr); }
 #minimap { background: #fff; border-bottom: 1px solid #d9dee5; }
-#chartWrap { overflow: auto; position: relative; }
+#chartWrap { overflow: hidden; position: relative; background: #fff; min-height: 0; }
 #chart { display: block; background: #fff; }
 .node rect { cursor: pointer; stroke: rgba(20, 30, 40, 0.4); stroke-width: 0.6; fill: #6f9ed4; }
 .node text { font-size: 11px; pointer-events: none; fill: #15202b; }
@@ -315,6 +317,19 @@ let rangeDrag = null;
 let minimapBarScale = null;
 let minimapBarMaxIndex = 0;
 let minimapState = null;
+let zoomScale = 1;
+let viewFocus = null;
+let panDrag = null;
+
+const BASE_COLUMN_SPACING = 190;
+const BASE_MARGIN_X = 280;
+const BASE_ROW_HEIGHT = 55;
+const BASE_MARGIN_Y = 600;
+const VIEWPORT_ANCHOR_Y = 0.38;
+const ZOOM_MIN = 0.1;
+const ZOOM_MAX = 20;
+const ZOOM_STEP = 1.2;
+const PAN_DRAG_THRESHOLD = 4;
 
 const chart = d3.select("#chart");
 const tooltip = d3.select("#tooltip");
@@ -431,6 +446,25 @@ function buildDisplayLayout(timestepValues, selectedRanges) {
   };
 }
 
+function clampZoom(scale) {
+  return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, scale));
+}
+
+function isPanTarget(target) {
+  if (!target || !(target instanceof Element)) return true;
+  return Boolean(
+    target.closest(".node, .link, .range-row, .range-hitbox, .range-selected, input, button, select, label, #minimap")
+  ) === false;
+}
+
+function setZoomScale(nextScale, focus = null) {
+  const clamped = clampZoom(nextScale);
+  if (Math.abs(clamped - zoomScale) < 1e-9) return;
+
+  zoomScale = clamped;
+  renderSankey({ preserveFocus: true });
+}
+
 function orderNodes(nodes, links, mode) {
   const byTime = d3.group(nodes, d => +d.timestep_index);
 
@@ -458,9 +492,9 @@ function orderNodes(nodes, links, mode) {
   );
 }
 
-function applyTemporalXPositions(graph, layout, width) {
+function applyTemporalXPositions(graph, layout) {
   const left = 70;
-  const right = width - 90;
+  const right = 110 + layout.displayColumnCount * BASE_COLUMN_SPACING;
   const nodeWidth = 12;
   const maxColumn = Math.max(0, layout.displayColumnCount - 1);
 
@@ -475,9 +509,9 @@ function applyTemporalXPositions(graph, layout, width) {
   }
 }
 
-function applyOrderedYPositions(graph, height) {
+function applyOrderedYPositions(graph) {
   const top = 50;
-  const bottom = height - 50;
+  const bottom = 1150;
   const minNodeHeight = 5;
   const nodeGap = 18;
 
@@ -486,28 +520,22 @@ function applyOrderedYPositions(graph, height) {
       d3.ascending(a._order ?? 999999, b._order ?? 999999)
     );
 
-    const available = Math.max(
-      1,
-      bottom - top - nodeGap * Math.max(0, column.length - 1)
-    );
-
     const totalArea = d3.sum(column, d => Math.max(0, +d.area || 0));
-    const fallbackHeight = Math.max(
-      minNodeHeight,
-      available / Math.max(1, column.length)
-    );
+    const fallbackHeight = minNodeHeight;
+    const available = Math.max(1, bottom - top - nodeGap * Math.max(0, column.length - 1));
+    const heights = column.map(node => totalArea > 0
+      ? Math.max(minNodeHeight, available * Math.max(0, +node.area || 0) / totalArea)
+      : fallbackHeight);
 
     let y = top;
 
-    for (const node of column) {
-      const h = totalArea > 0
-        ? Math.max(minNodeHeight, available * Math.max(0, +node.area || 0) / totalArea)
-        : fallbackHeight;
+    column.forEach((node, i) => {
+      const h = heights[i];
 
       node.y0 = y;
       node.y1 = y + h;
       y = node.y1 + nodeGap;
-    }
+    });
   }
 
   for (const node of graph.nodes) {
@@ -526,6 +554,19 @@ function applyOrderedYPositions(graph, height) {
   for (const link of graph.links) {
     link.visualWidth = widthScale(+link.overlap_vertices || +link.value || 1);
   }
+}
+
+function graphBounds(graph) {
+  if (!graph.nodes.length) {
+    return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  }
+
+  return {
+    minX: d3.min(graph.nodes, d => d.x0) ?? 0,
+    maxX: d3.max(graph.nodes, d => d.x1) ?? 0,
+    minY: d3.min(graph.nodes, d => d.y0) ?? 0,
+    maxY: d3.max(graph.nodes, d => d.y1) ?? 0
+  };
 }
 
 function assignLinkOffsets(node, links, key) {
@@ -553,10 +594,7 @@ function assignLinkOffsets(node, links, key) {
   }
 }
 
-function renderSankey({ keepScroll = true } = {}) {
-  const previousScrollLeft = keepScroll ? chartWrap.scrollLeft : 0;
-  const previousScrollTop = keepScroll ? chartWrap.scrollTop : 0;
-
+function renderSankey({ preserveFocus = true } = {}) {
   const filtered = filterData();
   orderNodes(filtered.nodes, filtered.links, filtered.controls.ordering);
 
@@ -569,16 +607,19 @@ function renderSankey({ keepScroll = true } = {}) {
     ...d3.rollup(filtered.nodes, v => v.length, d => +d.timestep_index).values()
   ]) || 1;
 
-  const width = Math.max(chartWrap.clientWidth, layout.displayColumnCount * 190 + 280);
-  const height = Math.max(chartWrap.clientHeight, maxColumn * 55 + 180);
+  const width = Math.max(1, chartWrap.clientWidth);
+  const height = Math.max(1, chartWrap.clientHeight);
 
   chart.attr("width", width).attr("height", height);
   chart.selectAll("*").remove();
 
-  const root = chart.append("g").attr("class", "sankey-root");
+  const root = chart.append("g")
+    .attr("class", "sankey-root")
+    .attr("transform", "translate(0,0)");
 
   if (!filtered.nodes.length) {
     lastGraph = { nodes: [], links: [] };
+    viewFocus = null;
     root.append("text")
       .attr("x", 40)
       .attr("y", 60)
@@ -620,8 +661,20 @@ function renderSankey({ keepScroll = true } = {}) {
     links: graphLinks
   };
 
-  applyTemporalXPositions(graph, layout, width);
-  applyOrderedYPositions(graph, height);
+  applyTemporalXPositions(graph, layout);
+  applyOrderedYPositions(graph);
+  const bounds = graphBounds(graph);
+  const graphCenterX = (bounds.minX + bounds.maxX) / 2;
+  const graphCenterY = (bounds.minY + bounds.maxY) / 2;
+  if (!viewFocus || !preserveFocus) {
+    viewFocus = { x: graphCenterX, y: graphCenterY };
+  } else if (!Number.isFinite(viewFocus.x) || !Number.isFinite(viewFocus.y)) {
+    viewFocus = { x: graphCenterX, y: graphCenterY };
+  }
+
+  const translateX = width / 2 - viewFocus.x * zoomScale;
+  const translateY = height * VIEWPORT_ANCHOR_Y - viewFocus.y * zoomScale;
+  root.attr("transform", `translate(${translateX},${translateY}) scale(${zoomScale})`);
 
   lastGraph = graph;
   updateMiniMapState(graph);
@@ -632,16 +685,6 @@ function renderSankey({ keepScroll = true } = {}) {
       x: d3.mean(ns, n => (n.x0 + n.x1) / 2),
       label: ns[0].timestep_label
     }));
-
-  root.append("g")
-    .selectAll("text")
-    .data(timestepLabels)
-    .join("text")
-    .attr("class", "timestep-label")
-    .attr("x", d => d.x)
-    .attr("y", 26)
-    .attr("text-anchor", "middle")
-    .text(d => d.label);
 
   root.append("g")
     .selectAll("path")
@@ -675,15 +718,20 @@ function renderSankey({ keepScroll = true } = {}) {
     .attr("y", d => (d.y0 + d.y1) / 2)
     .attr("dy", "0.35em")
     .attr("text-anchor", "start")
+    .attr("font-size", 11)
     .text(d => `S${d.sheet_id} R${d.rank}`);
 
-  if (keepScroll) {
-    chartWrap.scrollLeft = Math.min(previousScrollLeft, Math.max(0, chartWrap.scrollWidth - chartWrap.clientWidth));
-    chartWrap.scrollTop = Math.min(previousScrollTop, Math.max(0, chartWrap.scrollHeight - chartWrap.clientHeight));
-  } else {
-    chartWrap.scrollLeft = 0;
-    chartWrap.scrollTop = 0;
-  }
+  chart.append("g")
+    .attr("class", "timestep-label-layer")
+    .selectAll("text")
+    .data(timestepLabels)
+    .join("text")
+    .attr("class", "timestep-label")
+    .attr("x", d => d.x * zoomScale + translateX)
+    .attr("y", 18)
+    .attr("text-anchor", "middle")
+    .attr("font-size", 11)
+    .text(d => d.label);
 
   updateStats(filtered);
   renderMiniMap();
@@ -802,14 +850,14 @@ function renderRangeRows() {
     start.addEventListener("input", debounce(() => {
       ranges[i].start = +start.value;
       renderRangeRows();
-      renderSankey({ keepScroll: false });
+      renderSankey({ preserveFocus: true });
       if (i === selectedRangeIndex) requestAnimationFrame(() => centerSelectedRange(i));
     }));
 
     end.addEventListener("input", debounce(() => {
       ranges[i].end = +end.value;
       renderRangeRows();
-      renderSankey({ keepScroll: false });
+      renderSankey({ preserveFocus: true });
       if (i === selectedRangeIndex) requestAnimationFrame(() => centerSelectedRange(i));
     }));
 
@@ -826,7 +874,7 @@ function addRange(start = 0, end = 20) {
   ranges.push({ start, end });
   selectedRangeIndex = ranges.length - 1;
   renderRangeRows();
-  renderSankey({ keepScroll: false });
+  renderSankey({ preserveFocus: true });
   requestAnimationFrame(() => centerSelectedRange(selectedRangeIndex));
 }
 
@@ -839,7 +887,7 @@ function deleteRange(index = selectedRangeIndex) {
     : -1;
 
   renderRangeRows();
-  renderSankey({ keepScroll: false });
+  renderSankey({ preserveFocus: true });
   if (selectedRangeIndex >= 0) requestAnimationFrame(() => centerSelectedRange(selectedRangeIndex));
 }
 
@@ -883,14 +931,8 @@ function centerSelectedRange(index = selectedRangeIndex) {
   const maxX = d3.max(nodes, d => d.x1) ?? 0;
   const minY = d3.min(nodes, d => d.y0) ?? 0;
   const maxY = d3.max(nodes, d => d.y1) ?? 0;
-
-  chartWrap.scrollTo({
-    left: Math.max(0, (minX + maxX) / 2 - chartWrap.clientWidth / 2),
-    top: Math.max(0, (minY + maxY) / 2 - chartWrap.clientHeight / 2),
-    behavior: "smooth"
-  });
-
-  setTimeout(renderMiniMap, 250);
+  viewFocus = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  renderSankey({ preserveFocus: true });
 }
 
 function centerSankey() {
@@ -898,13 +940,13 @@ function centerSankey() {
     centerSelectedRange(selectedRangeIndex);
     return;
   }
-
-  chartWrap.scrollTo({
-    left: Math.max(0, (chartWrap.scrollWidth - chartWrap.clientWidth) / 2),
-    top: Math.max(0, (chartWrap.scrollHeight - chartWrap.clientHeight) / 2),
-    behavior: "smooth"
-  });
-  setTimeout(renderMiniMap, 250);
+  if (!lastGraph || !lastGraph.nodes.length) return;
+  const bounds = graphBounds(lastGraph);
+  viewFocus = {
+    x: (bounds.minX + bounds.maxX) / 2,
+    y: (bounds.minY + bounds.maxY) / 2
+  };
+  renderSankey({ preserveFocus: true });
 }
 
 function clampTimestep(value, maxIndex) {
@@ -948,7 +990,7 @@ function finishRangeDrag() {
   selectedRangeIndex = ranges.length - 1;
 
   renderRangeRows();
-  renderSankey({ keepScroll: false });
+  renderSankey({ preserveFocus: true });
   requestAnimationFrame(() => centerSelectedRange(selectedRangeIndex));
 }
 
@@ -981,11 +1023,15 @@ function updateMiniMapState(graph) {
 }
 
 function visibleTimestepWindow() {
-  if (!minimapState) return null;
+  if (!minimapState || !viewFocus) return null;
+
+  const width = Math.max(1, chartWrap.clientWidth);
+  const startX = viewFocus.x - width / (2 * zoomScale);
+  const endX = viewFocus.x + width / (2 * zoomScale);
 
   return {
-    start: minimapState.graphToTime(chartWrap.scrollLeft),
-    end: minimapState.graphToTime(chartWrap.scrollLeft + chartWrap.clientWidth)
+    start: minimapState.graphToTime(startX),
+    end: minimapState.graphToTime(endX)
   };
 }
 
@@ -1085,9 +1131,67 @@ function renderMiniMap() {
 }
 
 function bindControls() {
-  const update = debounce(() => renderSankey({ keepScroll: true }));
+  chartWrap.style.cursor = "grab";
+  chartWrap.addEventListener("pointerdown", event => {
+    if (event.button !== 0 || !isPanTarget(event.target)) return;
 
-  chartWrap.addEventListener("scroll", debounce(renderMiniMap, 40));
+    if (!viewFocus) {
+      const bounds = lastGraph ? graphBounds(lastGraph) : { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+      viewFocus = {
+        x: (bounds.minX + bounds.maxX) / 2,
+        y: (bounds.minY + bounds.maxY) / 2
+      };
+    }
+
+    panDrag = {
+      startX: event.clientX,
+      startY: event.clientY,
+      startFocusX: viewFocus.x,
+      startFocusY: viewFocus.y,
+      moved: false
+    };
+    chartWrap.setPointerCapture(event.pointerId);
+    chartWrap.style.cursor = "grabbing";
+    event.preventDefault();
+  });
+
+  chartWrap.addEventListener("pointermove", event => {
+    if (!panDrag) return;
+
+    const dx = event.clientX - panDrag.startX;
+    const dy = event.clientY - panDrag.startY;
+    if (!panDrag.moved && Math.hypot(dx, dy) < PAN_DRAG_THRESHOLD) return;
+
+    panDrag.moved = true;
+    viewFocus = {
+      x: panDrag.startFocusX - dx / zoomScale,
+      y: panDrag.startFocusY - dy / zoomScale
+    };
+    renderSankey({ preserveFocus: true });
+    event.preventDefault();
+  });
+
+  chartWrap.addEventListener("pointerup", event => {
+    if (!panDrag) return;
+
+    try { chartWrap.releasePointerCapture(event.pointerId); } catch (_) {}
+    chartWrap.style.cursor = "grab";
+    panDrag = null;
+  });
+
+  chartWrap.addEventListener("pointercancel", event => {
+    if (!panDrag) return;
+
+    try { chartWrap.releasePointerCapture(event.pointerId); } catch (_) {}
+    chartWrap.style.cursor = "grab";
+    panDrag = null;
+  });
+
+  chartWrap.addEventListener("wheel", event => {
+    event.preventDefault();
+    const factor = Math.exp(-event.deltaY * 0.0015);
+    setZoomScale(zoomScale * factor);
+  }, { passive: false });
 
   window.addEventListener("pointermove", event => {
     if (!rangeDrag) return;
@@ -1103,7 +1207,7 @@ function bindControls() {
   ["threshold", "percentMode", "hideIsolated"].forEach(id => {
     document.getElementById(id).addEventListener("input", () => {
       document.getElementById("thresholdValue").textContent = `${document.getElementById("threshold").value}%`;
-      update();
+      renderSankey({ preserveFocus: true });
     });
   });
 
@@ -1111,15 +1215,10 @@ function bindControls() {
     addRange(0, Math.min(20, (fullData.timesteps || []).length - 1));
   });
 
+  document.getElementById("zoomOut").addEventListener("click", () => setZoomScale(zoomScale / ZOOM_STEP));
+  document.getElementById("zoomIn").addEventListener("click", () => setZoomScale(zoomScale * ZOOM_STEP));
   document.getElementById("deleteRange").addEventListener("click", () => deleteRange());
   document.getElementById("centerView").addEventListener("click", () => centerSankey());
-
-  document.getElementById("resetView").addEventListener("click", () => {
-    ranges = [];
-    selectedRangeIndex = -1;
-    renderRangeRows();
-    renderSankey({ keepScroll: false });
-  });
 
   document.addEventListener("keydown", event => {
     const tag = event.target?.tagName?.toLowerCase();
@@ -1128,7 +1227,7 @@ function bindControls() {
     }
   });
 
-  window.addEventListener("resize", debounce(() => renderSankey({ keepScroll: true }), 250));
+  window.addEventListener("resize", debounce(() => renderSankey({ preserveFocus: true }), 250));
 }
 
 d3.json("data.json").then(data => {
@@ -1137,10 +1236,13 @@ d3.json("data.json").then(data => {
   const maxInitial = Math.min(20, Math.max(0, (data.timesteps || []).length - 1));
   ranges = [{ start: 0, end: maxInitial }];
   selectedRangeIndex = 0;
+  zoomScale = 1;
+  viewFocus = null;
+  panDrag = null;
 
   renderRangeRows();
   bindControls();
-  renderSankey({ keepScroll: false });
+  renderSankey({ preserveFocus: false });
   requestAnimationFrame(() => centerSelectedRange(selectedRangeIndex));
 });
 """
