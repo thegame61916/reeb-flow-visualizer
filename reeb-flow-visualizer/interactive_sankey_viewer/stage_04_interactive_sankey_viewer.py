@@ -671,6 +671,17 @@ function graphBounds(graph) {
   };
 }
 
+function fitZoomForBounds(bounds) {
+  const width = Math.max(1, chartWrap.clientWidth);
+  const height = Math.max(1, chartWrap.clientHeight);
+  const contentWidth = Math.max(1, (bounds.maxX - bounds.minX) + 260);
+  const contentHeight = Math.max(1, (bounds.maxY - bounds.minY) + 140);
+  const paddedWidth = Math.max(1, width - 120);
+  const paddedHeight = Math.max(1, height - 120);
+  const fit = Math.min(paddedWidth / contentWidth, paddedHeight / contentHeight, 1);
+  return clampZoom(fit);
+}
+
 function assignLinkOffsets(node, links, key) {
   if (!links.length) return;
 
@@ -826,6 +837,9 @@ function renderSankey({ preserveFocus = true } = {}) {
   const graphCenterY = (bounds.minY + bounds.maxY) / 2;
   if (!viewFocus || !preserveFocus) {
     viewFocus = { x: graphCenterX, y: graphCenterY };
+    if (!preserveFocus) {
+      zoomScale = fitZoomForBounds(bounds);
+    }
   } else if (!Number.isFinite(viewFocus.x) || !Number.isFinite(viewFocus.y)) {
     viewFocus = { x: graphCenterX, y: graphCenterY };
   }
@@ -1100,16 +1114,13 @@ function centerSelectedRange(index = selectedRangeIndex) {
 }
 
 function centerSankey() {
-  if (selectedRangeIndex >= 0) {
-    centerSelectedRange(selectedRangeIndex);
-    return;
-  }
   if (!lastGraph || !lastGraph.nodes.length) return;
   const bounds = graphBounds(lastGraph);
   viewFocus = {
     x: (bounds.minX + bounds.maxX) / 2,
     y: (bounds.minY + bounds.maxY) / 2
   };
+  zoomScale = fitZoomForBounds(bounds);
   scheduleViewportUpdate();
 }
 
