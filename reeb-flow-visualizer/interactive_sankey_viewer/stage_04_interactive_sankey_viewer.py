@@ -759,6 +759,13 @@ function applyViewportTransform() {
   chart.select(".timestep-label-layer")
     .selectAll("text")
     .attr("x", d => d.x * zoomScale + translateX);
+  chart.select(".timestep-label-layer")
+    .selectAll("text")
+    .each(function(d) {
+      d3.select(this)
+        .selectAll("tspan")
+        .attr("x", d.x * zoomScale + translateX);
+    });
 
   renderMiniMap();
 }
@@ -895,10 +902,24 @@ function renderSankey({ preserveFocus = true } = {}) {
     .join("text")
     .attr("class", "timestep-label")
     .attr("x", d => d.x)
-    .attr("y", 18)
+    .attr("y", 15)
     .attr("text-anchor", "middle")
+    .attr("dominant-baseline", "middle")
     .attr("font-size", 13)
-    .text(d => `${d.t}. ${d.label}`);
+    .each(function(d) {
+      const fsValue = Number(d.label) / 41.341374575751;
+      const text = d3.select(this);
+      text.append("tspan")
+        .attr("dy", "-0.55em")
+        .attr("text-anchor", "middle")
+        .text(`${d.t}. ${d.label}`);
+      text.append("tspan")
+        .attr("dy", "1.10em")
+        .attr("font-size", 11)
+        .attr("fill", "#6f7d8b")
+        .attr("text-anchor", "middle")
+        .text(Number.isFinite(fsValue) ? `${d3.format(".2f")(fsValue)} fs` : "");
+    });
 
   updateStats(filtered);
   applyViewportTransform();
