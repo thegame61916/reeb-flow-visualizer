@@ -172,7 +172,14 @@ def write_index_html():
           Node size
           <select id="nodeSizeMode">
             <option value="area" selected>sheet area</option>
-            <option value="sankey">overlap total</option>
+            <option value="sankey">vertex count</option>
+          </select>
+        </label>
+        <label>
+          Node scaling
+          <select id="nodeSizeScaleMode">
+            <option value="local" selected>local scaling</option>
+            <option value="global">global scaling</option>
           </select>
         </label>
       </section>
@@ -275,7 +282,9 @@ label.inline { display: flex; align-items: center; gap: 8px; }
 .node rect { cursor: pointer; stroke: rgba(20, 30, 40, 0.4); stroke-width: 0.6; fill: #6f9ed4; }
 .node text { font-size: 13px; font-weight: 600; pointer-events: none; fill: #15202b; }
 .link { fill: rgba(80, 80, 80, 0.16); stroke: none; cursor: pointer; }
+.link.global-link-mode { fill: rgba(80, 80, 80, 0.50); }
 .link:hover { fill: rgba(45, 65, 85, 0.42); }
+.link.global-link-mode:hover { fill: rgba(45, 65, 85, 0.76); }
 .context-node { fill: #6f7d8b; opacity: 0.10; pointer-events: none; }
 .context-link { fill: none; stroke: #6f7d8b; stroke-width: 0.7; opacity: 0.06; pointer-events: none; }
 .context-range { fill: rgba(120, 130, 140, 0.12); opacity: 1; pointer-events: none; }
@@ -324,6 +333,11 @@ def write_viewer_js():
     path = VIEWER_DIR / "viewer.js"
     path.write_text(
 r"""let fullData = null;
+let globalAreaColumnMax = 0;
+let globalAreaMaxNodesPerColumn = 0;
+let globalAreaNodeMax = 0;
+let globalAreaMinPositive = 0;
+let globalLinkMax = 0;
 let ranges = [];
 let selectedRangeIndex = 0;
 let lastGraph = null;
@@ -365,6 +379,7 @@ function getControls() {
     hideIsolated: document.getElementById("hideIsolated").checked,
     ordering: document.getElementById("ordering").value,
     nodeSizeMode: document.getElementById("nodeSizeMode").value,
+    nodeSizeScaleMode: document.getElementById("nodeSizeScaleMode").value,
     ranges: normalizedRanges()
   };
 }
@@ -610,7 +625,7 @@ function applyTemporalXPositions(graph, layout) {
   }
 }
 
-function applyOrderedYPositions(graph, sizeMode) {
+function applyOrderedYPositions(graph, sizeMode, scaleMode) {
   const top = 50;
   const bottom = 1150;
   const minNodeHeight = 5;
@@ -637,7 +652,6 @@ function applyOrderedYPositions(graph, sizeMode) {
     const heights = column.map((node, i) => totalMetric > 0
       ? Math.max(minNodeHeight, available * metrics[i] / totalMetric)
       : fallbackHeight);
-
     let y = top;
 
     column.forEach((node, i) => {
@@ -650,8 +664,8 @@ function applyOrderedYPositions(graph, sizeMode) {
   }
 
   for (const node of graph.nodes) {
-    assignLinkOffsets(node, node.sourceLinks || [], "y0");
-    assignLinkOffsets(node, node.targetLinks || [], "y1");
+    assignLinkOffsets(node, node.sourceLinks || [], "y0", sizeMode, scaleMode);
+    assignLinkOffsets(node, node.targetLinks || [], "y1", sizeMode, scaleMode);
   }
   if (sizeMode === "sankey") {
     return;
@@ -682,7 +696,7 @@ function fitZoomForBounds(bounds) {
   return clampZoom(fit);
 }
 
-function assignLinkOffsets(node, links, key) {
+function assignLinkOffsets(node, links, key, sizeMode, scaleMode) {
   if (!links.length) return;
 
   links.sort((a, b) => {
@@ -695,17 +709,43 @@ function assignLinkOffsets(node, links, key) {
     return d3.ascending(ay, by);
   });
 
-  const nodeHeight = Math.max(1, node.y1 - node.y0);
   const linkValue = d => Math.max(0, +d.overlap_vertices || +d.value || 0);
 
-  const total = d3.sum(links, linkValue);
-  if (total === 0) return;
-
   let y = node.y0;
+  const useGlobalLinkScale = sizeMode === "area" && scaleMode === "global";
+  const globalLinkScale = useGlobalLinkScale && globalLinkMax > 0
+    ? 42 / globalLinkMax
+    : null;
+
+  if (!useGlobalLinkScale) {
+    const nodeHeight = Math.max(1, node.y1 - node.y0);
+    const total = d3.sum(links, linkValue);
+    if (total === 0) return;
+
+    for (const link of links) {
+      const v = linkValue(link);
+      const h = nodeHeight * v / total;
+      const y0 = y;
+      const y1 = y + h;
+
+      link[key] = (y0 + y1) / 2;
+      if (key === "y0") {
+        link._sourceY0 = y0;
+        link._sourceY1 = y1;
+      } else {
+        link._targetY0 = y0;
+        link._targetY1 = y1;
+      }
+
+      y = y1;
+    }
+
+    return;
+  }
 
   for (const link of links) {
     const v = linkValue(link);
-    const h = nodeHeight * v / total;
+    const h = Math.max(1.8, v * globalLinkScale);
     const y0 = y;
     const y1 = y + h;
 
@@ -742,6 +782,30 @@ function sankeyRibbonPath(link) {
     `C${xj},${y3} ${xi},${y1} ${x0},${y1}`,
     "Z"
   ].join(" ");
+}
+
+function areaGlobalFill(node) {
+  const maxArea = Math.max(0, globalAreaNodeMax || 0);
+  const minArea = Math.max(0, globalAreaMinPositive || 0);
+  const area = Math.max(0, +node.area || 0);
+  if (!(maxArea > 0) || !(minArea > 0) || area <= 0 || maxArea <= minArea) {
+    return "#eef5ff";
+  }
+  const t = Math.max(0, Math.min(1, (Math.log(area) - Math.log(minArea)) / (Math.log(maxArea) - Math.log(minArea))));
+  const steps = [
+    "#eff6ff",
+    "#dbeafe",
+    "#bfdbfe",
+    "#93c5fd",
+    "#60a5fa",
+    "#3b82f6",
+    "#2563eb",
+    "#1d4ed8",
+    "#1e40af",
+    "#172554"
+  ];
+  const idx = Math.max(0, Math.min(steps.length - 1, Math.round(t * (steps.length - 1))));
+  return steps[idx];
 }
 
 function applyViewportTransform() {
@@ -838,7 +902,7 @@ function renderSankey({ preserveFocus = true } = {}) {
   };
 
   applyTemporalXPositions(graph, layout);
-  applyOrderedYPositions(graph, filtered.controls.nodeSizeMode);
+  applyOrderedYPositions(graph, filtered.controls.nodeSizeMode, filtered.controls.nodeSizeScaleMode);
   const bounds = graphBounds(graph);
   const graphCenterX = (bounds.minX + bounds.maxX) / 2;
   const graphCenterY = (bounds.minY + bounds.maxY) / 2;
@@ -860,12 +924,13 @@ function renderSankey({ preserveFocus = true } = {}) {
       x: d3.mean(ns, n => (n.x0 + n.x1) / 2),
       label: ns[0].timestep_label
     }));
+  const useGlobalAreaMode = filtered.controls.nodeSizeMode === "area" && filtered.controls.nodeSizeScaleMode === "global";
 
   root.append("g")
     .selectAll("path")
     .data(graph.links)
     .join("path")
-    .attr("class", "link")
+    .attr("class", useGlobalAreaMode ? "link global-link-mode" : "link")
     .attr("d", sankeyRibbonPath)
     .on("mousemove", (event, d) => showTooltip(event, linkTooltip(d)))
     .on("mouseleave", hideTooltip)
@@ -885,7 +950,12 @@ function renderSankey({ preserveFocus = true } = {}) {
     .attr("y", d => d.y0)
     .attr("height", d => Math.max(2, d.y1 - d.y0))
     .attr("width", d => d.x1 - d.x0)
-    .attr("fill", d => d.color || "#6f9ed4");
+    .attr("fill", d => {
+      if (filtered.controls.nodeSizeMode === "area" && filtered.controls.nodeSizeScaleMode === "global") {
+        return areaGlobalFill(d);
+      }
+      return d.color || "#6f9ed4";
+    });
 
   node.append("text")
     .attr("x", d => d.x1 + 5)
@@ -1415,6 +1485,10 @@ function bindControls() {
     renderSankey({ preserveFocus: true });
   });
 
+  document.getElementById("nodeSizeScaleMode").addEventListener("change", () => {
+    renderSankey({ preserveFocus: true });
+  });
+
   document.getElementById("addRange").addEventListener("click", () => {
     addRange(0, Math.min(20, (fullData.timesteps || []).length - 1));
   });
@@ -1436,6 +1510,24 @@ function bindControls() {
 
 d3.json("data.json").then(data => {
   fullData = data;
+  const areaTotalsByTime = d3.rollups(
+    fullData.nodes || [],
+    v => d3.sum(v, n => Math.max(0, +n.area || 0)),
+    n => +n.timestep_index
+  );
+  globalAreaColumnMax = d3.max(areaTotalsByTime, d => d[1]) ?? 0;
+  globalAreaNodeMax = d3.max(fullData.nodes || [], n => Math.max(0, +n.area || 0)) ?? 0;
+  globalAreaMinPositive = d3.min(fullData.nodes || [], n => {
+    const area = Math.max(0, +n.area || 0);
+    return area > 0 ? area : null;
+  }) ?? 0;
+  const nodeCountsByTime = d3.rollups(
+    fullData.nodes || [],
+    v => v.length,
+    n => +n.timestep_index
+  );
+  globalAreaMaxNodesPerColumn = d3.max(nodeCountsByTime, d => d[1]) ?? 0;
+  globalLinkMax = d3.max(fullData.links || [], l => Math.max(0, +l.overlap_vertices || +l.value || 0)) ?? 0;
 
   const maxInitial = Math.min(20, Math.max(0, (data.timesteps || []).length - 1));
   ranges = [{ start: 0, end: maxInitial }];
