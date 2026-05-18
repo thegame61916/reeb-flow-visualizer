@@ -168,6 +168,13 @@ def write_index_html():
             <option value="crossings">crossing-minimized</option>
           </select>
         </label>
+        <label>
+          Node size
+          <select id="nodeSizeMode">
+            <option value="area" selected>sheet area</option>
+            <option value="sankey">overlap total</option>
+          </select>
+        </label>
       </section>
 
       <section>
@@ -356,6 +363,7 @@ function getControls() {
     percentMode: document.getElementById("percentMode").value,
     hideIsolated: document.getElementById("hideIsolated").checked,
     ordering: document.getElementById("ordering").value,
+    nodeSizeMode: document.getElementById("nodeSizeMode").value,
     ranges: normalizedRanges()
   };
 }
@@ -589,7 +597,7 @@ function applyTemporalXPositions(graph, layout) {
   }
 }
 
-function applyOrderedYPositions(graph) {
+function applyOrderedYPositions(graph, sizeMode) {
   const top = 50;
   const bottom = 1150;
   const minNodeHeight = 5;
@@ -600,11 +608,21 @@ function applyOrderedYPositions(graph) {
       d3.ascending(a._order ?? 999999, b._order ?? 999999)
     );
 
-    const totalArea = d3.sum(column, d => Math.max(0, +d.area || 0));
+    const metrics = column.map(node => {
+      if (sizeMode === "sankey") {
+        const sourceTotal = d3.sum(node.sourceLinks || [], link => Math.max(0, +link.value || +link.overlap_vertices || 0));
+        const targetTotal = d3.sum(node.targetLinks || [], link => Math.max(0, +link.value || +link.overlap_vertices || 0));
+        return Math.max(sourceTotal, targetTotal);
+      }
+
+      return Math.max(0, +node.area || 0);
+    });
+
+    const totalMetric = d3.sum(metrics);
     const fallbackHeight = minNodeHeight;
     const available = Math.max(1, bottom - top - nodeGap * Math.max(0, column.length - 1));
-    const heights = column.map(node => totalArea > 0
-      ? Math.max(minNodeHeight, available * Math.max(0, +node.area || 0) / totalArea)
+    const heights = column.map((node, i) => totalMetric > 0
+      ? Math.max(minNodeHeight, available * metrics[i] / totalMetric)
       : fallbackHeight);
 
     let y = top;
@@ -621,6 +639,34 @@ function applyOrderedYPositions(graph) {
   for (const node of graph.nodes) {
     assignLinkOffsets(node, node.sourceLinks || [], "y0");
     assignLinkOffsets(node, node.targetLinks || [], "y1");
+  }
+
+  if (sizeMode === "sankey") {
+    const sourceScale = new Map();
+    const targetScale = new Map();
+
+    for (const node of graph.nodes) {
+      const sourceTotal = d3.sum(node.sourceLinks || [], link => Math.max(0, +link.value || +link.overlap_vertices || 0));
+      const targetTotal = d3.sum(node.targetLinks || [], link => Math.max(0, +link.value || +link.overlap_vertices || 0));
+      const nodeHeight = Math.max(1, node.y1 - node.y0);
+
+      if (sourceTotal > 0) {
+        sourceScale.set(node.id, nodeHeight / sourceTotal);
+      }
+      if (targetTotal > 0) {
+        targetScale.set(node.id, nodeHeight / targetTotal);
+      }
+    }
+
+    for (const link of graph.links) {
+      const value = Math.max(0, +link.overlap_vertices || +link.value || 0);
+      const sourceFactor = sourceScale.get(link.source.id) ?? 0;
+      const targetFactor = targetScale.get(link.target.id) ?? 0;
+      const sourceWidth = value * sourceFactor;
+      const targetWidth = value * targetFactor;
+      link.visualWidth = Math.max(1.5, sourceWidth, targetWidth);
+    }
+    return;
   }
 
   const values = graph.links.map(d => +d.overlap_vertices || +d.value || 1);
@@ -742,7 +788,7 @@ function renderSankey({ preserveFocus = true } = {}) {
   };
 
   applyTemporalXPositions(graph, layout);
-  applyOrderedYPositions(graph);
+  applyOrderedYPositions(graph, filtered.controls.nodeSizeMode);
   const bounds = graphBounds(graph);
   const graphCenterX = (bounds.minX + bounds.maxX) / 2;
   const graphCenterY = (bounds.minY + bounds.maxY) / 2;
@@ -1292,6 +1338,10 @@ function bindControls() {
   });
 
   document.getElementById("ordering").addEventListener("change", () => {
+    renderSankey({ preserveFocus: true });
+  });
+
+  document.getElementById("nodeSizeMode").addEventListener("change", () => {
     renderSankey({ preserveFocus: true });
   });
 
