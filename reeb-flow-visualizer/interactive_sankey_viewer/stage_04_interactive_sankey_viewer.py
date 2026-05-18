@@ -134,6 +134,7 @@ def write_index_html():
         <label>
           Minimum percent
           <input id="threshold" type="range" min="0" max="100" step="0.5" value="0">
+          <input id="thresholdBox" type="number" min="0" max="100" step="0.5" value="0" aria-label="Minimum percent">
           <span id="thresholdValue">0%</span>
         </label>
         <label>
@@ -383,6 +384,22 @@ function getControls() {
     nodeSizeScaleMode: document.getElementById("nodeSizeScaleMode").value,
     ranges: normalizedRanges()
   };
+}
+
+function setThresholdValue(value, triggerRender = false) {
+  const slider = document.getElementById("threshold");
+  const box = document.getElementById("thresholdBox");
+  const label = document.getElementById("thresholdValue");
+  const next = Math.max(+slider.min || 0, Math.min(+slider.max || 100, Number(value)));
+  const safe = Number.isFinite(next) ? next : 0;
+
+  slider.value = String(safe);
+  box.value = String(safe);
+  label.textContent = `${safe}%`;
+
+  if (triggerRender) {
+    renderSankey({ preserveFocus: true });
+  }
 }
 
 function normalizedRanges() {
@@ -1517,9 +1534,16 @@ function bindControls() {
     finishRangeDrag();
   });
 
-  ["threshold", "percentMode", "hideIsolated"].forEach(id => {
+  document.getElementById("threshold").addEventListener("input", event => {
+    setThresholdValue(event.target.value, true);
+  });
+
+  document.getElementById("thresholdBox").addEventListener("input", event => {
+    setThresholdValue(event.target.value, true);
+  });
+
+  ["percentMode", "hideIsolated"].forEach(id => {
     document.getElementById(id).addEventListener("input", () => {
-      document.getElementById("thresholdValue").textContent = `${document.getElementById("threshold").value}%`;
       renderSankey({ preserveFocus: true });
     });
   });
@@ -1585,6 +1609,7 @@ d3.json("data.json").then(data => {
 
   renderRangeRows();
   bindControls();
+  setThresholdValue(document.getElementById("threshold").value, false);
   renderSankey({ preserveFocus: false });
   requestAnimationFrame(() => centerSelectedRange(selectedRangeIndex));
 });
