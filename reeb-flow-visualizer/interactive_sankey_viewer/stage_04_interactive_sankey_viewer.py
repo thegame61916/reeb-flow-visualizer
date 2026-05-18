@@ -274,8 +274,8 @@ label.inline { display: flex; align-items: center; gap: 8px; }
 #chart { display: block; background: #fff; }
 .node rect { cursor: pointer; stroke: rgba(20, 30, 40, 0.4); stroke-width: 0.6; fill: #6f9ed4; }
 .node text { font-size: 13px; font-weight: 600; pointer-events: none; fill: #15202b; }
-.link { fill: none; stroke: rgba(80, 80, 80, 0.16); cursor: pointer; }
-.link:hover { stroke: rgba(45, 65, 85, 0.42); }
+.link { fill: rgba(80, 80, 80, 0.16); stroke: none; cursor: pointer; }
+.link:hover { fill: rgba(45, 65, 85, 0.42); }
 .context-node { fill: #6f7d8b; opacity: 0.10; pointer-events: none; }
 .context-link { fill: none; stroke: #6f7d8b; stroke-width: 0.7; opacity: 0.06; pointer-events: none; }
 .context-range { fill: rgba(120, 130, 140, 0.12); opacity: 1; pointer-events: none; }
@@ -653,45 +653,8 @@ function applyOrderedYPositions(graph, sizeMode) {
     assignLinkOffsets(node, node.sourceLinks || [], "y0");
     assignLinkOffsets(node, node.targetLinks || [], "y1");
   }
-
   if (sizeMode === "sankey") {
-    const sourceScale = new Map();
-    const targetScale = new Map();
-
-    for (const node of graph.nodes) {
-      const sourceTotal = d3.sum(node.sourceLinks || [], link => Math.max(0, +link.value || +link.overlap_vertices || 0));
-      const targetTotal = d3.sum(node.targetLinks || [], link => Math.max(0, +link.value || +link.overlap_vertices || 0));
-      const nodeHeight = Math.max(1, node.y1 - node.y0);
-
-      if (sourceTotal > 0) {
-        sourceScale.set(node.id, nodeHeight / sourceTotal);
-      }
-      if (targetTotal > 0) {
-        targetScale.set(node.id, nodeHeight / targetTotal);
-      }
-    }
-
-    for (const link of graph.links) {
-      const value = Math.max(0, +link.overlap_vertices || +link.value || 0);
-      const sourceFactor = sourceScale.get(link.source.id) ?? 0;
-      const targetFactor = targetScale.get(link.target.id) ?? 0;
-      const sourceWidth = value * sourceFactor;
-      const targetWidth = value * targetFactor;
-      link.visualWidth = Math.max(1.5, sourceWidth, targetWidth);
-    }
     return;
-  }
-
-  const values = graph.links.map(d => +d.overlap_vertices || +d.value || 1);
-  const minValue = d3.min(values) || 1;
-  const maxValue = d3.max(values) || minValue;
-
-  const widthScale = d3.scaleSqrt()
-    .domain(minValue === maxValue ? [0, maxValue] : [minValue, maxValue])
-    .range([2, 14]);
-
-  for (const link of graph.links) {
-    link.visualWidth = widthScale(+link.overlap_vertices || +link.value || 1);
   }
 }
 
@@ -722,15 +685,52 @@ function assignLinkOffsets(node, links, key) {
   });
 
   const nodeHeight = Math.max(1, node.y1 - node.y0);
-  const total = d3.sum(links, d => Math.max(1, +d.value || 1));
+  const linkValue = d => Math.max(0, +d.overlap_vertices || +d.value || 0);
+
+  const total = d3.sum(links, linkValue);
+  if (total === 0) return;
 
   let y = node.y0;
 
   for (const link of links) {
-    const h = nodeHeight * Math.max(1, +link.value || 1) / total;
-    link[key] = y + h / 2;
-    y += h;
+    const v = linkValue(link);
+    const h = nodeHeight * v / total;
+    const y0 = y;
+    const y1 = y + h;
+
+    link[key] = (y0 + y1) / 2;
+    if (key === "y0") {
+      link._sourceY0 = y0;
+      link._sourceY1 = y1;
+    } else {
+      link._targetY0 = y0;
+      link._targetY1 = y1;
+    }
+
+    y = y1;
   }
+}
+
+function sankeyRibbonPath(link) {
+  const source = link.source;
+  const target = link.target;
+  const x0 = source.x1;
+  const x1 = target.x0;
+  const y0 = link._sourceY0 ?? source.y0;
+  const y1 = link._sourceY1 ?? source.y1;
+  const y2 = link._targetY0 ?? target.y0;
+  const y3 = link._targetY1 ?? target.y1;
+  const curvature = 0.5;
+  const xi = x0 + (x1 - x0) * curvature;
+  const xj = x1 - (x1 - x0) * curvature;
+
+  return [
+    `M${x0},${y0}`,
+    `C${xi},${y0} ${xj},${y2} ${x1},${y2}`,
+    `L${x1},${y3}`,
+    `C${xj},${y3} ${xi},${y1} ${x0},${y1}`,
+    "Z"
+  ].join(" ");
 }
 
 function applyViewportTransform() {
@@ -845,8 +845,7 @@ function renderSankey({ preserveFocus = true } = {}) {
     .data(graph.links)
     .join("path")
     .attr("class", "link")
-    .attr("d", d3.sankeyLinkHorizontal())
-    .attr("stroke-width", d => Math.max(1, d.visualWidth || d.width || 1))
+    .attr("d", sankeyRibbonPath)
     .on("mousemove", (event, d) => showTooltip(event, linkTooltip(d)))
     .on("mouseleave", hideTooltip)
     .on("click", (_, d) => showLinkDetails(d));
