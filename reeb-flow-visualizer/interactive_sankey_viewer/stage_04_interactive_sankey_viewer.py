@@ -973,19 +973,30 @@ function renderRangeRows() {
 
     const [start, end] = row.querySelectorAll("input");
 
-    start.addEventListener("input", debounce(() => {
+    const commitRange = () => {
       ranges[i].start = +start.value;
-      renderRangeRows();
-      renderSankey({ preserveFocus: true });
-      if (i === selectedRangeIndex) requestAnimationFrame(() => centerSelectedRange(i));
-    }));
-
-    end.addEventListener("input", debounce(() => {
       ranges[i].end = +end.value;
       renderRangeRows();
       renderSankey({ preserveFocus: true });
       if (i === selectedRangeIndex) requestAnimationFrame(() => centerSelectedRange(i));
-    }));
+    };
+
+    start.addEventListener("keydown", event => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitRange();
+      }
+    });
+
+    end.addEventListener("keydown", event => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitRange();
+      }
+    });
+
+    start.addEventListener("blur", commitRange);
+    end.addEventListener("blur", commitRange);
 
     row.querySelector("button").addEventListener("click", event => {
       event.stopPropagation();
