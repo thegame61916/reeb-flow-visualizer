@@ -273,13 +273,13 @@ label.inline { display: flex; align-items: center; gap: 8px; }
 #chartWrap { overflow: hidden; position: relative; background: #fff; min-height: 0; }
 #chart { display: block; background: #fff; }
 .node rect { cursor: pointer; stroke: rgba(20, 30, 40, 0.4); stroke-width: 0.6; fill: #6f9ed4; }
-.node text { font-size: 11px; pointer-events: none; fill: #15202b; }
+.node text { font-size: 13px; font-weight: 600; pointer-events: none; fill: #15202b; }
 .link { fill: none; stroke: rgba(80, 80, 80, 0.16); cursor: pointer; }
 .link:hover { stroke: rgba(45, 65, 85, 0.42); }
 .context-node { fill: #6f7d8b; opacity: 0.10; pointer-events: none; }
 .context-link { fill: none; stroke: #6f7d8b; stroke-width: 0.7; opacity: 0.06; pointer-events: none; }
 .context-range { fill: rgba(120, 130, 140, 0.12); opacity: 1; pointer-events: none; }
-.timestep-label { font-size: 11px; fill: #586574; }
+.timestep-label { font-size: 13px; font-weight: 600; fill: #465360; }
 .range-bg { fill: #e9edf2; }
 .range-drag-surface { fill: transparent; cursor: crosshair; pointer-events: all; }
 .range-drag-preview { fill: rgba(47, 128, 201, 0.18); stroke: #2f80c9; stroke-width: 1; pointer-events: none; }
@@ -872,7 +872,7 @@ function renderSankey({ preserveFocus = true } = {}) {
     .attr("y", d => (d.y0 + d.y1) / 2)
     .attr("dy", "0.35em")
     .attr("text-anchor", "start")
-    .attr("font-size", 11)
+    .attr("font-size", 13)
     .text(d => `S${d.sheet_id} R${d.rank}`);
 
   chart.append("g")
@@ -884,7 +884,7 @@ function renderSankey({ preserveFocus = true } = {}) {
     .attr("x", d => d.x)
     .attr("y", 18)
     .attr("text-anchor", "middle")
-    .attr("font-size", 11)
+    .attr("font-size", 13)
     .text(d => d.label);
 
   updateStats(filtered);
