@@ -338,6 +338,7 @@ let globalAreaMaxNodesPerColumn = 0;
 let globalAreaNodeMax = 0;
 let globalAreaMinPositive = 0;
 let globalLinkMax = 0;
+let globalVertexScale = 1;
 let ranges = [];
 let selectedRangeIndex = 0;
 let lastGraph = null;
@@ -630,14 +631,32 @@ function applyOrderedYPositions(graph, sizeMode, scaleMode) {
   const bottom = 1150;
   const minNodeHeight = 5;
   const nodeGap = 18;
+  globalVertexScale = 1;
 
-  for (const [, column] of d3.group(graph.nodes, d => +d.timestep_index)) {
+  const columns = [...d3.group(graph.nodes, d => +d.timestep_index).entries()]
+    .sort((a, b) => d3.ascending(+a[0], +b[0]))
+    .map(([t, column]) => ({ t: +t, column }));
+
+  if (sizeMode === "sankey" && scaleMode === "global") {
+    const columnScales = columns.map(({ column }) => {
+      const total = d3.sum(column, node => Math.max(0, +node.num_vertices || 0));
+      const available = Math.max(1, bottom - top - nodeGap * Math.max(0, column.length - 1));
+      return total > 0 ? available / total : Infinity;
+    }).filter(Number.isFinite);
+    globalVertexScale = columnScales.length ? d3.min(columnScales) : 1;
+  }
+
+  for (const { column } of columns) {
     column.sort((a, b) =>
       d3.ascending(a._order ?? 999999, b._order ?? 999999)
     );
 
     const metrics = column.map(node => {
       if (sizeMode === "sankey") {
+        if (scaleMode === "global") {
+          return Math.max(0, +node.num_vertices || 0);
+        }
+
         const sourceTotal = d3.sum(node.sourceLinks || [], link => Math.max(0, +link.value || +link.overlap_vertices || 0));
         const targetTotal = d3.sum(node.targetLinks || [], link => Math.max(0, +link.value || +link.overlap_vertices || 0));
         return Math.max(sourceTotal, targetTotal);
@@ -646,12 +665,18 @@ function applyOrderedYPositions(graph, sizeMode, scaleMode) {
       return Math.max(0, +node.area || 0);
     });
 
-    const totalMetric = d3.sum(metrics);
     const fallbackHeight = minNodeHeight;
     const available = Math.max(1, bottom - top - nodeGap * Math.max(0, column.length - 1));
-    const heights = column.map((node, i) => totalMetric > 0
-      ? Math.max(minNodeHeight, available * metrics[i] / totalMetric)
-      : fallbackHeight);
+    const heights = column.map((node, i) => {
+      if (sizeMode === "sankey" && scaleMode === "global") {
+        return Math.max(minNodeHeight, metrics[i] * globalVertexScale);
+      }
+
+      const totalMetric = d3.sum(metrics);
+      return totalMetric > 0
+        ? Math.max(minNodeHeight, available * metrics[i] / totalMetric)
+        : fallbackHeight;
+    });
     let y = top;
 
     column.forEach((node, i) => {
@@ -712,10 +737,32 @@ function assignLinkOffsets(node, links, key, sizeMode, scaleMode) {
   const linkValue = d => Math.max(0, +d.overlap_vertices || +d.value || 0);
 
   let y = node.y0;
+  const useGlobalVertexScale = sizeMode === "sankey" && scaleMode === "global";
   const useGlobalLinkScale = sizeMode === "area" && scaleMode === "global";
   const globalLinkScale = useGlobalLinkScale && globalLinkMax > 0
     ? 42 / globalLinkMax
     : null;
+
+  if (useGlobalVertexScale) {
+    for (const link of links) {
+      const v = linkValue(link);
+      const h = Math.max(1, v * globalVertexScale);
+      const y0 = y;
+      const y1 = y + h;
+
+      link[key] = (y0 + y1) / 2;
+      if (key === "y0") {
+        link._sourceY0 = y0;
+        link._sourceY1 = y1;
+      } else {
+        link._targetY0 = y0;
+        link._targetY1 = y1;
+      }
+
+      y = y1;
+    }
+    return;
+  }
 
   if (!useGlobalLinkScale) {
     const nodeHeight = Math.max(1, node.y1 - node.y0);
