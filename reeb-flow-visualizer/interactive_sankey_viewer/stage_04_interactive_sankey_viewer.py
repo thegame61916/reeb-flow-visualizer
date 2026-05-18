@@ -898,7 +898,7 @@ function renderSankey({ preserveFocus = true } = {}) {
     .attr("y", 18)
     .attr("text-anchor", "middle")
     .attr("font-size", 13)
-    .text(d => d.label);
+    .text(d => `${d.t}. ${d.label}`);
 
   updateStats(filtered);
   applyViewportTransform();
