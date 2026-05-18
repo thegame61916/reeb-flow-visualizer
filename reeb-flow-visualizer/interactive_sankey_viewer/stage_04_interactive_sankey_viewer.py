@@ -334,6 +334,7 @@ let minimapState = null;
 let zoomScale = 1;
 let viewFocus = null;
 let panDrag = null;
+let viewportUpdatePending = false;
 
 const BASE_COLUMN_SPACING = 190;
 const BASE_MARGIN_X = 280;
@@ -477,7 +478,19 @@ function setZoomScale(nextScale, focus = null) {
   if (Math.abs(clamped - zoomScale) < 1e-9) return;
 
   zoomScale = clamped;
-  renderSankey({ preserveFocus: true });
+  if (focus && Number.isFinite(focus.x) && Number.isFinite(focus.y)) {
+    viewFocus = { x: focus.x, y: focus.y };
+  }
+  scheduleViewportUpdate();
+}
+
+function scheduleViewportUpdate() {
+  if (viewportUpdatePending || !lastGraph) return;
+  viewportUpdatePending = true;
+  requestAnimationFrame(() => {
+    viewportUpdatePending = false;
+    applyViewportTransform();
+  });
 }
 
 function orderNodes(nodes, links, mode) {
@@ -720,6 +733,25 @@ function assignLinkOffsets(node, links, key) {
   }
 }
 
+function applyViewportTransform() {
+  if (!lastGraph) return;
+
+  const width = Math.max(1, chartWrap.clientWidth);
+  const height = Math.max(1, chartWrap.clientHeight);
+  const root = chart.select(".sankey-root");
+  if (root.empty() || !viewFocus) return;
+
+  const translateX = width / 2 - viewFocus.x * zoomScale;
+  const translateY = height * VIEWPORT_ANCHOR_Y - viewFocus.y * zoomScale;
+  root.attr("transform", `translate(${translateX},${translateY}) scale(${zoomScale})`);
+
+  chart.select(".timestep-label-layer")
+    .selectAll("text")
+    .attr("x", d => d.x * zoomScale + translateX);
+
+  renderMiniMap();
+}
+
 function renderSankey({ preserveFocus = true } = {}) {
   const filtered = filterData();
   orderNodes(filtered.nodes, filtered.links, filtered.controls.ordering);
@@ -798,10 +830,6 @@ function renderSankey({ preserveFocus = true } = {}) {
     viewFocus = { x: graphCenterX, y: graphCenterY };
   }
 
-  const translateX = width / 2 - viewFocus.x * zoomScale;
-  const translateY = height * VIEWPORT_ANCHOR_Y - viewFocus.y * zoomScale;
-  root.attr("transform", `translate(${translateX},${translateY}) scale(${zoomScale})`);
-
   lastGraph = graph;
   updateMiniMapState(graph);
 
@@ -853,14 +881,14 @@ function renderSankey({ preserveFocus = true } = {}) {
     .data(timestepLabels)
     .join("text")
     .attr("class", "timestep-label")
-    .attr("x", d => d.x * zoomScale + translateX)
+    .attr("x", d => d.x)
     .attr("y", 18)
     .attr("text-anchor", "middle")
     .attr("font-size", 11)
     .text(d => d.label);
 
   updateStats(filtered);
-  renderMiniMap();
+  applyViewportTransform();
 }
 
 function updateStats(filtered) {
@@ -1069,7 +1097,7 @@ function centerSelectedRange(index = selectedRangeIndex) {
   const minY = d3.min(nodes, d => d.y0) ?? 0;
   const maxY = d3.max(nodes, d => d.y1) ?? 0;
   viewFocus = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
-  renderSankey({ preserveFocus: true });
+  scheduleViewportUpdate();
 }
 
 function centerSankey() {
@@ -1083,7 +1111,7 @@ function centerSankey() {
     x: (bounds.minX + bounds.maxX) / 2,
     y: (bounds.minY + bounds.maxY) / 2
   };
-  renderSankey({ preserveFocus: true });
+  scheduleViewportUpdate();
 }
 
 function clampTimestep(value, maxIndex) {
@@ -1304,7 +1332,7 @@ function bindControls() {
       x: panDrag.startFocusX - dx / zoomScale,
       y: panDrag.startFocusY - dy / zoomScale
     };
-    renderSankey({ preserveFocus: true });
+    scheduleViewportUpdate();
     event.preventDefault();
   });
 
