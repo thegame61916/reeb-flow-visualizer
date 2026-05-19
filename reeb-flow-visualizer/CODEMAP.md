@@ -280,6 +280,7 @@ Viewer behavior:
 - threshold slider updates are coalesced onto animation frames and only toggle link visibility, so dragging stays smooth
 - summary links use the same neutral overlap-style fill and hover palette as the domain-based local-scaling viewer, with no per-link color tinting
 - range row textboxes ignore pointer clicks on the row itself; they commit only on Enter or when focus leaves the whole row
+- the top range bar disables browser text selection while dragging so tick labels do not get highlighted
 - summary range gaps are proportional to the number of hidden timesteps between selected ranges, with extra slack for ribbon width
 - the summary viewer camera and top labels use the actual timestep-center x positions, so the black window and labels stay aligned across gaps
 - the summary viewer camera fit now includes the proportional gap space, not just node bounds

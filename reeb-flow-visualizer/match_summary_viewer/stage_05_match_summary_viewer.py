@@ -352,6 +352,13 @@ h2 {
   height: 78px;
   display: block;
 }
+#rangeBar,
+#rangeBar * {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
 .range-bg {
   fill: #e8edf2;
 }
@@ -1278,6 +1285,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       .attr("height", height);
 
     dragSurface.on("pointerdown", event => {
+      event.preventDefault();
       const idx = clamp(Math.round(x.invert(d3.pointer(event, dragSurface.node())[0])), 0, timestepMax);
       state.rangeDrag = { start: idx, current: idx };
       dragSurface.node().setPointerCapture(event.pointerId);
@@ -1313,6 +1321,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         .attr("height", 22)
         .on("click", event => {
           event.stopPropagation();
+          event.preventDefault();
           state.selectedRangeIndex = index;
           renderAll();
         });
