@@ -655,12 +655,9 @@ d3.json("data.json").then(data => {
   }
 
   function normalizedRanges() {
-    return state.ranges
-      .map(r => ({
-        start: clamp(Math.min(+r.start, +r.end), 0, timestepMax),
-        end: clamp(Math.max(+r.start, +r.end), 0, timestepMax)
-      }))
-      .filter(r => Number.isFinite(r.start) && Number.isFinite(r.end));
+    return window.ReebViewerCommon.normalizeRanges(state.ranges, timestepMax, {
+      fallbackRange: { start: 0, end: 0 }
+    });
   }
 
   function inRanges(timestep) {
@@ -734,60 +731,48 @@ d3.json("data.json").then(data => {
       selectedRangeIndex: state.selectedRangeIndex,
       timestepMax,
       onSelectRange: index => {
-        state.selectedRangeIndex = index;
+        state.selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(index, normalizedRanges().length, 0);
         renderAll();
       },
       onCommitRange: (index, startValue, endValue) => {
-        const ranges = normalizedRanges();
-        if (!ranges[index]) return;
-        const nextStart = clamp(Math.round(Number(startValue)), 0, timestepMax);
-        const nextEnd = clamp(Math.round(Number(endValue)), 0, timestepMax);
-        ranges[index].start = Number.isFinite(nextStart) ? nextStart : ranges[index].start;
-        ranges[index].end = Number.isFinite(nextEnd) ? nextEnd : ranges[index].end;
-        state.ranges = ranges;
+        state.ranges = window.ReebViewerCommon.commitRangeAt(
+          normalizedRanges(),
+          index,
+          startValue,
+          endValue,
+          timestepMax
+        );
+        state.selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(
+          state.selectedRangeIndex,
+          state.ranges.length,
+          0
+        );
         renderAll();
       },
       onDeleteRange: index => removeRange(index)
     });
   }
 
-  function applyRangeEdit(index, key, value) {
-    const ranges = normalizedRanges();
-    if (!ranges[index]) return;
-    const next = clamp(Math.round(Number(value)), 0, timestepMax);
-    ranges[index][key] = Number.isFinite(next) ? next : ranges[index][key];
-    state.ranges = ranges;
-    renderAll();
-  }
-
-  function commitRangeRow(index, startValue, endValue) {
-    const ranges = normalizedRanges();
-    if (!ranges[index]) return;
-
-    const nextStart = clamp(Math.round(Number(startValue)), 0, timestepMax);
-    const nextEnd = clamp(Math.round(Number(endValue)), 0, timestepMax);
-
-    ranges[index].start = Number.isFinite(nextStart) ? nextStart : ranges[index].start;
-    ranges[index].end = Number.isFinite(nextEnd) ? nextEnd : ranges[index].end;
-    state.ranges = ranges;
-    renderAll();
-  }
-
   function addRange() {
-    const ranges = normalizedRanges();
-    const nextStart = ranges.length ? clamp(ranges[ranges.length - 1].end + 1, 0, timestepMax) : 0;
-    const nextEnd = clamp(nextStart + 20, 0, timestepMax);
-    state.ranges = [...ranges, { start: nextStart, end: nextEnd }];
-    state.selectedRangeIndex = state.ranges.length - 1;
+    const next = window.ReebViewerCommon.addRangeAfterLast(normalizedRanges(), timestepMax, { span: 20 });
+    state.ranges = next.ranges;
+    state.selectedRangeIndex = next.selectedRangeIndex;
     renderAll();
   }
 
   function removeRange(index) {
-    const ranges = normalizedRanges();
-    if (index < 0 || index >= ranges.length) return;
-    ranges.splice(index, 1);
-    state.ranges = ranges.length ? ranges : [{ start: 0, end: 0 }];
-    state.selectedRangeIndex = clamp(state.selectedRangeIndex, 0, state.ranges.length - 1);
+    const next = window.ReebViewerCommon.removeRangeAt(
+      normalizedRanges(),
+      state.selectedRangeIndex,
+      index,
+      timestepMax,
+      {
+        keepOne: true,
+        fallbackRange: { start: 0, end: 0 }
+      }
+    );
+    state.ranges = next.ranges;
+    state.selectedRangeIndex = next.selectedRangeIndex;
     renderAll();
   }
 
@@ -1222,7 +1207,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         return ts ? ts.label : value;
       },
       onRangeSelected: index => {
-        state.selectedRangeIndex = index;
+        state.selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(index, normalizedRanges().length, 0);
         renderAll();
       },
       onRangeDragStart: idx => {
@@ -1236,11 +1221,18 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       },
       onRangeDragEnd: idx => {
         if (!state.rangeDrag) return;
-        const start = Math.min(state.rangeDrag.start, idx);
-        const end = Math.max(state.rangeDrag.start, idx);
-        state.ranges = [...normalizedRanges(), { start, end }];
-        state.selectedRangeIndex = state.ranges.length - 1;
+        const committed = window.ReebViewerCommon.finishRangeDrag(
+          { start: state.rangeDrag.start, current: idx },
+          timestepMax,
+          { minSpan: 0 }
+        );
         state.rangeDrag = null;
+        if (!committed) {
+          renderRangeBar();
+          return;
+        }
+        state.ranges = [...normalizedRanges(), committed];
+        state.selectedRangeIndex = state.ranges.length - 1;
         renderAll();
       },
       onViewportClick: idx => {
@@ -1528,6 +1520,11 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
   function renderAll() {
     state.panelViews = new Map();
     state.ranges = normalizedRanges();
+    state.selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(
+      state.selectedRangeIndex,
+      state.ranges.length,
+      0
+    );
     renderRangeRows();
     renderStats();
     renderPanels();

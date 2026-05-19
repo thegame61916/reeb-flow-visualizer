@@ -81,6 +81,138 @@ window.ReebViewerCommon.bindCommittedNumberInput = function(input, commitFn) {
   input.addEventListener('blur', () => commitFn(input.value));
 };
 
+window.ReebViewerCommon.clampInt = function(value, low, high, fallback) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) {
+    return Number.isFinite(fallback) ? Math.round(fallback) : low;
+  }
+  return Math.max(low, Math.min(high, n));
+};
+
+window.ReebViewerCommon.normalizeRanges = function(ranges, timestepMax, opts) {
+  const max = Math.max(0, Number.isFinite(+timestepMax) ? +timestepMax : 0);
+  const list = Array.isArray(ranges) ? ranges : [];
+  const normalized = list
+    .map(range => {
+      const start = window.ReebViewerCommon.clampInt(
+        Math.min(Number(range?.start), Number(range?.end)),
+        0,
+        max,
+        0
+      );
+      const end = window.ReebViewerCommon.clampInt(
+        Math.max(Number(range?.start), Number(range?.end)),
+        0,
+        max,
+        start
+      );
+      return { start, end };
+    })
+    .filter(range => Number.isFinite(range.start) && Number.isFinite(range.end));
+
+  const fallback = opts && opts.fallbackRange
+    ? {
+        start: window.ReebViewerCommon.clampInt(opts.fallbackRange.start, 0, max, 0),
+        end: window.ReebViewerCommon.clampInt(opts.fallbackRange.end, 0, max, 0)
+      }
+    : null;
+
+  if (!normalized.length && fallback) {
+    normalized.push({
+      start: Math.min(fallback.start, fallback.end),
+      end: Math.max(fallback.start, fallback.end)
+    });
+  }
+  return normalized;
+};
+
+window.ReebViewerCommon.selectRangeIndex = function(index, rangeCount, fallback) {
+  if (!Number.isFinite(+rangeCount) || +rangeCount <= 0) {
+    return Number.isFinite(+fallback) ? Math.round(+fallback) : -1;
+  }
+  return Math.max(0, Math.min(+rangeCount - 1, Math.round(Number(index) || 0)));
+};
+
+window.ReebViewerCommon.commitRangeAt = function(ranges, index, startValue, endValue, timestepMax) {
+  const next = window.ReebViewerCommon.normalizeRanges(ranges, timestepMax);
+  if (index < 0 || index >= next.length) {
+    return next;
+  }
+  const max = Math.max(0, Number.isFinite(+timestepMax) ? +timestepMax : 0);
+  const start = window.ReebViewerCommon.clampInt(startValue, 0, max, next[index].start);
+  const end = window.ReebViewerCommon.clampInt(endValue, 0, max, next[index].end);
+  next[index] = {
+    start: Math.min(start, end),
+    end: Math.max(start, end)
+  };
+  return next;
+};
+
+window.ReebViewerCommon.addRangeAfterLast = function(ranges, timestepMax, opts) {
+  const max = Math.max(0, Number.isFinite(+timestepMax) ? +timestepMax : 0);
+  const next = window.ReebViewerCommon.normalizeRanges(ranges, max);
+  const span = Math.max(0, Math.round(Number(opts?.span ?? 20)));
+  const start = next.length
+    ? Math.max(0, Math.min(max, next[next.length - 1].end + 1))
+    : 0;
+  const end = Math.max(start, Math.min(max, start + span));
+  next.push({ start, end });
+  return {
+    ranges: next,
+    selectedRangeIndex: next.length - 1
+  };
+};
+
+window.ReebViewerCommon.removeRangeAt = function(ranges, selectedRangeIndex, removeIndex, timestepMax, opts) {
+  const keepOne = opts?.keepOne !== false;
+  const fallbackRange = opts?.fallbackRange || { start: 0, end: 0 };
+  let next = window.ReebViewerCommon.normalizeRanges(ranges, timestepMax);
+  if (removeIndex < 0 || removeIndex >= next.length) {
+    return {
+      ranges: next,
+      selectedRangeIndex: window.ReebViewerCommon.selectRangeIndex(selectedRangeIndex, next.length, -1)
+    };
+  }
+
+  next.splice(removeIndex, 1);
+  if (!next.length && keepOne) {
+    next = window.ReebViewerCommon.normalizeRanges([], timestepMax, { fallbackRange });
+  }
+  return {
+    ranges: next,
+    selectedRangeIndex: window.ReebViewerCommon.selectRangeIndex(
+      removeIndex,
+      next.length,
+      keepOne ? 0 : -1
+    )
+  };
+};
+
+window.ReebViewerCommon.finishRangeDrag = function(rangeDrag, timestepMax, opts) {
+  if (!rangeDrag || !Number.isFinite(+rangeDrag.start)) return null;
+  const max = Math.max(0, Number.isFinite(+timestepMax) ? +timestepMax : 0);
+  const minSpan = Math.max(0, Math.round(Number(opts?.minSpan ?? 1)));
+  const start = window.ReebViewerCommon.clampInt(rangeDrag.start, 0, max, 0);
+  const current = window.ReebViewerCommon.clampInt(
+    rangeDrag.current ?? rangeDrag.end ?? rangeDrag.start,
+    0,
+    max,
+    start
+  );
+
+  let low = Math.min(start, current);
+  let high = Math.max(start, current);
+  if (high === low && minSpan > 0) {
+    high = Math.min(max, low + minSpan);
+  }
+  if (low > high) {
+    const temp = low;
+    low = high;
+    high = temp;
+  }
+  return { start: low, end: high };
+};
+
 window.ReebViewerCommon.renderRangeRows = function(holder, opts) {
   const root = holder && holder.nodeType ? holder : null;
   if (!root) return;

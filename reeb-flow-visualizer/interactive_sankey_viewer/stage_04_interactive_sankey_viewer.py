@@ -409,12 +409,10 @@ function setThresholdValue(value, triggerRender = false) {
 }
 
 function normalizedRanges() {
-  return ranges
-    .map(r => ({
-      start: Math.min(+r.start, +r.end),
-      end: Math.max(+r.start, +r.end)
-    }))
-    .filter(r => Number.isFinite(r.start) && Number.isFinite(r.end));
+  const maxIndex = fullData?.timesteps?.length
+    ? (d3.max(fullData.timesteps, d => +d.index) ?? minimapBarMaxIndex)
+    : minimapBarMaxIndex;
+  return window.ReebViewerCommon.normalizeRanges(ranges, maxIndex);
 }
 
 function percentValue(link, mode) {
@@ -1161,15 +1159,27 @@ function escapeHtml(v) {
 }
 
 function renderRangeRows() {
+  const timestepMax = fullData?.timesteps?.length
+    ? (d3.max(fullData.timesteps, d => +d.index) ?? minimapBarMaxIndex)
+    : minimapBarMaxIndex;
   window.ReebViewerCommon.renderRangeRows(document.getElementById("rangeRows"), {
-    ranges,
+    ranges: normalizedRanges(),
     selectedRangeIndex,
-    timestepMax: minimapBarMaxIndex,
+    timestepMax,
     onSelectRange: index => selectRangeIndex(index),
     onCommitRange: (index, startValue, endValue) => {
-      if (!ranges[index]) return;
-      ranges[index].start = +startValue;
-      ranges[index].end = +endValue;
+      ranges = window.ReebViewerCommon.commitRangeAt(
+        normalizedRanges(),
+        index,
+        startValue,
+        endValue,
+        timestepMax
+      );
+      selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(
+        selectedRangeIndex,
+        ranges.length,
+        -1
+      );
       renderRangeRows();
       renderSankey({ preserveFocus: true });
     },
@@ -1178,20 +1188,35 @@ function renderRangeRows() {
 }
 
 function addRange(start = 0, end = 20) {
-  ranges.push({ start, end });
-  selectedRangeIndex = ranges.length - 1;
+  const timestepMax = fullData?.timesteps?.length
+    ? (d3.max(fullData.timesteps, d => +d.index) ?? minimapBarMaxIndex)
+    : minimapBarMaxIndex;
+  if (Number.isFinite(start) && Number.isFinite(end) && arguments.length >= 2) {
+    ranges = [...normalizedRanges(), { start, end }];
+    selectedRangeIndex = ranges.length - 1;
+  } else {
+    const next = window.ReebViewerCommon.addRangeAfterLast(normalizedRanges(), timestepMax, { span: 20 });
+    ranges = next.ranges;
+    selectedRangeIndex = next.selectedRangeIndex;
+  }
   renderRangeRows();
   renderSankey({ preserveFocus: true });
   renderMiniMap();
 }
 
 function deleteRange(index = selectedRangeIndex) {
-  if (!ranges.length || index < 0 || index >= ranges.length) return;
-
-  ranges.splice(index, 1);
-  selectedRangeIndex = ranges.length
-    ? Math.max(0, Math.min(index, ranges.length - 1))
-    : -1;
+  const timestepMax = fullData?.timesteps?.length
+    ? (d3.max(fullData.timesteps, d => +d.index) ?? minimapBarMaxIndex)
+    : minimapBarMaxIndex;
+  const next = window.ReebViewerCommon.removeRangeAt(
+    normalizedRanges(),
+    selectedRangeIndex,
+    index,
+    timestepMax,
+    { keepOne: false }
+  );
+  ranges = next.ranges;
+  selectedRangeIndex = next.selectedRangeIndex;
 
   renderRangeRows();
   renderSankey({ preserveFocus: true });
@@ -1199,15 +1224,8 @@ function deleteRange(index = selectedRangeIndex) {
 }
 
 function selectRangeIndex(index) {
-  if (!ranges.length) {
-    selectedRangeIndex = -1;
-    renderRangeRows();
-    renderSankey({ preserveFocus: true });
-    renderMiniMap();
-    return;
-  }
-
-  selectedRangeIndex = Math.max(0, Math.min(index, ranges.length - 1));
+  ranges = normalizedRanges();
+  selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(index, ranges.length, -1);
 
   renderRangeRows();
   renderSankey({ preserveFocus: true });
@@ -1357,6 +1375,8 @@ function renderMiniMap() {
   const timesteps = fullData.timesteps || [];
   const maxIndex = d3.max(timesteps, d => +d.index) ?? 0;
   minimapBarMaxIndex = maxIndex;
+  ranges = window.ReebViewerCommon.normalizeRanges(ranges, minimapBarMaxIndex);
+  selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(selectedRangeIndex, ranges.length, -1);
   minimapBarScale = d3.scaleLinear()
     .domain([0, maxIndex || 1])
     .range([20, width - 20]);
@@ -1394,11 +1414,14 @@ function renderMiniMap() {
     },
     onRangeDragEnd: idx => {
       if (!rangeDrag) return;
-      const start = Math.min(rangeDrag.start, idx);
-      const end = Math.max(rangeDrag.start, idx);
-      const finalEnd = end === start ? Math.min(minimapBarMaxIndex, start + 1) : end;
+      const committed = window.ReebViewerCommon.finishRangeDrag(
+        { start: rangeDrag.start, current: idx },
+        minimapBarMaxIndex,
+        { minSpan: 1 }
+      );
       rangeDrag = null;
-      ranges.push({ start, end: finalEnd });
+      if (!committed) return;
+      ranges = [...normalizedRanges(), committed];
       selectedRangeIndex = ranges.length - 1;
       renderRangeRows();
       renderSankey({ preserveFocus: true });
