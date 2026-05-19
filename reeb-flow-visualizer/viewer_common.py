@@ -62,6 +62,15 @@ def shared_viewer_css() -> str:
 """
 
 
+def shared_viewer_script_tags(include_sankey: bool = False, version: str = "2") -> str:
+    scripts = ['<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>']
+    if include_sankey:
+        scripts.append('<script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>')
+    scripts.append(f'<script src="viewer_common.js?v={version}"></script>')
+    scripts.append(f'<script src="viewer.js?v={version}"></script>')
+    return "\n  ".join(scripts)
+
+
 def write_viewer_common_js(viewer_dir: Path) -> Path:
     path = viewer_dir / 'viewer_common.js'
     path.write_text(
@@ -79,6 +88,474 @@ window.ReebViewerCommon.bindCommittedNumberInput = function(input, commitFn) {
     }
   });
   input.addEventListener('blur', () => commitFn(input.value));
+};
+
+window.ReebViewerCommon.rangeReducer = function(state, action, opts) {
+  const source = state || {};
+  const step = action || {};
+  const max = Math.max(0, Number.isFinite(+opts?.timestepMax) ? +opts.timestepMax : 0);
+  const keepOne = opts?.keepOne !== false;
+  const fallbackRange = opts?.fallbackRange || { start: 0, end: 0 };
+  const defaultSpan = Math.max(0, Math.round(Number(opts?.defaultSpan ?? 20)));
+  const minSpan = Math.max(0, Math.round(Number(opts?.minSpan ?? 1)));
+  const emptySelectedIndex = Number.isFinite(+opts?.emptySelectedIndex)
+    ? Math.round(+opts.emptySelectedIndex)
+    : (keepOne ? 0 : -1);
+
+  let next = {
+    ranges: window.ReebViewerCommon.normalizeRanges(source.ranges, max, keepOne ? { fallbackRange } : undefined),
+    selectedRangeIndex: window.ReebViewerCommon.selectRangeIndex(
+      source.selectedRangeIndex,
+      Array.isArray(source.ranges) ? source.ranges.length : 0,
+      emptySelectedIndex
+    ),
+    rangeDrag: source.rangeDrag || null
+  };
+  next.selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(
+    next.selectedRangeIndex,
+    next.ranges.length,
+    emptySelectedIndex
+  );
+
+  switch (step.type) {
+    case 'normalize':
+      return next;
+    case 'select':
+      next.selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(step.index, next.ranges.length, emptySelectedIndex);
+      return next;
+    case 'commit':
+      next.ranges = window.ReebViewerCommon.commitRangeAt(
+        next.ranges,
+        step.index,
+        step.startValue,
+        step.endValue,
+        max
+      );
+      next.selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(next.selectedRangeIndex, next.ranges.length, emptySelectedIndex);
+      return next;
+    case 'add': {
+      const added = window.ReebViewerCommon.addRangeAfterLast(next.ranges, max, { span: defaultSpan });
+      next.ranges = added.ranges;
+      next.selectedRangeIndex = added.selectedRangeIndex;
+      return next;
+    }
+    case 'add-explicit': {
+      const committed = window.ReebViewerCommon.finishRangeDrag(
+        { start: step.start, current: step.end },
+        max,
+        { minSpan }
+      );
+      if (!committed) return next;
+      next.ranges = [...next.ranges, committed];
+      next.selectedRangeIndex = next.ranges.length - 1;
+      return next;
+    }
+    case 'delete': {
+      const removed = window.ReebViewerCommon.removeRangeAt(
+        next.ranges,
+        next.selectedRangeIndex,
+        step.index,
+        max,
+        {
+          keepOne,
+          fallbackRange
+        }
+      );
+      next.ranges = removed.ranges;
+      next.selectedRangeIndex = removed.selectedRangeIndex;
+      return next;
+    }
+    case 'drag-start':
+      next.rangeDrag = {
+        start: window.ReebViewerCommon.clampInt(step.index, 0, max, 0),
+        current: window.ReebViewerCommon.clampInt(step.index, 0, max, 0)
+      };
+      return next;
+    case 'drag-move':
+      if (!next.rangeDrag) return next;
+      next.rangeDrag = {
+        ...next.rangeDrag,
+        current: window.ReebViewerCommon.clampInt(step.index, 0, max, next.rangeDrag.current)
+      };
+      return next;
+    case 'drag-clear':
+      next.rangeDrag = null;
+      return next;
+    case 'drag-commit': {
+      const committed = window.ReebViewerCommon.finishRangeDrag(next.rangeDrag, max, { minSpan });
+      next.rangeDrag = null;
+      if (!committed) return next;
+      next.ranges = [...next.ranges, committed];
+      next.selectedRangeIndex = next.ranges.length - 1;
+      return next;
+    }
+    default:
+      return next;
+  }
+};
+
+window.ReebViewerCommon.createCameraController = function(opts) {
+  const zoomMin = Number.isFinite(+opts?.zoomMin) ? +opts.zoomMin : 0.1;
+  const zoomMax = Number.isFinite(+opts?.zoomMax) ? +opts.zoomMax : 20;
+  const zoomStep = Number.isFinite(+opts?.zoomStep) ? +opts.zoomStep : 1.2;
+  const wheelFactor = Number.isFinite(+opts?.wheelFactor) ? +opts.wheelFactor : 0.0015;
+  const panDragThreshold = Number.isFinite(+opts?.panDragThreshold) ? +opts.panDragThreshold : 4;
+  const applyTransform = typeof opts?.applyTransform === 'function' ? opts.applyTransform : null;
+
+  const state = {
+    zoomScale: Number.isFinite(+opts?.initialZoomScale) ? +opts.initialZoomScale : 1,
+    viewFocus: opts?.initialViewFocus && Number.isFinite(+opts.initialViewFocus.x) && Number.isFinite(+opts.initialViewFocus.y)
+      ? { x: +opts.initialViewFocus.x, y: +opts.initialViewFocus.y }
+      : null,
+    panDrag: null,
+    pending: false
+  };
+
+  const clampZoom = scale => Math.max(zoomMin, Math.min(zoomMax, Number(scale) || 1));
+  const getZoomScale = () => state.zoomScale;
+  const getViewFocus = () => state.viewFocus ? { x: state.viewFocus.x, y: state.viewFocus.y } : null;
+  const clearViewFocus = () => {
+    state.viewFocus = null;
+    return state.viewFocus;
+  };
+  const setViewFocus = focus => {
+    if (!focus || !Number.isFinite(+focus.x) || !Number.isFinite(+focus.y)) return state.viewFocus;
+    state.viewFocus = { x: +focus.x, y: +focus.y };
+    return state.viewFocus;
+  };
+  const scheduleApply = () => {
+    if (!applyTransform || state.pending) return;
+    state.pending = true;
+    requestAnimationFrame(() => {
+      state.pending = false;
+      applyTransform({
+        zoomScale: state.zoomScale,
+        viewFocus: state.viewFocus
+      });
+    });
+  };
+  const setZoomScale = nextScale => {
+    const clamped = clampZoom(nextScale);
+    if (Math.abs(clamped - state.zoomScale) < 1e-9) return;
+    state.zoomScale = clamped;
+    scheduleApply();
+  };
+  const zoomBy = factor => setZoomScale(state.zoomScale * (Number(factor) || 1));
+  const centerOnBounds = (bounds, fitZoomFn, fit) => {
+    if (!bounds) return;
+    const minX = Number(bounds.minX);
+    const maxX = Number(bounds.maxX);
+    const minY = Number(bounds.minY);
+    const maxY = Number(bounds.maxY);
+    if (![minX, maxX, minY, maxY].every(Number.isFinite)) return;
+    state.viewFocus = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+    if (fit && typeof fitZoomFn === 'function') {
+      state.zoomScale = clampZoom(fitZoomFn(bounds));
+    }
+    scheduleApply();
+  };
+
+  const bindPanAndWheel = (targetNode, bindOpts) => {
+    if (!targetNode) return () => {};
+    const cursorTarget = bindOpts?.cursorTarget || targetNode;
+    const isPanTarget = typeof bindOpts?.isPanTarget === 'function' ? bindOpts.isPanTarget : (() => true);
+    const ensureFocus = typeof bindOpts?.ensureFocus === 'function' ? bindOpts.ensureFocus : null;
+    const onPanState = typeof bindOpts?.onPanState === 'function' ? bindOpts.onPanState : null;
+    const onActive = typeof bindOpts?.onActive === 'function' ? bindOpts.onActive : null;
+    const allowWheel = bindOpts?.allowWheel !== false;
+
+    const onPointerDown = event => {
+      if (event.button !== 0) return;
+      if (!isPanTarget(event.target)) return;
+      if (!state.viewFocus && ensureFocus) {
+        const focus = ensureFocus();
+        if (focus && Number.isFinite(+focus.x) && Number.isFinite(+focus.y)) {
+          state.viewFocus = { x: +focus.x, y: +focus.y };
+        }
+      }
+      if (!state.viewFocus) return;
+      state.panDrag = {
+        startX: event.clientX,
+        startY: event.clientY,
+        focusX: state.viewFocus.x,
+        focusY: state.viewFocus.y,
+        moved: false
+      };
+      if (onActive) onActive(event);
+      if (onPanState) onPanState(true);
+      if (cursorTarget?.style) cursorTarget.style.cursor = "grabbing";
+      targetNode.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    };
+
+    const onPointerMove = event => {
+      if (!state.panDrag) return;
+      const dx = event.clientX - state.panDrag.startX;
+      const dy = event.clientY - state.panDrag.startY;
+      if (!state.panDrag.moved && Math.hypot(dx, dy) < panDragThreshold) return;
+      state.panDrag.moved = true;
+      state.viewFocus = {
+        x: state.panDrag.focusX - dx / state.zoomScale,
+        y: state.panDrag.focusY - dy / state.zoomScale
+      };
+      scheduleApply();
+      event.preventDefault();
+    };
+
+    const endPan = event => {
+      if (!state.panDrag) return;
+      state.panDrag = null;
+      if (onPanState) onPanState(false);
+      if (cursorTarget?.style) cursorTarget.style.cursor = "grab";
+      try {
+        if (targetNode.hasPointerCapture(event.pointerId)) {
+          targetNode.releasePointerCapture(event.pointerId);
+        }
+      } catch (_) {}
+    };
+
+    const onWheel = event => {
+      if (!allowWheel) return;
+      event.preventDefault();
+      const factor = Math.exp(-event.deltaY * wheelFactor);
+      zoomBy(factor);
+    };
+
+    targetNode.addEventListener('pointerdown', onPointerDown);
+    targetNode.addEventListener('pointermove', onPointerMove);
+    targetNode.addEventListener('pointerup', endPan);
+    targetNode.addEventListener('pointercancel', endPan);
+    if (allowWheel) {
+      targetNode.addEventListener('wheel', onWheel, { passive: false });
+    }
+
+    return () => {
+      targetNode.removeEventListener('pointerdown', onPointerDown);
+      targetNode.removeEventListener('pointermove', onPointerMove);
+      targetNode.removeEventListener('pointerup', endPan);
+      targetNode.removeEventListener('pointercancel', endPan);
+      if (allowWheel) {
+        targetNode.removeEventListener('wheel', onWheel);
+      }
+    };
+  };
+
+  return {
+    clampZoom,
+    getZoomScale,
+    getViewFocus,
+    clearViewFocus,
+    setViewFocus,
+    setZoomScale,
+    zoomBy,
+    centerOnBounds,
+    scheduleApply,
+    bindPanAndWheel,
+    get zoomStep() {
+      return zoomStep;
+    }
+  };
+};
+
+window.ReebViewerCommon.createTooltipEngine = function(nodeOrSelection, opts) {
+  const node = nodeOrSelection?.node ? nodeOrSelection.node() : nodeOrSelection;
+  const hiddenClass = opts?.hiddenClass || null;
+  const offsetX = Number.isFinite(+opts?.offsetX) ? +opts.offsetX : 14;
+  const offsetY = Number.isFinite(+opts?.offsetY) ? +opts.offsetY : 14;
+  const edgePad = Number.isFinite(+opts?.edgePad) ? +opts.edgePad : 12;
+  if (!node) {
+    return {
+      showAt: () => {},
+      showFromEvent: () => {},
+      hide: () => {}
+    };
+  }
+
+  const setHidden = hidden => {
+    if (hiddenClass) {
+      node.classList.toggle(hiddenClass, hidden);
+    }
+    node.style.display = hidden ? 'none' : 'block';
+  };
+
+  const showAt = (html, x, y) => {
+    node.innerHTML = html ?? '';
+    setHidden(false);
+    const rect = node.getBoundingClientRect();
+    const left = Math.min(
+      Math.max(edgePad, (Number(x) || 0) + offsetX),
+      Math.max(edgePad, window.innerWidth - rect.width - edgePad)
+    );
+    const top = Math.min(
+      Math.max(edgePad, (Number(y) || 0) + offsetY),
+      Math.max(edgePad, window.innerHeight - rect.height - edgePad)
+    );
+    node.style.left = `${left}px`;
+    node.style.top = `${top}px`;
+  };
+
+  const showFromEvent = (event, html) => {
+    showAt(html, event?.clientX, event?.clientY);
+  };
+
+  const hide = () => {
+    setHidden(true);
+    node.innerHTML = '';
+  };
+
+  hide();
+  return { showAt, showFromEvent, hide };
+};
+
+window.ReebViewerCommon.formatRangeLabel = function(range, opts) {
+  const getLabel = typeof opts?.getLabel === 'function' ? opts.getLabel : (value => value);
+  const start = Math.min(Number(range?.start) || 0, Number(range?.end) || 0);
+  const end = Math.max(Number(range?.start) || 0, Number(range?.end) || 0);
+  return `${getLabel(start)} .. ${getLabel(end)}`;
+};
+
+window.ReebViewerCommon.formatFsFromLabel = function(labelValue, opts) {
+  const divisor = Number.isFinite(+opts?.divisor) ? +opts.divisor : 41.341374575751;
+  const digits = Number.isFinite(+opts?.digits) ? +opts.digits : 2;
+  const n = Number(labelValue);
+  if (!Number.isFinite(n) || !(divisor > 0)) return '';
+  return `${n / divisor}`.replace(/(\\.\\d*?[1-9])0+$/u, '$1').replace(/\\.0+$/u, '.0');
+};
+
+window.ReebViewerCommon.formatTimestepPrimary = function(index, label) {
+  return `${index}. ${label}`;
+};
+
+window.ReebViewerCommon.appendTimestepLabel = function(textSelection, data, opts) {
+  const indexAccessor = typeof opts?.indexAccessor === 'function' ? opts.indexAccessor : d => d.index;
+  const labelAccessor = typeof opts?.labelAccessor === 'function' ? opts.labelAccessor : d => d.label;
+  const index = indexAccessor(data);
+  const label = labelAccessor(data);
+  const primary = window.ReebViewerCommon.formatTimestepPrimary(index, label);
+  const fsRaw = window.ReebViewerCommon.formatFsFromLabel(label, opts);
+  const fsText = fsRaw ? `${Number(fsRaw).toFixed(2)} fs` : '';
+
+  textSelection.append("tspan")
+    .attr("dy", "-0.55em")
+    .attr("text-anchor", "middle")
+    .text(primary);
+  textSelection.append("tspan")
+    .attr("dy", "1.10em")
+    .attr("font-size", 11)
+    .attr("fill", "#6f7d8b")
+    .attr("text-anchor", "middle")
+    .text(fsText);
+};
+
+window.ReebViewerCommon.bindThresholdControl = function(opts) {
+  const slider = opts?.slider;
+  const box = opts?.box || null;
+  const labelNode = opts?.label || null;
+  if (!slider) return null;
+
+  const min = Number.isFinite(+opts?.min) ? +opts.min : Number(slider.min || 0);
+  const max = Number.isFinite(+opts?.max) ? +opts.max : Number(slider.max || 100);
+  const step = Number.isFinite(+opts?.step) ? +opts.step : Number(slider.step || 0.5);
+  const onPreview = typeof opts?.onPreview === 'function' ? opts.onPreview : null;
+  const onCommit = typeof opts?.onCommit === 'function' ? opts.onCommit : null;
+
+  let value = Number.isFinite(+opts?.initialValue)
+    ? +opts.initialValue
+    : Number(slider.value || min);
+  let previewPending = false;
+  let pendingPreview = value;
+
+  const decimals = (() => {
+    const s = String(step);
+    const idx = s.indexOf(".");
+    return idx >= 0 ? Math.max(0, s.length - idx - 1) : 0;
+  })();
+  const clamp = next => {
+    const n = Number(next);
+    if (!Number.isFinite(n)) return value;
+    return Math.max(min, Math.min(max, n));
+  };
+  const formatValue = next => decimals > 0 ? Number(next).toFixed(decimals).replace(/\\.0+$/u, '').replace(/(\\.\\d*?[1-9])0+$/u, '$1') : String(Math.round(next));
+
+  const syncUI = next => {
+    const text = formatValue(next);
+    slider.value = text;
+    if (box) box.value = text;
+    if (labelNode) labelNode.textContent = `${text}%`;
+  };
+
+  const queuePreview = next => {
+    pendingPreview = next;
+    if (previewPending) return;
+    previewPending = true;
+    requestAnimationFrame(() => {
+      previewPending = false;
+      if (onPreview) onPreview(pendingPreview);
+    });
+  };
+
+  const applyValue = (next, commit, previewAlso) => {
+    value = clamp(next);
+    syncUI(value);
+    if (previewAlso) queuePreview(value);
+    if (commit && onCommit) onCommit(value);
+  };
+
+  slider.addEventListener('input', event => {
+    applyValue(event.target.value, false, true);
+  });
+  slider.addEventListener('change', event => {
+    applyValue(event.target.value, true, false);
+  });
+
+  if (box) {
+    window.ReebViewerCommon.bindCommittedNumberInput(box, raw => {
+      applyValue(raw, true, true);
+    });
+  }
+
+  syncUI(clamp(value));
+  return {
+    getValue: () => value,
+    setValue: next => applyValue(next, false, false),
+    commitValue: next => applyValue(next, true, true)
+  };
+};
+
+window.ReebViewerCommon.bindKeyboardShortcuts = function(opts) {
+  const target = opts?.target || document;
+  const onDeleteRange = typeof opts?.onDeleteRange === 'function' ? opts.onDeleteRange : null;
+  const onZoomIn = typeof opts?.onZoomIn === 'function' ? opts.onZoomIn : null;
+  const onZoomOut = typeof opts?.onZoomOut === 'function' ? opts.onZoomOut : null;
+  const shouldIgnore = typeof opts?.shouldIgnore === 'function'
+    ? opts.shouldIgnore
+    : (event => {
+        const tag = event.target?.tagName?.toLowerCase?.() || '';
+        if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+        if (event.target?.isContentEditable) return true;
+        return Boolean(event.metaKey || event.ctrlKey || event.altKey);
+      });
+
+  const handler = event => {
+    if (shouldIgnore(event)) return;
+    if ((event.key === 'Delete' || event.key === 'Backspace') && onDeleteRange) {
+      event.preventDefault();
+      onDeleteRange(event);
+      return;
+    }
+    if ((event.key === '+' || event.key === '=') && onZoomIn) {
+      event.preventDefault();
+      onZoomIn(event);
+      return;
+    }
+    if ((event.key === '-' || event.key === '_') && onZoomOut) {
+      event.preventDefault();
+      onZoomOut(event);
+    }
+  };
+
+  target.addEventListener('keydown', handler);
+  return () => target.removeEventListener('keydown', handler);
 };
 
 window.ReebViewerCommon.clampInt = function(value, low, high, fallback) {

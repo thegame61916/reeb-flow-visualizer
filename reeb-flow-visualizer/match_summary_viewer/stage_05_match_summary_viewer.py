@@ -25,7 +25,11 @@ import shutil
 from pathlib import Path
 
 from common import BASE_DIR, OUTPUT_DIR, SHEET_IMAGE_DIR
-from viewer_common import shared_viewer_css, write_viewer_common_js
+from viewer_common import (
+    shared_viewer_css,
+    shared_viewer_script_tags,
+    write_viewer_common_js,
+)
 
 STORAGE_ROOT = BASE_DIR / "compareSheetShapesCache"
 TIMESTEP_CACHE_DIR = STORAGE_ROOT / "cache" / "timesteps"
@@ -213,7 +217,7 @@ def write_data_json(data: dict) -> Path:
 def write_index_html() -> Path:
     path = MATCH_SUMMARY_VIEWER_DIR / "index.html"
     path.write_text(
-        """<!doctype html>
+        f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -263,9 +267,7 @@ def write_index_html() -> Path:
 
   <div id="tooltip"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
-  <script src="viewer_common.js?v=2"></script>
-  <script src="viewer.js?v=2"></script>
+  {shared_viewer_script_tags(include_sankey=False)}
 </body>
 </html>
 """
@@ -617,10 +619,8 @@ d3.json("data.json").then(data => {
     panelPan: null
   };
 
-  let zoomScale = 1;
-  let viewFocus = null;
-  let panDrag = null;
-  let viewportUpdatePending = false;
+  let camera = null;
+  let tooltipEngine = null;
   let renderAllPending = false;
   let thresholdSyncPending = false;
 
@@ -654,10 +654,31 @@ d3.json("data.json").then(data => {
     return numberFormat.format(Number(value || 0));
   }
 
+  function applyRangeAction(action) {
+    const next = window.ReebViewerCommon.rangeReducer(
+      {
+        ranges: state.ranges,
+        selectedRangeIndex: state.selectedRangeIndex,
+        rangeDrag: state.rangeDrag
+      },
+      action,
+      {
+        timestepMax,
+        keepOne: true,
+        fallbackRange: { start: 0, end: 0 },
+        emptySelectedIndex: 0,
+        defaultSpan: 20,
+        minSpan: 0
+      }
+    );
+    state.ranges = next.ranges;
+    state.selectedRangeIndex = next.selectedRangeIndex;
+    state.rangeDrag = next.rangeDrag;
+    return next;
+  }
+
   function normalizedRanges() {
-    return window.ReebViewerCommon.normalizeRanges(state.ranges, timestepMax, {
-      fallbackRange: { start: 0, end: 0 }
-    });
+    return applyRangeAction({ type: "normalize" }).ranges;
   }
 
   function inRanges(timestep) {
@@ -718,11 +739,12 @@ d3.json("data.json").then(data => {
   }
 
   function rangeLabel(range) {
-    const start = timestepByIndex.get(range.start);
-    const end = timestepByIndex.get(range.end);
-    const startLabel = start ? start.label : range.start;
-    const endLabel = end ? end.label : range.end;
-    return `${startLabel} .. ${endLabel}`;
+    return window.ReebViewerCommon.formatRangeLabel(range, {
+      getLabel: value => {
+        const ts = timestepByIndex.get(value);
+        return ts ? ts.label : value;
+      }
+    });
   }
 
   function renderRangeRows() {
@@ -731,22 +753,11 @@ d3.json("data.json").then(data => {
       selectedRangeIndex: state.selectedRangeIndex,
       timestepMax,
       onSelectRange: index => {
-        state.selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(index, normalizedRanges().length, 0);
+        applyRangeAction({ type: "select", index });
         renderAll();
       },
       onCommitRange: (index, startValue, endValue) => {
-        state.ranges = window.ReebViewerCommon.commitRangeAt(
-          normalizedRanges(),
-          index,
-          startValue,
-          endValue,
-          timestepMax
-        );
-        state.selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(
-          state.selectedRangeIndex,
-          state.ranges.length,
-          0
-        );
+        applyRangeAction({ type: "commit", index, startValue, endValue });
         renderAll();
       },
       onDeleteRange: index => removeRange(index)
@@ -754,38 +765,21 @@ d3.json("data.json").then(data => {
   }
 
   function addRange() {
-    const next = window.ReebViewerCommon.addRangeAfterLast(normalizedRanges(), timestepMax, { span: 20 });
-    state.ranges = next.ranges;
-    state.selectedRangeIndex = next.selectedRangeIndex;
+    applyRangeAction({ type: "add" });
     renderAll();
   }
 
   function removeRange(index) {
-    const next = window.ReebViewerCommon.removeRangeAt(
-      normalizedRanges(),
-      state.selectedRangeIndex,
-      index,
-      timestepMax,
-      {
-        keepOne: true,
-        fallbackRange: { start: 0, end: 0 }
-      }
-    );
-    state.ranges = next.ranges;
-    state.selectedRangeIndex = next.selectedRangeIndex;
+    applyRangeAction({ type: "delete", index });
     renderAll();
   }
 
   function updateTooltip(html, x, y) {
-    tooltip
-      .classed("hidden", false)
-      .html(html)
-      .style("left", `${Math.min(window.innerWidth - 24, x + 14)}px`)
-      .style("top", `${Math.min(window.innerHeight - 24, y + 14)}px`);
+    tooltipEngine?.showAt(html, x, y);
   }
 
   function hideTooltip() {
-    tooltip.classed("hidden", true).html("");
+    tooltipEngine?.hide();
   }
 
   function nodeTooltip(node) {
@@ -942,7 +936,7 @@ d3.json("data.json").then(data => {
   }
 
   function clampZoom(scale) {
-    return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, scale));
+    return camera ? camera.clampZoom(scale) : Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, scale));
   }
 
   function isPanTarget(target) {
@@ -963,12 +957,8 @@ d3.json("data.json").then(data => {
   }
 
   function scheduleViewportUpdate() {
-    if (viewportUpdatePending) return;
-    viewportUpdatePending = true;
-    requestAnimationFrame(() => {
-      viewportUpdatePending = false;
-      applyViewportTransform();
-    });
+    if (!camera) return;
+    camera.scheduleApply();
   }
 
   function scheduleRenderAll() {
@@ -1004,6 +994,8 @@ d3.json("data.json").then(data => {
 
   function visibleTimestepWindow() {
     const panel = currentPanel();
+    const viewFocus = camera?.getViewFocus();
+    const zoomScale = camera?.getZoomScale() ?? 1;
     if (!panel || !panel.graphToTime || !panel.canvasNode || !viewFocus) return null;
 
     const width = Math.max(1, panel.canvasNode.clientWidth || 1);
@@ -1021,15 +1013,15 @@ d3.json("data.json").then(data => {
       graphToTime: panel?.graphToTime,
       maxTime: timestepMax,
       visibleWindowFn: visibleTimestepWindow,
-      getViewFocus: () => viewFocus,
-      setViewFocus: nextFocus => {
-        viewFocus = nextFocus;
-      },
+      getViewFocus: () => camera?.getViewFocus(),
+      setViewFocus: nextFocus => camera?.setViewFocus(nextFocus),
       scheduleViewportUpdate
     });
   }
 
   function applyViewportTransform() {
+    const viewFocus = camera?.getViewFocus();
+    const zoomScale = camera?.getZoomScale() ?? 1;
     if (!viewFocus) return;
 
     state.panelViews.forEach(view => {
@@ -1058,10 +1050,7 @@ d3.json("data.json").then(data => {
   }
 
   function setZoomScale(nextScale) {
-    const clamped = clampZoom(nextScale);
-    if (Math.abs(clamped - zoomScale) < 1e-9) return;
-    zoomScale = clamped;
-    scheduleViewportUpdate();
+    camera?.setZoomScale(nextScale);
   }
 
   function centerSankey() {
@@ -1075,12 +1064,7 @@ d3.json("data.json").then(data => {
       maxY: d3.max(panel.layout.visibleNodes, d => d.y1) ?? 0
     };
 
-    viewFocus = {
-      x: (bounds.minX + bounds.maxX) / 2,
-      y: (bounds.minY + bounds.maxY) / 2
-    };
-    zoomScale = fitZoomForBounds(bounds, panel.canvasNode);
-    scheduleViewportUpdate();
+    camera?.centerOnBounds(bounds, b => fitZoomForBounds(b, panel.canvasNode), true);
   }
 
   function gatherVisiblePairs(mode, thresholdPercent, nodeByKey) {
@@ -1207,32 +1191,25 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         return ts ? ts.label : value;
       },
       onRangeSelected: index => {
-        state.selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(index, normalizedRanges().length, 0);
+        applyRangeAction({ type: "select", index });
         renderAll();
       },
       onRangeDragStart: idx => {
-        state.rangeDrag = { start: idx, current: idx };
+        applyRangeAction({ type: "drag-start", index: idx });
         renderRangeBar();
       },
       onRangeDragMove: idx => {
-        if (!state.rangeDrag) return;
-        state.rangeDrag.current = idx;
+        applyRangeAction({ type: "drag-move", index: idx });
         renderRangeBar();
       },
       onRangeDragEnd: idx => {
-        if (!state.rangeDrag) return;
-        const committed = window.ReebViewerCommon.finishRangeDrag(
-          { start: state.rangeDrag.start, current: idx },
-          timestepMax,
-          { minSpan: 0 }
-        );
-        state.rangeDrag = null;
-        if (!committed) {
+        applyRangeAction({ type: "drag-move", index: idx });
+        const previousCount = state.ranges.length;
+        applyRangeAction({ type: "drag-commit" });
+        if (state.ranges.length === previousCount) {
           renderRangeBar();
           return;
         }
-        state.ranges = [...normalizedRanges(), committed];
-        state.selectedRangeIndex = state.ranges.length - 1;
         renderAll();
       },
       onViewportClick: idx => {
@@ -1310,17 +1287,22 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       .property("value", panel.threshold);
     const deleteButton = controls.append("button").text("Remove");
 
-    function commitThreshold(value) {
-      panel.threshold = clamp(Number(value) || 0, 0, 100);
-      scheduleThresholdSync();
-    }
-
-    thresholdRange.on("input", event => {
-      panel.threshold = Number(event.target.value);
-      thresholdBox.property("value", panel.threshold);
-      scheduleThresholdSync();
+    window.ReebViewerCommon.bindThresholdControl({
+      slider: thresholdRange.node(),
+      box: thresholdBox.node(),
+      min: 0,
+      max: 100,
+      step: 0.5,
+      initialValue: panel.threshold,
+      onPreview: value => {
+        panel.threshold = clamp(Number(value) || 0, 0, 100);
+        scheduleThresholdSync();
+      },
+      onCommit: value => {
+        panel.threshold = clamp(Number(value) || 0, 0, 100);
+        scheduleThresholdSync();
+      }
     });
-    window.ReebViewerCommon.bindCommittedNumberInput(thresholdBox.node(), value => commitThreshold(value));
 
     deleteButton.on("click", () => {
       state.panels = state.panels.filter(item => item.id !== panel.id);
@@ -1365,12 +1347,8 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       maxY: d3.max(layout.visibleNodes, d => d.y1) ?? 0
     };
 
-    if (!viewFocus) {
-      viewFocus = {
-        x: (layoutBounds.minX + layoutBounds.maxX) / 2,
-        y: (layoutBounds.minY + layoutBounds.maxY) / 2
-      };
-      zoomScale = fitZoomForBounds(layoutBounds, canvas.node());
+    if (!camera.getViewFocus()) {
+      camera.centerOnBounds(layoutBounds, b => fitZoomForBounds(b, canvas.node()), true);
     }
 
     state.panelViews.set(panel.id, {
@@ -1391,18 +1369,12 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       .attr("dominant-baseline", "middle")
       .attr("font-size", 13)
       .each(function(d) {
-        const fsValue = Number(d.label) / 41.341374575751;
-        const text = d3.select(this);
-        text.append("tspan")
-          .attr("dy", "-0.55em")
-          .attr("text-anchor", "middle")
-          .text(`${d.index}. ${d.label}`);
-        text.append("tspan")
-          .attr("dy", "1.10em")
-          .attr("font-size", 11)
-          .attr("fill", "#6f7d8b")
-          .attr("text-anchor", "middle")
-          .text(Number.isFinite(fsValue) ? `${d3.format(".2f")(fsValue)} fs` : "");
+        window.ReebViewerCommon.appendTimestepLabel(d3.select(this), d, {
+          indexAccessor: item => item.index,
+          labelAccessor: item => item.label,
+          divisor: 41.341374575751,
+          digits: 2
+        });
       });
 
     const linkSelection = root.append("g")
@@ -1437,58 +1409,23 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       .text(d => `S${d.sheet_id} R${d.rank}`);
 
     const canvasNode = canvas.node();
-    let panStart = null;
-
-    canvasNode.addEventListener("pointerdown", event => {
-      if (event.button !== 0) return;
-      if (event.target.closest(".node, .link, button, input, select, label")) return;
-      state.activePanelId = panel.id;
-      if (!viewFocus) {
-        viewFocus = {
+    camera.bindPanAndWheel(canvasNode, {
+      cursorTarget: canvasNode,
+      isPanTarget: target => !target.closest(".node, .link, button, input, select, label"),
+      ensureFocus: () => {
+        state.activePanelId = panel.id;
+        const focus = camera.getViewFocus();
+        if (focus) return focus;
+        return {
           x: (layoutBounds.minX + layoutBounds.maxX) / 2,
           y: (layoutBounds.minY + layoutBounds.maxY) / 2
         };
-      }
-      panStart = {
-        x: event.clientX,
-        y: event.clientY,
-        focusX: viewFocus.x,
-        focusY: viewFocus.y
-      };
-      canvas.classed("dragging", true);
-      canvasNode.setPointerCapture(event.pointerId);
-      event.preventDefault();
-    });
-
-    canvasNode.addEventListener("pointermove", event => {
-      if (!panStart) return;
-      const dx = event.clientX - panStart.x;
-      const dy = event.clientY - panStart.y;
-      if (Math.hypot(dx, dy) < PAN_DRAG_THRESHOLD) return;
-      viewFocus = {
-        x: panStart.focusX - dx / zoomScale,
-        y: panStart.focusY - dy / zoomScale
-      };
-      scheduleViewportUpdate();
-      event.preventDefault();
-    });
-
-    canvasNode.addEventListener("pointerup", event => {
-      if (!panStart) return;
-      panStart = null;
-      canvas.classed("dragging", false);
-      if (canvasNode.hasPointerCapture(event.pointerId)) {
-        canvasNode.releasePointerCapture(event.pointerId);
-      }
-      scheduleViewportUpdate();
-    });
-
-    canvasNode.addEventListener("pointercancel", event => {
-      if (!panStart) return;
-      panStart = null;
-      canvas.classed("dragging", false);
-      if (canvasNode.hasPointerCapture(event.pointerId)) {
-        canvasNode.releasePointerCapture(event.pointerId);
+      },
+      onActive: () => {
+        state.activePanelId = panel.id;
+      },
+      onPanState: active => {
+        canvas.classed("dragging", active);
       }
     });
 
@@ -1496,12 +1433,6 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       state.activePanelId = panel.id;
       renderRangeBar();
     });
-
-    canvasNode.addEventListener("wheel", event => {
-      event.preventDefault();
-      const factor = Math.exp(-event.deltaY * 0.0015);
-      setZoomScale(zoomScale * factor);
-    }, { passive: false });
 
     syncThresholdVisibility();
   }
@@ -1520,15 +1451,11 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
   function renderAll() {
     state.panelViews = new Map();
     state.ranges = normalizedRanges();
-    state.selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(
-      state.selectedRangeIndex,
-      state.ranges.length,
-      0
-    );
+    state.selectedRangeIndex = applyRangeAction({ type: "normalize" }).selectedRangeIndex;
     renderRangeRows();
     renderStats();
     renderPanels();
-    if (viewFocus) {
+    if (camera.getViewFocus()) {
       applyViewportTransform();
     } else {
       renderRangeBar();
@@ -1543,32 +1470,34 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
   document.getElementById("addRange").addEventListener("click", addRange);
   document.getElementById("deleteRange").addEventListener("click", () => removeRange(state.selectedRangeIndex));
   document.getElementById("addPanel").addEventListener("click", addPanel);
-  document.getElementById("zoomOut").addEventListener("click", () => setZoomScale(zoomScale / ZOOM_STEP));
-  document.getElementById("zoomIn").addEventListener("click", () => setZoomScale(zoomScale * ZOOM_STEP));
+  document.getElementById("zoomOut").addEventListener("click", () => camera.zoomBy(1 / camera.zoomStep));
+  document.getElementById("zoomIn").addEventListener("click", () => camera.zoomBy(camera.zoomStep));
   document.getElementById("centerView").addEventListener("click", () => centerSankey());
 
-  document.addEventListener("keydown", event => {
-    const tag = (event.target && event.target.tagName || "").toLowerCase();
-    if (tag === "input" || tag === "textarea" || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (event.key === "Delete" || event.key === "Backspace") {
-      if (state.ranges.length > 1 || state.ranges.length === 1) {
-        event.preventDefault();
-        removeRange(state.selectedRangeIndex);
-      }
-    }
-    if (event.key === "+" || event.key === "=") {
-      event.preventDefault();
-      setZoomScale(zoomScale * ZOOM_STEP);
-    }
-    if (event.key === "-" || event.key === "_") {
-      event.preventDefault();
-      setZoomScale(zoomScale / ZOOM_STEP);
-    }
+  window.ReebViewerCommon.bindKeyboardShortcuts({
+    target: document,
+    onDeleteRange: () => removeRange(state.selectedRangeIndex),
+    onZoomIn: () => camera.zoomBy(camera.zoomStep),
+    onZoomOut: () => camera.zoomBy(1 / camera.zoomStep)
   });
 
   window.addEventListener("resize", () => renderRangeBar());
 
-  tooltip.classed("hidden", true);
+  tooltipEngine = window.ReebViewerCommon.createTooltipEngine(tooltip, {
+    hiddenClass: "hidden",
+    edgePad: 12,
+    offsetX: 14,
+    offsetY: 14
+  });
+  camera = window.ReebViewerCommon.createCameraController({
+    zoomMin: ZOOM_MIN,
+    zoomMax: ZOOM_MAX,
+    zoomStep: ZOOM_STEP,
+    panDragThreshold: PAN_DRAG_THRESHOLD,
+    applyTransform: () => applyViewportTransform()
+  });
+  camera.setZoomScale(1);
+  camera.clearViewFocus();
   renderAll();
 }).catch(error => {
   console.error(error);

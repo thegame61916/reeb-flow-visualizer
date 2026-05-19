@@ -5,7 +5,11 @@ import shutil
 from pathlib import Path
 
 from common import OVERLAP_FILE, SHEET_IMAGE_DIR, VIEWER_DIR
-from viewer_common import shared_viewer_css, write_viewer_common_js
+from viewer_common import (
+    shared_viewer_css,
+    shared_viewer_script_tags,
+    write_viewer_common_js,
+)
 
 
 def load_data():
@@ -107,7 +111,7 @@ def write_data_json(data):
 def write_index_html():
     path = VIEWER_DIR / "index.html"
     path.write_text(
-        """<!doctype html>
+        f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -209,10 +213,7 @@ def write_index_html():
 
   <div id="tooltip"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
-  <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
-  <script src="viewer_common.js?v=2"></script>
-  <script src="viewer.js?v=2"></script>
+  {shared_viewer_script_tags(include_sankey=True)}
 </body>
 </html>
 """
@@ -353,10 +354,9 @@ let minimapBarScale = null;
 let minimapBarMaxIndex = 0;
 let minimapState = null;
 let viewportDrag = null;
-let zoomScale = 1;
-let viewFocus = null;
-let panDrag = null;
-let viewportUpdatePending = false;
+let camera = null;
+let tooltipEngine = null;
+let thresholdController = null;
 
 const BASE_COLUMN_SPACING = 190;
 const BASE_MARGIN_X = 280;
@@ -392,27 +392,47 @@ function getControls() {
   };
 }
 
+function currentTimestepMax() {
+  return fullData?.timesteps?.length
+    ? (d3.max(fullData.timesteps, d => +d.index) ?? minimapBarMaxIndex)
+    : minimapBarMaxIndex;
+}
+
+function timestepLabelAt(index) {
+  const ts = fullData?.timesteps?.find(t => +t.index === +index);
+  return ts ? ts.label : String(index);
+}
+
+function applyRangeAction(action) {
+  const next = window.ReebViewerCommon.rangeReducer(
+    { ranges, selectedRangeIndex, rangeDrag },
+    action,
+    {
+      timestepMax: currentTimestepMax(),
+      keepOne: false,
+      emptySelectedIndex: -1,
+      defaultSpan: 20,
+      minSpan: 1
+    }
+  );
+  ranges = next.ranges;
+  selectedRangeIndex = next.selectedRangeIndex;
+  rangeDrag = next.rangeDrag;
+  return next;
+}
+
 function setThresholdValue(value, triggerRender = false) {
-  const slider = document.getElementById("threshold");
-  const box = document.getElementById("thresholdBox");
-  const label = document.getElementById("thresholdValue");
-  const next = Math.max(+slider.min || 0, Math.min(+slider.max || 100, Number(value)));
-  const safe = Number.isFinite(next) ? next : 0;
-
-  slider.value = String(safe);
-  box.value = String(safe);
-  label.textContent = `${safe}%`;
-
+  if (!thresholdController) return;
   if (triggerRender) {
-    renderSankey({ preserveFocus: true });
+    thresholdController.commitValue(value);
+    return;
   }
+  thresholdController.setValue(value);
 }
 
 function normalizedRanges() {
-  const maxIndex = fullData?.timesteps?.length
-    ? (d3.max(fullData.timesteps, d => +d.index) ?? minimapBarMaxIndex)
-    : minimapBarMaxIndex;
-  return window.ReebViewerCommon.normalizeRanges(ranges, maxIndex);
+  const next = applyRangeAction({ type: "normalize" });
+  return next.ranges;
 }
 
 function percentValue(link, mode) {
@@ -504,7 +524,7 @@ function buildDisplayLayout(timestepValues, selectedRanges) {
 }
 
 function clampZoom(scale) {
-  return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, scale));
+  return camera ? camera.clampZoom(scale) : Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, scale));
 }
 
 function isPanTarget(target) {
@@ -515,23 +535,16 @@ function isPanTarget(target) {
 }
 
 function setZoomScale(nextScale, focus = null) {
-  const clamped = clampZoom(nextScale);
-  if (Math.abs(clamped - zoomScale) < 1e-9) return;
-
-  zoomScale = clamped;
+  if (!camera) return;
   if (focus && Number.isFinite(focus.x) && Number.isFinite(focus.y)) {
-    viewFocus = { x: focus.x, y: focus.y };
+    camera.setViewFocus({ x: focus.x, y: focus.y });
   }
-  scheduleViewportUpdate();
+  camera.setZoomScale(nextScale);
 }
 
 function scheduleViewportUpdate() {
-  if (viewportUpdatePending || !lastGraph) return;
-  viewportUpdatePending = true;
-  requestAnimationFrame(() => {
-    viewportUpdatePending = false;
-    applyViewportTransform();
-  });
+  if (!camera || !lastGraph) return;
+  camera.scheduleApply();
 }
 
 function orderNodes(nodes, links, mode) {
@@ -886,6 +899,8 @@ function applyViewportTransform() {
   const width = Math.max(1, chartWrap.clientWidth);
   const height = Math.max(1, chartWrap.clientHeight);
   const root = chart.select(".sankey-root");
+  const viewFocus = camera?.getViewFocus();
+  const zoomScale = camera?.getZoomScale() ?? 1;
   if (root.empty() || !viewFocus) return;
 
   const translateX = width / 2 - viewFocus.x * zoomScale;
@@ -931,7 +946,7 @@ function renderSankey({ preserveFocus = true } = {}) {
 
   if (!filtered.nodes.length) {
     lastGraph = { nodes: [], links: [] };
-    viewFocus = null;
+    camera?.clearViewFocus();
     root.append("text")
       .attr("x", 40)
       .attr("y", 60)
@@ -978,13 +993,14 @@ function renderSankey({ preserveFocus = true } = {}) {
   const bounds = graphBounds(graph);
   const graphCenterX = (bounds.minX + bounds.maxX) / 2;
   const graphCenterY = (bounds.minY + bounds.maxY) / 2;
-  if (!viewFocus || !preserveFocus) {
-    viewFocus = { x: graphCenterX, y: graphCenterY };
+  const existingFocus = camera?.getViewFocus();
+  if (!existingFocus || !preserveFocus) {
+    camera?.setViewFocus({ x: graphCenterX, y: graphCenterY });
     if (!preserveFocus) {
-      zoomScale = fitZoomForBounds(bounds);
+      camera?.setZoomScale(fitZoomForBounds(bounds));
     }
-  } else if (!Number.isFinite(viewFocus.x) || !Number.isFinite(viewFocus.y)) {
-    viewFocus = { x: graphCenterX, y: graphCenterY };
+  } else if (!Number.isFinite(existingFocus.x) || !Number.isFinite(existingFocus.y)) {
+    camera?.setViewFocus({ x: graphCenterX, y: graphCenterY });
   }
 
   lastGraph = graph;
@@ -1049,18 +1065,12 @@ function renderSankey({ preserveFocus = true } = {}) {
     .attr("dominant-baseline", "middle")
     .attr("font-size", 13)
     .each(function(d) {
-      const fsValue = Number(d.label) / 41.341374575751;
-      const text = d3.select(this);
-      text.append("tspan")
-        .attr("dy", "-0.55em")
-        .attr("text-anchor", "middle")
-        .text(`${d.t}. ${d.label}`);
-      text.append("tspan")
-        .attr("dy", "1.10em")
-        .attr("font-size", 11)
-        .attr("fill", "#6f7d8b")
-        .attr("text-anchor", "middle")
-        .text(Number.isFinite(fsValue) ? `${d3.format(".2f")(fsValue)} fs` : "");
+      window.ReebViewerCommon.appendTimestepLabel(d3.select(this), d, {
+        indexAccessor: item => item.t,
+        labelAccessor: item => item.label,
+        divisor: 41.341374575751,
+        digits: 2
+      });
     });
 
   updateStats(filtered);
@@ -1139,14 +1149,11 @@ function linkTooltip(d) {
 }
 
 function showTooltip(event, html) {
-  tooltip
-    .style("display", "block")
-    .style("left", `${event.clientX + 12}px`)
-    .style("top", `${event.clientY + 12}px`)
-    .html(html);
+  if (!tooltipEngine) return;
+  tooltipEngine.showFromEvent(event, html);
 }
 
-function hideTooltip() { tooltip.style("display", "none"); }
+function hideTooltip() { tooltipEngine?.hide(); }
 function format(v) { return Number.isFinite(+v) ? d3.format(",.4~g")(+v) : v; }
 function escapeHtml(v) {
   return String(v).replace(/[&<>"']/g, c => ({
@@ -1159,27 +1166,14 @@ function escapeHtml(v) {
 }
 
 function renderRangeRows() {
-  const timestepMax = fullData?.timesteps?.length
-    ? (d3.max(fullData.timesteps, d => +d.index) ?? minimapBarMaxIndex)
-    : minimapBarMaxIndex;
+  const timestepMax = currentTimestepMax();
   window.ReebViewerCommon.renderRangeRows(document.getElementById("rangeRows"), {
     ranges: normalizedRanges(),
     selectedRangeIndex,
     timestepMax,
     onSelectRange: index => selectRangeIndex(index),
     onCommitRange: (index, startValue, endValue) => {
-      ranges = window.ReebViewerCommon.commitRangeAt(
-        normalizedRanges(),
-        index,
-        startValue,
-        endValue,
-        timestepMax
-      );
-      selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(
-        selectedRangeIndex,
-        ranges.length,
-        -1
-      );
+      applyRangeAction({ type: "commit", index, startValue, endValue });
       renderRangeRows();
       renderSankey({ preserveFocus: true });
     },
@@ -1188,16 +1182,10 @@ function renderRangeRows() {
 }
 
 function addRange(start = 0, end = 20) {
-  const timestepMax = fullData?.timesteps?.length
-    ? (d3.max(fullData.timesteps, d => +d.index) ?? minimapBarMaxIndex)
-    : minimapBarMaxIndex;
   if (Number.isFinite(start) && Number.isFinite(end) && arguments.length >= 2) {
-    ranges = [...normalizedRanges(), { start, end }];
-    selectedRangeIndex = ranges.length - 1;
+    applyRangeAction({ type: "add-explicit", start, end });
   } else {
-    const next = window.ReebViewerCommon.addRangeAfterLast(normalizedRanges(), timestepMax, { span: 20 });
-    ranges = next.ranges;
-    selectedRangeIndex = next.selectedRangeIndex;
+    applyRangeAction({ type: "add" });
   }
   renderRangeRows();
   renderSankey({ preserveFocus: true });
@@ -1205,18 +1193,7 @@ function addRange(start = 0, end = 20) {
 }
 
 function deleteRange(index = selectedRangeIndex) {
-  const timestepMax = fullData?.timesteps?.length
-    ? (d3.max(fullData.timesteps, d => +d.index) ?? minimapBarMaxIndex)
-    : minimapBarMaxIndex;
-  const next = window.ReebViewerCommon.removeRangeAt(
-    normalizedRanges(),
-    selectedRangeIndex,
-    index,
-    timestepMax,
-    { keepOne: false }
-  );
-  ranges = next.ranges;
-  selectedRangeIndex = next.selectedRangeIndex;
+  applyRangeAction({ type: "delete", index });
 
   renderRangeRows();
   renderSankey({ preserveFocus: true });
@@ -1224,8 +1201,7 @@ function deleteRange(index = selectedRangeIndex) {
 }
 
 function selectRangeIndex(index) {
-  ranges = normalizedRanges();
-  selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(index, ranges.length, -1);
+  applyRangeAction({ type: "select", index });
 
   renderRangeRows();
   renderSankey({ preserveFocus: true });
@@ -1252,63 +1228,14 @@ function centerSelectedRange(index = selectedRangeIndex) {
   const maxX = d3.max(nodes, d => d.x1) ?? 0;
   const minY = d3.min(nodes, d => d.y0) ?? 0;
   const maxY = d3.max(nodes, d => d.y1) ?? 0;
-  viewFocus = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  camera?.setViewFocus({ x: (minX + maxX) / 2, y: (minY + maxY) / 2 });
   scheduleViewportUpdate();
 }
 
 function centerSankey() {
   if (!lastGraph || !lastGraph.nodes.length) return;
   const bounds = graphBounds(lastGraph);
-  viewFocus = {
-    x: (bounds.minX + bounds.maxX) / 2,
-    y: (bounds.minY + bounds.maxY) / 2
-  };
-  zoomScale = fitZoomForBounds(bounds);
-  scheduleViewportUpdate();
-}
-
-function clampTimestep(value, maxIndex) {
-  return Math.max(0, Math.min(maxIndex, value));
-}
-
-function startRangeDrag(event) {
-  if (event.button !== 0 || !minimapBarScale) return;
-
-  const svgNode = document.querySelector("#minimap svg");
-  if (!svgNode) return;
-
-  const [mx] = d3.pointer(event, svgNode);
-  const timestep = clampTimestep(Math.round(minimapBarScale.invert(mx)), minimapBarMaxIndex);
-
-  rangeDrag = { start: timestep, end: timestep };
-  event.preventDefault();
-  renderMiniMap();
-}
-
-function updateRangeDrag(event) {
-  if (!rangeDrag || !minimapBarScale) return;
-
-  const svgNode = document.querySelector("#minimap svg");
-  if (!svgNode) return;
-
-  const [mx] = d3.pointer(event, svgNode);
-  rangeDrag.end = clampTimestep(Math.round(minimapBarScale.invert(mx)), minimapBarMaxIndex);
-  renderMiniMap();
-}
-
-function finishRangeDrag() {
-  if (!rangeDrag) return;
-
-  const start = Math.min(rangeDrag.start, rangeDrag.end);
-  const end = Math.max(rangeDrag.start, rangeDrag.end);
-  const finalEnd = end === start ? Math.min(minimapBarMaxIndex, start + 1) : end;
-
-  rangeDrag = null;
-  ranges.push({ start, end: finalEnd });
-  selectedRangeIndex = ranges.length - 1;
-
-  renderRangeRows();
-  renderSankey({ preserveFocus: true });
+  camera?.centerOnBounds(bounds, fitZoomForBounds, true);
 }
 
 function updateMiniMapState(graph) {
@@ -1340,6 +1267,8 @@ function updateMiniMapState(graph) {
 }
 
 function visibleTimestepWindow() {
+  const viewFocus = camera?.getViewFocus();
+  const zoomScale = camera?.getZoomScale() ?? 1;
   if (!minimapState || !viewFocus) return null;
 
   const width = Math.max(1, chartWrap.clientWidth);
@@ -1357,10 +1286,8 @@ function recenterViewportFromBarIndex(targetTime) {
     graphToTime: minimapState?.graphToTime,
     maxTime: minimapBarMaxIndex,
     visibleWindowFn: visibleTimestepWindow,
-    getViewFocus: () => viewFocus,
-    setViewFocus: nextFocus => {
-      viewFocus = nextFocus;
-    },
+    getViewFocus: () => camera?.getViewFocus(),
+    setViewFocus: nextFocus => camera?.setViewFocus(nextFocus),
     scheduleViewportUpdate
   });
 }
@@ -1375,8 +1302,7 @@ function renderMiniMap() {
   const timesteps = fullData.timesteps || [];
   const maxIndex = d3.max(timesteps, d => +d.index) ?? 0;
   minimapBarMaxIndex = maxIndex;
-  ranges = window.ReebViewerCommon.normalizeRanges(ranges, minimapBarMaxIndex);
-  selectedRangeIndex = window.ReebViewerCommon.selectRangeIndex(selectedRangeIndex, ranges.length, -1);
+  applyRangeAction({ type: "normalize" });
   minimapBarScale = d3.scaleLinear()
     .domain([0, maxIndex || 1])
     .range([20, width - 20]);
@@ -1391,38 +1317,24 @@ function renderMiniMap() {
       rangeDrag,
       viewportDrag,
       visibleWindow: visibleTimestepWindow,
-      rangeLabelFn: range => {
-        const start = fullData.timesteps?.find(t => +t.index === Math.min(range.start, range.end));
-        const end = fullData.timesteps?.find(t => +t.index === Math.max(range.start, range.end));
-        const startLabel = start ? start.label : Math.min(range.start, range.end);
-        const endLabel = end ? end.label : Math.max(range.start, range.end);
-        return `${startLabel} .. ${endLabel}`;
-      },
-      tickLabelFn: value => {
-        const ts = fullData.timesteps?.find(t => +t.index === value);
-        return ts ? ts.label : String(value);
-      },
+      rangeLabelFn: range => window.ReebViewerCommon.formatRangeLabel(range, {
+        getLabel: value => timestepLabelAt(value)
+      }),
+      tickLabelFn: value => timestepLabelAt(value),
     onRangeSelected: index => selectRangeIndex(index),
     onRangeDragStart: idx => {
-      rangeDrag = { start: idx, current: idx };
+      applyRangeAction({ type: "drag-start", index: idx });
       renderMiniMap();
     },
     onRangeDragMove: idx => {
-      if (!rangeDrag) return;
-      rangeDrag.current = idx;
+      applyRangeAction({ type: "drag-move", index: idx });
       renderMiniMap();
     },
     onRangeDragEnd: idx => {
-      if (!rangeDrag) return;
-      const committed = window.ReebViewerCommon.finishRangeDrag(
-        { start: rangeDrag.start, current: idx },
-        minimapBarMaxIndex,
-        { minSpan: 1 }
-      );
-      rangeDrag = null;
-      if (!committed) return;
-      ranges = [...normalizedRanges(), committed];
-      selectedRangeIndex = ranges.length - 1;
+      applyRangeAction({ type: "drag-move", index: idx });
+      const previousCount = ranges.length;
+      applyRangeAction({ type: "drag-commit" });
+      if (ranges.length === previousCount) return;
       renderRangeRows();
       renderSankey({ preserveFocus: true });
     },
@@ -1445,73 +1357,28 @@ function renderMiniMap() {
 
 function bindControls() {
   chartWrap.style.cursor = "grab";
-  chartWrap.addEventListener("pointerdown", event => {
-    if (event.button !== 0 || !isPanTarget(event.target)) return;
-
-    if (!viewFocus) {
+  camera.bindPanAndWheel(chartWrap, {
+    cursorTarget: chartWrap,
+    isPanTarget,
+    ensureFocus: () => {
       const bounds = lastGraph ? graphBounds(lastGraph) : { minX: 0, maxX: 0, minY: 0, maxY: 0 };
-      viewFocus = {
+      return {
         x: (bounds.minX + bounds.maxX) / 2,
         y: (bounds.minY + bounds.maxY) / 2
       };
+    },
+    onPanState: active => {
+      chartWrap.style.cursor = active ? "grabbing" : "grab";
     }
-
-    panDrag = {
-      startX: event.clientX,
-      startY: event.clientY,
-      startFocusX: viewFocus.x,
-      startFocusY: viewFocus.y,
-      moved: false
-    };
-    chartWrap.setPointerCapture(event.pointerId);
-    chartWrap.style.cursor = "grabbing";
-    event.preventDefault();
   });
 
-  chartWrap.addEventListener("pointermove", event => {
-    if (!panDrag) return;
-
-    const dx = event.clientX - panDrag.startX;
-    const dy = event.clientY - panDrag.startY;
-    if (!panDrag.moved && Math.hypot(dx, dy) < PAN_DRAG_THRESHOLD) return;
-
-    panDrag.moved = true;
-    viewFocus = {
-      x: panDrag.startFocusX - dx / zoomScale,
-      y: panDrag.startFocusY - dy / zoomScale
-    };
-    scheduleViewportUpdate();
-    event.preventDefault();
+  thresholdController = window.ReebViewerCommon.bindThresholdControl({
+    slider: document.getElementById("threshold"),
+    box: document.getElementById("thresholdBox"),
+    label: document.getElementById("thresholdValue"),
+    onPreview: () => renderSankey({ preserveFocus: true }),
+    onCommit: () => renderSankey({ preserveFocus: true })
   });
-
-  chartWrap.addEventListener("pointerup", event => {
-    if (!panDrag) return;
-
-    try { chartWrap.releasePointerCapture(event.pointerId); } catch (_) {}
-    chartWrap.style.cursor = "grab";
-    panDrag = null;
-  });
-
-  chartWrap.addEventListener("pointercancel", event => {
-    if (!panDrag) return;
-
-    try { chartWrap.releasePointerCapture(event.pointerId); } catch (_) {}
-    chartWrap.style.cursor = "grab";
-    panDrag = null;
-  });
-
-  chartWrap.addEventListener("wheel", event => {
-    event.preventDefault();
-    const factor = Math.exp(-event.deltaY * 0.0015);
-    setZoomScale(zoomScale * factor);
-  }, { passive: false });
-
-  document.getElementById("threshold").addEventListener("input", event => {
-    setThresholdValue(event.target.value, true);
-  });
-
-  const thresholdBox = document.getElementById("thresholdBox");
-  window.ReebViewerCommon.bindCommittedNumberInput(thresholdBox, value => setThresholdValue(value, true));
 
   ["percentMode", "hideIsolated"].forEach(id => {
     document.getElementById(id).addEventListener("input", () => {
@@ -1535,15 +1402,21 @@ function bindControls() {
     addRange(0, Math.min(20, (fullData.timesteps || []).length - 1));
   });
 
-  document.getElementById("zoomOut").addEventListener("click", () => setZoomScale(zoomScale / ZOOM_STEP));
-  document.getElementById("zoomIn").addEventListener("click", () => setZoomScale(zoomScale * ZOOM_STEP));
+  document.getElementById("zoomOut").addEventListener("click", () => camera.zoomBy(1 / camera.zoomStep));
+  document.getElementById("zoomIn").addEventListener("click", () => camera.zoomBy(camera.zoomStep));
   document.getElementById("deleteRange").addEventListener("click", () => deleteRange());
   document.getElementById("centerView").addEventListener("click", () => centerSankey());
 
-  document.addEventListener("keydown", event => {
-    const tag = event.target?.tagName?.toLowerCase();
-    if ((event.key === "Delete" || event.key === "Backspace") && tag !== "input" && tag !== "textarea") {
-      deleteRange();
+  window.ReebViewerCommon.bindKeyboardShortcuts({
+    target: document,
+    onDeleteRange: () => deleteRange(),
+    onZoomIn: () => camera.zoomBy(camera.zoomStep),
+    onZoomOut: () => camera.zoomBy(1 / camera.zoomStep),
+    shouldIgnore: event => {
+      const tag = event.target?.tagName?.toLowerCase?.() || "";
+      if (tag === "input" || tag === "textarea" || tag === "select") return true;
+      if (event.target?.isContentEditable) return true;
+      return Boolean(event.metaKey || event.ctrlKey || event.altKey);
     }
   });
 
@@ -1552,6 +1425,15 @@ function bindControls() {
 
 d3.json("data.json").then(data => {
   fullData = data;
+  tooltipEngine = window.ReebViewerCommon.createTooltipEngine(tooltip, { edgePad: 12, offsetX: 12, offsetY: 12 });
+  camera = window.ReebViewerCommon.createCameraController({
+    zoomMin: ZOOM_MIN,
+    zoomMax: ZOOM_MAX,
+    zoomStep: ZOOM_STEP,
+    panDragThreshold: PAN_DRAG_THRESHOLD,
+    applyTransform: () => applyViewportTransform()
+  });
+
   const areaTotalsByTime = d3.rollups(
     fullData.nodes || [],
     v => d3.sum(v, n => Math.max(0, +n.area || 0)),
@@ -1575,9 +1457,9 @@ d3.json("data.json").then(data => {
   ranges = [{ start: 0, end: maxInitial }];
   selectedRangeIndex = 0;
   viewportDrag = null;
-  zoomScale = 1;
-  viewFocus = null;
-  panDrag = null;
+  rangeDrag = null;
+  camera.setZoomScale(1);
+  camera.clearViewFocus();
 
   renderRangeRows();
   bindControls();
