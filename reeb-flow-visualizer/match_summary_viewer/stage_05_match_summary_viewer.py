@@ -25,6 +25,7 @@ import shutil
 from pathlib import Path
 
 from common import BASE_DIR, OUTPUT_DIR, SHEET_IMAGE_DIR
+from viewer_common import shared_viewer_css, write_viewer_common_js
 
 STORAGE_ROOT = BASE_DIR / "compareSheetShapesCache"
 TIMESTEP_CACHE_DIR = STORAGE_ROOT / "cache" / "timesteps"
@@ -263,7 +264,8 @@ def write_index_html() -> Path:
   <div id="tooltip"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
-  <script src="viewer.js"></script>
+  <script src="viewer_common.js?v=2"></script>
+  <script src="viewer.js?v=2"></script>
 </body>
 </html>
 """
@@ -591,7 +593,7 @@ svg.summary-chart {
   font-size: 12px;
   color: #51606f;
 }
-"""
+""" + shared_viewer_css()
     )
     return path
 
@@ -727,75 +729,25 @@ d3.json("data.json").then(data => {
   }
 
   function renderRangeRows() {
-    const rows = d3.select("#rangeRows");
-    const ranges = normalizedRanges();
-    rows.selectAll("*").remove();
-
-    const row = rows.selectAll(".range-row")
-      .data(ranges.length ? ranges : [{ start: 0, end: 0 }], (_, i) => i)
-      .join("div")
-      .attr("tabindex", 0)
-      .attr("class", (d, i) => `range-row${i === state.selectedRangeIndex ? " selected" : ""}`)
-      .on("click", event => {
-        if (event.target.closest("input, button")) return;
-        const i = Array.from(rows.selectAll(".range-row").nodes()).indexOf(event.currentTarget);
-        if (i < 0) return;
-        state.selectedRangeIndex = i;
+    window.ReebViewerCommon.renderRangeRows(document.getElementById("rangeRows"), {
+      ranges: normalizedRanges(),
+      selectedRangeIndex: state.selectedRangeIndex,
+      timestepMax,
+      onSelectRange: index => {
+        state.selectedRangeIndex = index;
         renderAll();
-      });
-
-    row.each(function(d, i) {
-      const host = d3.select(this);
-      const rowNode = this;
-      host.html("");
-
-      host.append("input")
-        .attr("type", "number")
-        .attr("min", 0)
-        .attr("max", timestepMax)
-        .attr("value", d.start)
-        .on("pointerdown", event => event.stopPropagation())
-        .on("mousedown", event => event.stopPropagation())
-        .on("click", event => event.stopPropagation())
-        .on("keydown", event => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            const inputs = rowNode.querySelectorAll("input");
-            commitRangeRow(i, event.currentTarget.value, inputs[1]?.value ?? event.currentTarget.value);
-            event.target.blur();
-          }
-        });
-
-      host.append("input")
-        .attr("type", "number")
-        .attr("min", 0)
-        .attr("max", timestepMax)
-        .attr("value", d.end)
-        .on("pointerdown", event => event.stopPropagation())
-        .on("mousedown", event => event.stopPropagation())
-        .on("click", event => event.stopPropagation())
-        .on("keydown", event => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            const inputs = rowNode.querySelectorAll("input");
-            commitRangeRow(i, inputs[0]?.value ?? event.currentTarget.value, event.currentTarget.value);
-            event.target.blur();
-          }
-        });
-
-      host.on("focusout", event => {
-        if (event.currentTarget.contains(event.relatedTarget)) return;
-        const inputs = event.currentTarget.querySelectorAll("input");
-        if (inputs.length < 2) return;
-        commitRangeRow(i, inputs[0].value, inputs[1].value);
-      });
-
-      host.append("button")
-        .text("Delete")
-        .on("click", event => {
-          event.stopPropagation();
-          removeRange(i);
-        });
+      },
+      onCommitRange: (index, startValue, endValue) => {
+        const ranges = normalizedRanges();
+        if (!ranges[index]) return;
+        const nextStart = clamp(Math.round(Number(startValue)), 0, timestepMax);
+        const nextEnd = clamp(Math.round(Number(endValue)), 0, timestepMax);
+        ranges[index].start = Number.isFinite(nextStart) ? nextStart : ranges[index].start;
+        ranges[index].end = Number.isFinite(nextEnd) ? nextEnd : ranges[index].end;
+        state.ranges = ranges;
+        renderAll();
+      },
+      onDeleteRange: index => removeRange(index)
     });
   }
 
@@ -1078,26 +1030,18 @@ d3.json("data.json").then(data => {
     };
   }
 
-  function recenterViewportFromBarX(barX, barWidth) {
+  function recenterViewportFromBarIndex(targetTime) {
     const panel = currentPanel();
-    if (!panel || !panel.graphToTime || !viewFocus) return;
-
-    const low = 24;
-    const high = Math.max(low + 1, barWidth - 24);
-    const timeScale = d3.scaleLinear().domain([0, timestepMax || 1]).range([low, high]);
-    const targetTime = clamp(Number(timeScale.invert(clamp(barX, low, high))), 0, timestepMax);
-    const visible = visibleTimestepWindow();
-    const span = visible ? Math.max(0, visible.end - visible.start) : 0;
-    const halfSpan = span / 2;
-    const minCenter = halfSpan;
-    const maxCenter = timestepMax - halfSpan;
-    const centerTime = minCenter <= maxCenter ? clamp(targetTime, minCenter, maxCenter) : timestepMax / 2;
-
-    viewFocus = {
-      x: panel.graphToTime.invert(centerTime),
-      y: viewFocus.y
-    };
-    scheduleViewportUpdate();
+    window.ReebViewerCommon.recenterViewportFromBarIndex(targetTime, {
+      graphToTime: panel?.graphToTime,
+      maxTime: timestepMax,
+      visibleWindowFn: visibleTimestepWindow,
+      getViewFocus: () => viewFocus,
+      setViewFocus: nextFocus => {
+        viewFocus = nextFocus;
+      },
+      scheduleViewportUpdate
+    });
   }
 
   function applyViewportTransform() {
@@ -1260,128 +1204,60 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     const width = Math.max(600, barNode.clientWidth || 600);
     const height = 78;
     const svg = rangeBar.attr("width", width).attr("height", height);
-    svg.selectAll("*").remove();
 
-    const x = d3.scaleLinear().domain([0, timestepMax || 1]).range([24, width - 24]);
-    const g = svg.append("g");
-    g.append("rect").attr("class", "range-bg").attr("x", 0).attr("y", 0).attr("width", width).attr("height", height);
-
-    for (let i = 0; i <= timestepMax; i += Math.max(1, Math.ceil(timestepMax / 12))) {
-      const tx = x(i);
-      g.append("line").attr("class", "range-tick").attr("x1", tx).attr("x2", tx).attr("y1", 24).attr("y2", 34);
-      const ts = timestepByIndex.get(i);
-      const label = ts ? ts.label : i;
-      g.append("text").attr("class", "range-label").attr("x", tx).attr("y", 20).attr("text-anchor", "middle").text(label);
-    }
-
-    g.append("text").attr("x", 20).attr("y", 72).text(0);
-    g.append("text").attr("x", width - 20).attr("y", 72).attr("text-anchor", "end").text(timestepMax);
-
-    const dragSurface = g.append("rect")
-      .attr("class", "range-drag-surface")
-      .attr("x", 0)
-      .attr("y", 0)
-      .attr("width", width)
-      .attr("height", height);
-
-    dragSurface.on("pointerdown", event => {
-      event.preventDefault();
-      const idx = clamp(Math.round(x.invert(d3.pointer(event, dragSurface.node())[0])), 0, timestepMax);
-      state.rangeDrag = { start: idx, current: idx };
-      dragSurface.node().setPointerCapture(event.pointerId);
-      renderRangeBar();
+    const tickStep = Math.max(1, Math.ceil(timestepMax / 12));
+    window.ReebViewerCommon.renderRangeBar(svg, {
+      width,
+      height,
+      timestepMax,
+      tickValues: d3.range(0, timestepMax + 1, tickStep),
+      ranges,
+      selectedRangeIndex: state.selectedRangeIndex,
+      rangeDrag: state.rangeDrag,
+      viewportDrag: state.viewportDrag,
+      visibleWindow: visibleTimestepWindow,
+      rangeLabelFn: range => rangeLabel(range),
+      tickLabelFn: value => {
+        const ts = timestepByIndex.get(value);
+        return ts ? ts.label : value;
+      },
+      onRangeSelected: index => {
+        state.selectedRangeIndex = index;
+        renderAll();
+      },
+      onRangeDragStart: idx => {
+        state.rangeDrag = { start: idx, current: idx };
+        renderRangeBar();
+      },
+      onRangeDragMove: idx => {
+        if (!state.rangeDrag) return;
+        state.rangeDrag.current = idx;
+        renderRangeBar();
+      },
+      onRangeDragEnd: idx => {
+        if (!state.rangeDrag) return;
+        const start = Math.min(state.rangeDrag.start, idx);
+        const end = Math.max(state.rangeDrag.start, idx);
+        state.ranges = [...normalizedRanges(), { start, end }];
+        state.selectedRangeIndex = state.ranges.length - 1;
+        state.rangeDrag = null;
+        renderAll();
+      },
+      onViewportClick: idx => {
+        recenterViewportFromBarIndex(idx);
+      },
+      onViewportDragStart: () => {
+        state.viewportDrag = { active: true };
+        renderRangeBar();
+      },
+      onViewportDragMove: idx => {
+        recenterViewportFromBarIndex(idx);
+      },
+      onViewportDragEnd: () => {
+        state.viewportDrag = null;
+        renderRangeBar();
+      }
     });
-
-    dragSurface.on("pointermove", event => {
-      if (!state.rangeDrag) return;
-      const idx = clamp(Math.round(x.invert(d3.pointer(event, dragSurface.node())[0])), 0, timestepMax);
-      state.rangeDrag.current = idx;
-      renderRangeBar();
-    });
-
-    dragSurface.on("pointerup", event => {
-      if (!state.rangeDrag) return;
-      const idx = clamp(Math.round(x.invert(d3.pointer(event, dragSurface.node())[0])), 0, timestepMax);
-      const start = Math.min(state.rangeDrag.start, idx);
-      const end = Math.max(state.rangeDrag.start, idx);
-      state.ranges = [...normalizedRanges(), { start, end }];
-      state.selectedRangeIndex = state.ranges.length - 1;
-      state.rangeDrag = null;
-      renderAll();
-    });
-
-    ranges.forEach((range, index) => {
-      const x0 = x(range.start);
-      const x1 = x(range.end + 1) - 1;
-      g.append("rect")
-        .attr("class", `range-selected${index === state.selectedRangeIndex ? " selected" : ""}`)
-        .attr("x", x0)
-        .attr("y", 40)
-        .attr("width", Math.max(2, x1 - x0))
-        .attr("height", 22)
-        .on("click", event => {
-          event.stopPropagation();
-          event.preventDefault();
-          state.selectedRangeIndex = index;
-          renderAll();
-        });
-      g.append("text")
-        .attr("class", "range-label")
-        .attr("x", (x0 + x1) / 2)
-        .attr("y", 55)
-        .attr("text-anchor", "middle")
-        .text(rangeLabel(range));
-    });
-
-    if (state.rangeDrag) {
-      const startX = x(state.rangeDrag.start);
-      const curX = x(state.rangeDrag.current);
-      g.append("rect")
-        .attr("class", "range-drag-preview")
-        .attr("x", Math.min(startX, curX))
-        .attr("y", 40)
-        .attr("width", Math.max(2, Math.abs(curX - startX)))
-        .attr("height", 22);
-    }
-
-    const visible = visibleTimestepWindow();
-    if (visible) {
-      const low = Math.max(0, Math.min(visible.start, visible.end));
-      const high = Math.min(timestepMax, Math.max(visible.start, visible.end));
-      const viewportWindow = g.append("rect")
-        .attr("class", `viewport-window${state.viewportDrag ? " dragging" : ""}`)
-        .attr("x", x(low))
-        .attr("y", 20)
-        .attr("width", Math.max(4, x(high) - x(low)))
-        .attr("height", 46);
-
-      viewportWindow.on("pointerdown", event => {
-        if (event.button !== 0) return;
-        event.stopPropagation();
-        event.preventDefault();
-        state.viewportDrag = { pointerId: event.pointerId };
-        const onMove = moveEvent => {
-          if (!state.viewportDrag || moveEvent.pointerId !== event.pointerId) return;
-          const [barX] = d3.pointer(moveEvent, barNode);
-          recenterViewportFromBarX(barX, width);
-          moveEvent.preventDefault();
-        };
-        const onEnd = endEvent => {
-          if (!state.viewportDrag || endEvent.pointerId !== event.pointerId) return;
-          state.viewportDrag = null;
-          window.removeEventListener("pointermove", onMove);
-          window.removeEventListener("pointerup", onEnd);
-          window.removeEventListener("pointercancel", onEnd);
-          renderRangeBar();
-          endEvent.preventDefault();
-        };
-        const [barX] = d3.pointer(event, barNode);
-        recenterViewportFromBarX(barX, width);
-        window.addEventListener("pointermove", onMove);
-        window.addEventListener("pointerup", onEnd);
-        window.addEventListener("pointercancel", onEnd);
-      });
-    }
   }
 
   function renderStats() {
@@ -1452,14 +1328,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       thresholdBox.property("value", panel.threshold);
       scheduleThresholdSync();
     });
-    thresholdBox.on("keydown", event => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        commitThreshold(event.target.value);
-        event.target.blur();
-      }
-    });
-    thresholdBox.on("blur", event => commitThreshold(event.target.value));
+    window.ReebViewerCommon.bindCommittedNumberInput(thresholdBox.node(), value => commitThreshold(value));
 
     deleteButton.on("click", () => {
       state.panels = state.panels.filter(item => item.id !== panel.id);
@@ -1727,9 +1596,10 @@ def build_match_summary_viewer_stage() -> None:
     index_path = write_index_html()
     js_path = write_viewer_js()
     css_path = write_style_css()
+    common_js_path = write_viewer_common_js(MATCH_SUMMARY_VIEWER_DIR)
 
     print(f"Wrote match summary viewer: {MATCH_SUMMARY_VIEWER_DIR}")
-    for artifact in (data_path, index_path, js_path, css_path):
+    for artifact in (data_path, index_path, js_path, css_path, common_js_path):
       print(f"  {artifact.name}")
     print("\nOpen with:")
     print(f"  cd {MATCH_SUMMARY_VIEWER_DIR}")

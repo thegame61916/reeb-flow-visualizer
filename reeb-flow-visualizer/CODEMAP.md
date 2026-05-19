@@ -36,6 +36,7 @@ Important files:
 - `SheetRenderer/render_rs_directory_orbital_colours.py`
 - `SheetRenderer/render_rs_sheets.py`
 - `compareSheetShapes/compare_sheet_shapes.py`
+- `viewer_common.py`
 
 Generated outputs live under `BASE_DIR`:
 
@@ -50,6 +51,8 @@ Generated outputs live under `BASE_DIR`:
 - `sankey/dashboard.css`
 - `sankey/dashboard.js`
 - `compareSheetShapesCache/`
+- `interactive_sankey_viewer/viewer_common.js`
+- `match_summary_viewer/viewer_common.js`
 
 ## Shared config: `common.py`
 
@@ -82,6 +85,20 @@ Runtime library paths:
 
 The Python stages import from `common.py`, so future path changes should usually happen there
 first.
+
+## Shared viewer runtime: `viewer_common.py`
+
+This module holds browser-runtime helpers that both generated viewers load:
+
+- `shared_viewer_css()`: shared CSS for the top range bar, selected ranges, viewport window, and drag affordances
+- `write_viewer_common_js(viewer_dir)`: writes `viewer_common.js` into the generated viewer directory
+
+The shared JS currently provides:
+
+- `bindCommittedNumberInput(input, commitFn)`: stops pointer/click propagation on number inputs and commits only on Enter or blur
+- `renderRangeRows(holder, opts)`: draws the common range editor rows, including selection, commit-on-Enter/blur, and delete
+- `recenterViewportFromBarIndex(targetTime, opts)`: shared viewport recentering logic for the black window drag/click behavior
+- `renderRangeBar(svg, opts)`: draws the common top range bar, selected range blocks, drag preview, and viewport window
 
 ## Pipeline entry point: `run_pipeline.py`
 
@@ -280,6 +297,7 @@ Viewer behavior:
 - threshold slider updates are coalesced onto animation frames and only toggle link visibility, so dragging stays smooth
 - summary links use the same neutral overlap-style fill and hover palette as the domain-based local-scaling viewer, with no per-link color tinting
 - range row textboxes ignore pointer clicks on the row itself; they commit only on Enter or when focus leaves the whole row
+- the top range bar and range-row editing are drawn through shared helpers in `viewer_common.py` so the domain-based and range-based viewers use the same controller path
 - the top range bar disables browser text selection while dragging so tick labels do not get highlighted
 - summary range gaps are proportional to the number of hidden timesteps between selected ranges, with extra slack for ribbon width
 - the summary viewer camera and top labels use the actual timestep-center x positions, so the black window and labels stay aligned across gaps
@@ -343,7 +361,7 @@ Writes the page shell:
 - details panel
 - tooltip container
 
-It loads D3 and D3 Sankey from CDN and then loads `viewer.js`.
+It loads D3 and D3 Sankey from CDN, then `viewer_common.js`, then `viewer.js`.
 
 #### `write_style_css()`
 
@@ -356,6 +374,10 @@ Defines the static layout and visual style:
 - tooltip
 - node/link styles
 - range bar styles
+
+The shared range-bar / viewport styles live in `viewer_common.py` and are appended to the generated CSS.
+
+The viewer also loads `viewer_common.js`, which provides the shared top-bar renderer and committed-number-input helper.
 
 #### `write_viewer_js()`
 

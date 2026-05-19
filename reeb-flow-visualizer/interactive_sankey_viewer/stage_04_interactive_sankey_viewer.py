@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 from common import OVERLAP_FILE, SHEET_IMAGE_DIR, VIEWER_DIR
+from viewer_common import shared_viewer_css, write_viewer_common_js
 
 
 def load_data():
@@ -192,7 +193,9 @@ def write_index_html():
     </aside>
 
     <section id="viewer">
-      <div id="minimap"></div>
+      <div id="minimap">
+        <svg id="rangeBar" aria-label="Timestep range selector"></svg>
+      </div>
       <div id="chartWrap">
         <svg id="chart"></svg>
       </div>
@@ -208,7 +211,8 @@ def write_index_html():
 
   <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
   <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
-  <script src="viewer.js"></script>
+  <script src="viewer_common.js?v=2"></script>
+  <script src="viewer.js?v=2"></script>
 </body>
 </html>
 """
@@ -278,6 +282,7 @@ label.inline { display: flex; align-items: center; gap: 8px; }
 .hint { font-size: 12px; color: #71808f; }
 #viewer { min-width: 0; min-height: 0; display: grid; grid-template-rows: 88px minmax(0, 1fr); }
 #minimap { background: #fff; border-bottom: 1px solid #d9dee5; }
+#rangeBar { width: 100%; height: 88px; display: block; }
 #chartWrap { overflow: hidden; position: relative; background: #fff; min-height: 0; }
 #chart { display: block; background: #fff; }
 .node rect { cursor: pointer; stroke: rgba(20, 30, 40, 0.4); stroke-width: 0.6; fill: #6f9ed4; }
@@ -325,7 +330,7 @@ label.inline { display: flex; align-items: center; gap: 8px; }
 .thumb-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 dl { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; margin: 0; }
 dt { color: #687583; } dd { margin: 0; font-weight: 600; }
-"""
+""" + shared_viewer_css()
     )
     return path
 
@@ -347,6 +352,7 @@ let rangeDrag = null;
 let minimapBarScale = null;
 let minimapBarMaxIndex = 0;
 let minimapState = null;
+let viewportDrag = null;
 let zoomScale = 1;
 let viewFocus = null;
 let panDrag = null;
@@ -469,7 +475,7 @@ function buildDisplayLayout(timestepValues, selectedRanges) {
   const displayOrder = new Map();
   const visibleTimesteps = [];
   let displayIndex = 0;
-  const gapColumns = 3;
+  const gapScale = 2.2;
 
   orderedRanges.forEach((range, rangeIndex) => {
     const values = timestepValues.filter(t => t >= range.start && t <= range.end);
@@ -482,7 +488,11 @@ function buildDisplayLayout(timestepValues, selectedRanges) {
     });
 
     if (rangeIndex < orderedRanges.length - 1 && values.length) {
-      displayIndex += gapColumns;
+      const next = orderedRanges[rangeIndex + 1];
+      const hiddenTimesteps = Math.max(0, next.start - range.end - 1);
+      if (hiddenTimesteps > 0) {
+        displayIndex += hiddenTimesteps * gapScale;
+      }
     }
   });
 
@@ -491,7 +501,7 @@ function buildDisplayLayout(timestepValues, selectedRanges) {
     displayOrder,
     visibleTimesteps,
     displayColumnCount: Math.max(1, displayIndex),
-    gapColumns
+    gapScale
   };
 }
 
@@ -1151,55 +1161,19 @@ function escapeHtml(v) {
 }
 
 function renderRangeRows() {
-  const holder = document.getElementById("rangeRows");
-  holder.innerHTML = "";
-
-  ranges.forEach((r, i) => {
-    const row = document.createElement("div");
-    row.className = `range-row${i === selectedRangeIndex ? " selected" : ""}`;
-    row.innerHTML = `
-      <input type="number" value="${r.start}" min="0">
-      <input type="number" value="${r.end}" min="0">
-      <button title="Remove range">×</button>`;
-
-    row.addEventListener("click", event => {
-      if (event.target.closest("input, button")) return;
-      selectRangeIndex(i, { center: true });
-    });
-
-    const [start, end] = row.querySelectorAll("input");
-
-    const commitRange = () => {
-      ranges[i].start = +start.value;
-      ranges[i].end = +end.value;
+  window.ReebViewerCommon.renderRangeRows(document.getElementById("rangeRows"), {
+    ranges,
+    selectedRangeIndex,
+    timestepMax: minimapBarMaxIndex,
+    onSelectRange: index => selectRangeIndex(index),
+    onCommitRange: (index, startValue, endValue) => {
+      if (!ranges[index]) return;
+      ranges[index].start = +startValue;
+      ranges[index].end = +endValue;
       renderRangeRows();
       renderSankey({ preserveFocus: true });
-      if (i === selectedRangeIndex) requestAnimationFrame(() => centerSelectedRange(i));
-    };
-
-    start.addEventListener("keydown", event => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        commitRange();
-      }
-    });
-
-    end.addEventListener("keydown", event => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        commitRange();
-      }
-    });
-
-    start.addEventListener("blur", commitRange);
-    end.addEventListener("blur", commitRange);
-
-    row.querySelector("button").addEventListener("click", event => {
-      event.stopPropagation();
-      deleteRange(i);
-    });
-
-    holder.appendChild(row);
+    },
+    onDeleteRange: index => deleteRange(index)
   });
 }
 
@@ -1208,7 +1182,7 @@ function addRange(start = 0, end = 20) {
   selectedRangeIndex = ranges.length - 1;
   renderRangeRows();
   renderSankey({ preserveFocus: true });
-  requestAnimationFrame(() => centerSelectedRange(selectedRangeIndex));
+  renderMiniMap();
 }
 
 function deleteRange(index = selectedRangeIndex) {
@@ -1221,27 +1195,23 @@ function deleteRange(index = selectedRangeIndex) {
 
   renderRangeRows();
   renderSankey({ preserveFocus: true });
-  if (selectedRangeIndex >= 0) requestAnimationFrame(() => centerSelectedRange(selectedRangeIndex));
+  renderMiniMap();
 }
 
-function selectRangeIndex(index, { center = false } = {}) {
+function selectRangeIndex(index) {
   if (!ranges.length) {
     selectedRangeIndex = -1;
     renderRangeRows();
+    renderSankey({ preserveFocus: true });
     renderMiniMap();
     return;
   }
 
   selectedRangeIndex = Math.max(0, Math.min(index, ranges.length - 1));
 
-  // Selecting an existing range must not redraw the Sankey. Redrawing while
-  // a minimap click is propagating was the source of the blank/disappearing view.
   renderRangeRows();
+  renderSankey({ preserveFocus: true });
   renderMiniMap();
-
-  if (center) {
-    requestAnimationFrame(() => centerSelectedRange(selectedRangeIndex));
-  }
 }
 
 function centerSelectedRange(index = selectedRangeIndex) {
@@ -1321,7 +1291,6 @@ function finishRangeDrag() {
 
   renderRangeRows();
   renderSankey({ preserveFocus: true });
-  requestAnimationFrame(() => centerSelectedRange(selectedRangeIndex));
 }
 
 function updateMiniMapState(graph) {
@@ -1339,15 +1308,15 @@ function updateMiniMapState(graph) {
 
   const minTime = d3.min(timeGroups, d => d.timestep);
   const maxTime = d3.max(timeGroups, d => d.timestep);
-  const minX = d3.min(timeGroups, d => d.x);
-  const maxX = d3.max(timeGroups, d => d.x);
+  const xDomain = timeGroups.map(d => d.x);
+  const tRange = timeGroups.map(d => d.timestep);
 
   minimapState = {
     minTime,
     maxTime,
     graphToTime: d3.scaleLinear()
-      .domain(minX === maxX ? [minX - 1, maxX + 1] : [minX, maxX])
-      .range(minTime === maxTime ? [minTime - 0.5, maxTime + 0.5] : [minTime, maxTime])
+      .domain(xDomain.length === 1 ? [xDomain[0] - 1, xDomain[0] + 1] : xDomain)
+      .range(tRange.length === 1 ? [tRange[0] - 0.5, tRange[0] + 0.5] : tRange)
       .clamp(true)
   };
 }
@@ -1365,99 +1334,90 @@ function visibleTimestepWindow() {
   };
 }
 
+function recenterViewportFromBarIndex(targetTime) {
+  window.ReebViewerCommon.recenterViewportFromBarIndex(targetTime, {
+    graphToTime: minimapState?.graphToTime,
+    maxTime: minimapBarMaxIndex,
+    visibleWindowFn: visibleTimestepWindow,
+    getViewFocus: () => viewFocus,
+    setViewFocus: nextFocus => {
+      viewFocus = nextFocus;
+    },
+    scheduleViewportUpdate
+  });
+}
+
 function renderMiniMap() {
-  const holder = d3.select("#minimap");
-  holder.selectAll("*").remove();
-
-  const width = holder.node().clientWidth || 800;
+  const barNode = document.getElementById("rangeBar");
+  if (!barNode) return;
+  const width = Math.max(600, barNode.clientWidth || 600);
   const height = 88;
-
-  const svg = holder.append("svg").attr("width", width).attr("height", height);
+  const svg = d3.select("#rangeBar").attr("width", width).attr("height", height);
 
   const timesteps = fullData.timesteps || [];
   const maxIndex = d3.max(timesteps, d => +d.index) ?? 0;
-
+  minimapBarMaxIndex = maxIndex;
   minimapBarScale = d3.scaleLinear()
     .domain([0, maxIndex || 1])
     .range([20, width - 20]);
 
-  minimapBarMaxIndex = maxIndex;
-  const x = minimapBarScale;
-
-  svg.append("rect")
-    .attr("class", "range-bg")
-    .attr("x", 20)
-    .attr("y", 34)
-    .attr("width", width - 40)
-    .attr("height", 18)
-    .style("cursor", "crosshair")
-    .style("pointer-events", "all")
-    .on("pointerdown", startRangeDrag);
-
-  const rangeGroups = svg.selectAll("g.range-group")
-    .data(ranges.map((range, index) => ({ range, index })))
-    .join("g")
-    .attr("class", "range-group");
-
-  rangeGroups.append("rect")
-    .attr("class", "range-hitbox")
-    .attr("x", d => x(Math.min(d.range.start, d.range.end)) - 3)
-    .attr("y", 24)
-    .attr("width", d => Math.max(8, x(Math.max(d.range.start, d.range.end)) - x(Math.min(d.range.start, d.range.end)) + 6))
-    .attr("height", 38)
-    .on("pointerdown", event => {
-      event.stopPropagation();
-      event.preventDefault();
-    })
-    .on("click", (event, d) => {
-      event.stopPropagation();
-      event.preventDefault();
-      selectRangeIndex(d.index, { center: true });
-    });
-
-  rangeGroups.append("rect")
-    .attr("class", d => `range-selected${d.index === selectedRangeIndex ? " selected" : ""}`)
-    .attr("x", d => x(Math.min(d.range.start, d.range.end)))
-    .attr("y", 30)
-    .attr("width", d => Math.max(3, x(Math.max(d.range.start, d.range.end)) - x(Math.min(d.range.start, d.range.end))))
-    .attr("height", 26)
-    .on("pointerdown", event => {
-      event.stopPropagation();
-      event.preventDefault();
-    })
-    .on("click", (event, d) => {
-      event.stopPropagation();
-      event.preventDefault();
-      selectRangeIndex(d.index, { center: true });
-    });
-
-  if (rangeDrag) {
-    const dragStart = Math.min(rangeDrag.start, rangeDrag.end);
-    const dragEnd = Math.max(rangeDrag.start, rangeDrag.end);
-
-    svg.append("rect")
-      .attr("class", "range-drag-preview")
-      .attr("x", x(dragStart))
-      .attr("y", 30)
-      .attr("width", Math.max(3, x(dragEnd) - x(dragStart)))
-      .attr("height", 26);
-  }
-
-  svg.append("text").attr("x", 20).attr("y", 72).text(0);
-  svg.append("text").attr("x", width - 20).attr("y", 72).attr("text-anchor", "end").text(maxIndex);
-
-  const visible = visibleTimestepWindow();
-  if (visible) {
-    const start = Math.max(0, Math.min(visible.start, visible.end));
-    const end = Math.min(maxIndex, Math.max(visible.start, visible.end));
-
-    svg.append("rect")
-      .attr("class", "viewport-window")
-      .attr("x", x(start))
-      .attr("y", 20)
-      .attr("width", Math.max(4, x(end) - x(start)))
-      .attr("height", 46);
-  }
+    window.ReebViewerCommon.renderRangeBar(svg, {
+      width,
+      height,
+      timestepMax: maxIndex,
+      tickValues: d3.range(0, maxIndex + 1, Math.max(1, Math.ceil(maxIndex / 12))),
+      ranges,
+      selectedRangeIndex,
+      rangeDrag,
+      viewportDrag,
+      visibleWindow: visibleTimestepWindow,
+      rangeLabelFn: range => {
+        const start = fullData.timesteps?.find(t => +t.index === Math.min(range.start, range.end));
+        const end = fullData.timesteps?.find(t => +t.index === Math.max(range.start, range.end));
+        const startLabel = start ? start.label : Math.min(range.start, range.end);
+        const endLabel = end ? end.label : Math.max(range.start, range.end);
+        return `${startLabel} .. ${endLabel}`;
+      },
+      tickLabelFn: value => {
+        const ts = fullData.timesteps?.find(t => +t.index === value);
+        return ts ? ts.label : String(value);
+      },
+    onRangeSelected: index => selectRangeIndex(index),
+    onRangeDragStart: idx => {
+      rangeDrag = { start: idx, current: idx };
+      renderMiniMap();
+    },
+    onRangeDragMove: idx => {
+      if (!rangeDrag) return;
+      rangeDrag.current = idx;
+      renderMiniMap();
+    },
+    onRangeDragEnd: idx => {
+      if (!rangeDrag) return;
+      const start = Math.min(rangeDrag.start, idx);
+      const end = Math.max(rangeDrag.start, idx);
+      const finalEnd = end === start ? Math.min(minimapBarMaxIndex, start + 1) : end;
+      rangeDrag = null;
+      ranges.push({ start, end: finalEnd });
+      selectedRangeIndex = ranges.length - 1;
+      renderRangeRows();
+      renderSankey({ preserveFocus: true });
+    },
+    onViewportClick: idx => {
+      recenterViewportFromBarIndex(idx);
+    },
+    onViewportDragStart: () => {
+      viewportDrag = { active: true };
+      renderMiniMap();
+    },
+    onViewportDragMove: idx => {
+      recenterViewportFromBarIndex(idx);
+    },
+    onViewportDragEnd: () => {
+      viewportDrag = null;
+      renderMiniMap();
+    }
+  });
 }
 
 function bindControls() {
@@ -1523,32 +1483,12 @@ function bindControls() {
     setZoomScale(zoomScale * factor);
   }, { passive: false });
 
-  window.addEventListener("pointermove", event => {
-    if (!rangeDrag) return;
-    updateRangeDrag(event);
-  });
-
-  window.addEventListener("pointerup", event => {
-    if (!rangeDrag) return;
-    event.preventDefault();
-    finishRangeDrag();
-  });
-
   document.getElementById("threshold").addEventListener("input", event => {
     setThresholdValue(event.target.value, true);
   });
 
   const thresholdBox = document.getElementById("thresholdBox");
-  thresholdBox.addEventListener("keydown", event => {
-    if (event.key !== "Enter") return;
-    event.preventDefault();
-    setThresholdValue(event.target.value, true);
-    thresholdBox.blur();
-  });
-
-  thresholdBox.addEventListener("blur", event => {
-    setThresholdValue(event.target.value, true);
-  });
+  window.ReebViewerCommon.bindCommittedNumberInput(thresholdBox, value => setThresholdValue(value, true));
 
   ["percentMode", "hideIsolated"].forEach(id => {
     document.getElementById(id).addEventListener("input", () => {
@@ -1611,6 +1551,7 @@ d3.json("data.json").then(data => {
   const maxInitial = Math.min(20, Math.max(0, (data.timesteps || []).length - 1));
   ranges = [{ start: 0, end: maxInitial }];
   selectedRangeIndex = 0;
+  viewportDrag = null;
   zoomScale = 1;
   viewFocus = null;
   panDrag = null;
@@ -1619,7 +1560,6 @@ d3.json("data.json").then(data => {
   bindControls();
   setThresholdValue(document.getElementById("threshold").value, false);
   renderSankey({ preserveFocus: false });
-  requestAnimationFrame(() => centerSelectedRange(selectedRangeIndex));
 });
 """
     )
@@ -1637,12 +1577,13 @@ def write_viewer_files(data):
     index_path = write_index_html()
     js_path = write_viewer_js()
     css_path = write_style_css()
-    return index_path, data_path, js_path, css_path
+    common_js_path = write_viewer_common_js(VIEWER_DIR)
+    return index_path, data_path, js_path, css_path, common_js_path
 
 
 def build_interactive_sankey_viewer_stage():
     data = load_data()
-    index_path, data_path, js_path, css_path = write_viewer_files(data)
+    index_path, data_path, js_path, css_path, common_js_path = write_viewer_files(data)
 
     print(f"Read overlap data: {OVERLAP_FILE}")
     print(f"Wrote viewer:      {VIEWER_DIR}")
@@ -1650,6 +1591,7 @@ def build_interactive_sankey_viewer_stage():
     print(f"  {data_path.name}")
     print(f"  {js_path.name}")
     print(f"  {css_path.name}")
+    print(f"  {common_js_path.name}")
     print()
     print("Open with:")
     print(f"  cd {VIEWER_DIR}")
