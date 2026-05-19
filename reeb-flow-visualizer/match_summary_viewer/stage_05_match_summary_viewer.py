@@ -621,6 +621,7 @@ d3.json("data.json").then(data => {
 
   let camera = null;
   let tooltipEngine = null;
+  let rangeDispatcher = null;
   let renderAllPending = false;
   let thresholdSyncPending = false;
 
@@ -629,7 +630,11 @@ d3.json("data.json").then(data => {
   const stats = d3.select("#stats");
   const tooltip = d3.select("#tooltip");
 
-  const timestepByIndex = new Map(data.timesteps.map(t => [t.timestep_index, t]));
+  const timestepLookup = window.ReebViewerCommon.createTimestepLookup(data.timesteps || [], {
+    indexField: "timestep_index",
+    labelField: "label"
+  });
+  const timestepByIndex = timestepLookup.byIndex;
   const scoreMaxima = data.meta.score_maxima || {};
   const areaMax = data.meta.global_area_max || 1;
   const panelNodeHeightMin = data.meta.node_height_min || 8;
@@ -637,7 +642,7 @@ d3.json("data.json").then(data => {
   const linkMin = data.meta.link_thickness_min || 1.4;
   const linkMax = data.meta.link_thickness_max || 16;
   const scoreModes = data.meta.score_modes || [];
-  const timestepMax = Math.max(0, data.timesteps.length - 1);
+  const timestepMax = timestepLookup.maxIndex;
   const VIEWPORT_ANCHOR_Y = 0.38;
   const ZOOM_MIN = 0.1;
   const ZOOM_MAX = 20;
@@ -695,7 +700,7 @@ d3.json("data.json").then(data => {
     for (const range of ranges) {
       for (let t = range.start; t <= range.end; t += 1) {
         if (seen.has(t)) continue;
-        const ts = timestepByIndex.get(t);
+        const ts = timestepLookup.itemAt(t);
         if (ts) visible.push(ts);
         seen.add(t);
       }
@@ -740,10 +745,7 @@ d3.json("data.json").then(data => {
 
   function rangeLabel(range) {
     return window.ReebViewerCommon.formatRangeLabel(range, {
-      getLabel: value => {
-        const ts = timestepByIndex.get(value);
-        return ts ? ts.label : value;
-      }
+      getLabel: value => timestepLookup.labelAt(value, String(value))
     });
   }
 
@@ -753,10 +755,18 @@ d3.json("data.json").then(data => {
       selectedRangeIndex: state.selectedRangeIndex,
       timestepMax,
       onSelectRange: index => {
+        if (rangeDispatcher) {
+          rangeDispatcher.selectRange(index);
+          return;
+        }
         applyRangeAction({ type: "select", index });
         renderAll();
       },
       onCommitRange: (index, startValue, endValue) => {
+        if (rangeDispatcher) {
+          rangeDispatcher.commitRangeRow(index, startValue, endValue);
+          return;
+        }
         applyRangeAction({ type: "commit", index, startValue, endValue });
         renderAll();
       },
@@ -765,11 +775,19 @@ d3.json("data.json").then(data => {
   }
 
   function addRange() {
+    if (rangeDispatcher) {
+      rangeDispatcher.addRange();
+      return;
+    }
     applyRangeAction({ type: "add" });
     renderAll();
   }
 
   function removeRange(index) {
+    if (rangeDispatcher) {
+      rangeDispatcher.deleteRange(index);
+      return;
+    }
     applyRangeAction({ type: "delete", index });
     renderAll();
   }
@@ -836,7 +854,7 @@ d3.json("data.json").then(data => {
       }
       for (let t = range.start; t <= range.end; t += 1) {
         if (seen.has(t)) continue;
-        const ts = timestepByIndex.get(t);
+        const ts = timestepLookup.itemAt(t);
         if (!ts) continue;
         columns.push({ type: "timestep", timestep: ts });
         seen.add(t);
@@ -1058,7 +1076,12 @@ d3.json("data.json").then(data => {
       maxY: d3.max(panel.layout.visibleNodes, d => d.y1) ?? 0
     };
 
-    camera?.centerOnBounds(bounds, b => fitZoomForBounds(b, panel.canvasNode), true);
+    window.ReebViewerCommon.fitAndCenter(
+      camera,
+      bounds,
+      b => fitZoomForBounds(b, panel.canvasNode),
+      { fit: true }
+    );
   }
 
   function gatherVisiblePairs(mode, thresholdPercent, nodeByKey) {
@@ -1168,7 +1191,6 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     const height = 78;
     const svg = rangeBar.attr("width", width).attr("height", height);
 
-    const tickStep = Math.max(1, Math.ceil(timestepMax / 12));
     const rangeBarController = window.ReebViewerCommon.createRangeBarController({
       getState: () => ({
         ranges: state.ranges,
@@ -1181,9 +1203,17 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         state.viewportDrag = next;
       },
       onRangeCommitted: () => {
+        if (rangeDispatcher) {
+          rangeDispatcher.runPlan("rangeCommitted");
+          return;
+        }
         renderAll();
       },
       onBarOnlyUpdate: () => {
+        if (rangeDispatcher) {
+          rangeDispatcher.runPlan("barOnly");
+          return;
+        }
         renderRangeBar();
       },
       onViewportRecenter: idx => {
@@ -1195,17 +1225,14 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       width,
       height,
       timestepMax,
-      tickValues: d3.range(0, timestepMax + 1, tickStep),
+      tickValues: timestepLookup.tickValues(12),
       ranges,
       selectedRangeIndex: state.selectedRangeIndex,
       rangeDrag: state.rangeDrag,
       viewportDrag: state.viewportDrag,
       visibleWindow: visibleTimestepWindow,
       rangeLabelFn: range => rangeLabel(range),
-      tickLabelFn: value => {
-        const ts = timestepByIndex.get(value);
-        return ts ? ts.label : value;
-      },
+      tickLabelFn: value => timestepLookup.labelAt(value, String(value)),
       onRangeSelected: index => rangeBarController.onRangeSelected(index),
       onRangeDragStart: idx => rangeBarController.onRangeDragStart(idx),
       onRangeDragMove: idx => rangeBarController.onRangeDragMove(idx),
@@ -1336,7 +1363,12 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     };
 
     if (!camera.getViewFocus()) {
-      camera.centerOnBounds(layoutBounds, b => fitZoomForBounds(b, canvas.node()), true);
+      window.ReebViewerCommon.fitAndCenter(
+        camera,
+        layoutBounds,
+        b => fitZoomForBounds(b, canvas.node()),
+        { fit: true }
+      );
     }
 
     state.panelViews.set(panel.id, {
@@ -1455,6 +1487,26 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     renderAll();
   }
 
+  function initRangeDispatcher() {
+    rangeDispatcher = window.ReebViewerCommon.createRangeActionDispatcher({
+      applyRangeAction,
+      getState: () => ({
+        ranges: state.ranges,
+        selectedRangeIndex: state.selectedRangeIndex,
+        rangeDrag: state.rangeDrag
+      }),
+      handlers: {
+        all: () => renderAll(),
+        bar: () => renderRangeBar()
+      },
+      plans: {
+        rowCommit: ["all"],
+        rangeCommitted: ["all"],
+        barOnly: ["bar"]
+      }
+    });
+  }
+
   document.getElementById("addRange").addEventListener("click", addRange);
   document.getElementById("deleteRange").addEventListener("click", () => removeRange(state.selectedRangeIndex));
   document.getElementById("addPanel").addEventListener("click", addPanel);
@@ -1486,6 +1538,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
   });
   camera.setZoomScale(1);
   camera.clearViewFocus();
+  initRangeDispatcher();
   renderAll();
 }).catch(error => {
   console.error(error);

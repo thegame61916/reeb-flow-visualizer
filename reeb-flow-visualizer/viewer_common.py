@@ -90,6 +90,102 @@ window.ReebViewerCommon.bindCommittedNumberInput = function(input, commitFn) {
   input.addEventListener('blur', () => commitFn(input.value));
 };
 
+window.ReebViewerCommon.createTimestepLookup = function(timesteps, opts) {
+  const indexField = opts?.indexField || "index";
+  const labelField = opts?.labelField || "label";
+  const rows = Array.isArray(timesteps) ? timesteps : [];
+  const byIndex = new Map();
+  let maxIndex = 0;
+
+  for (const row of rows) {
+    const raw = Number(row?.[indexField]);
+    if (!Number.isFinite(raw)) continue;
+    const index = Math.max(0, Math.round(raw));
+    byIndex.set(index, row);
+    if (index > maxIndex) maxIndex = index;
+  }
+
+  const labelAt = (index, fallback = null) => {
+    const i = Math.max(0, Math.round(Number(index) || 0));
+    const row = byIndex.get(i);
+    if (!row) return fallback ?? String(i);
+    const label = row?.[labelField];
+    if (label === undefined || label === null || String(label).length === 0) {
+      return fallback ?? String(i);
+    }
+    return String(label);
+  };
+
+  const itemAt = index => {
+    const i = Math.max(0, Math.round(Number(index) || 0));
+    return byIndex.get(i) || null;
+  };
+
+  const tickValues = targetTickCount => {
+    const count = Math.max(1, Math.round(Number(targetTickCount) || 12));
+    const step = Math.max(1, Math.ceil(maxIndex / count));
+    return d3.range(0, maxIndex + 1, step);
+  };
+
+  return {
+    byIndex,
+    maxIndex,
+    labelAt,
+    itemAt,
+    has: index => byIndex.has(Math.max(0, Math.round(Number(index) || 0))),
+    clampIndex: index => Math.max(0, Math.min(maxIndex, Math.round(Number(index) || 0))),
+    tickValues
+  };
+};
+
+window.ReebViewerCommon.fitAndCenter = function(camera, bounds, fitZoomFn, opts) {
+  if (!camera || !bounds) return false;
+  const fit = opts?.fit !== false;
+  camera.centerOnBounds(bounds, fitZoomFn, fit);
+  return true;
+};
+
+window.ReebViewerCommon.createRangeActionDispatcher = function(opts) {
+  const applyRangeAction = typeof opts?.applyRangeAction === "function" ? opts.applyRangeAction : null;
+  const getState = typeof opts?.getState === "function" ? opts.getState : (() => ({}));
+  const handlers = opts?.handlers || {};
+  const plans = {
+    rowCommit: ["rows", "main", "bar"],
+    rangeCommitted: ["rows", "main", "bar"],
+    barOnly: ["bar"],
+    ...(opts?.plans || {})
+  };
+
+  const runPlan = planName => {
+    const steps = Array.isArray(plans[planName]) ? plans[planName] : [];
+    for (const step of steps) {
+      const fn = handlers[step];
+      if (typeof fn === "function") fn();
+    }
+  };
+
+  const dispatch = (action, planName) => {
+    const before = getState();
+    const result = applyRangeAction ? applyRangeAction(action) : null;
+    if (planName) runPlan(planName);
+    return {
+      before,
+      result,
+      after: getState()
+    };
+  };
+
+  return {
+    runPlan,
+    dispatch,
+    selectRange: index => dispatch({ type: "select", index }, "rangeCommitted"),
+    commitRangeRow: (index, startValue, endValue) => dispatch({ type: "commit", index, startValue, endValue }, "rowCommit"),
+    addRange: () => dispatch({ type: "add" }, "rangeCommitted"),
+    addExplicitRange: (start, end) => dispatch({ type: "add-explicit", start, end }, "rangeCommitted"),
+    deleteRange: index => dispatch({ type: "delete", index }, "rangeCommitted")
+  };
+};
+
 window.ReebViewerCommon.rangeReducer = function(state, action, opts) {
   const source = state || {};
   const step = action || {};
