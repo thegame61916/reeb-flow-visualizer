@@ -1267,27 +1267,20 @@ function updateMiniMapState(graph) {
 }
 
 function visibleTimestepWindow() {
-  const viewFocus = camera?.getViewFocus();
-  const zoomScale = camera?.getZoomScale() ?? 1;
-  if (!minimapState || !viewFocus) return null;
-
-  const width = Math.max(1, chartWrap.clientWidth);
-  const startX = viewFocus.x - width / (2 * zoomScale);
-  const endX = viewFocus.x + width / (2 * zoomScale);
-
-  return {
-    start: minimapState.graphToTime(startX),
-    end: minimapState.graphToTime(endX)
-  };
+  if (!minimapState) return null;
+  return window.ReebViewerCommon.computeVisibleTimestepWindow({
+    graphToTime: minimapState.graphToTime,
+    camera,
+    viewportWidth: Math.max(1, chartWrap.clientWidth)
+  });
 }
 
 function recenterViewportFromBarIndex(targetTime) {
-  window.ReebViewerCommon.recenterViewportFromBarIndex(targetTime, {
+  window.ReebViewerCommon.recenterCameraFromRangeBar(targetTime, {
     graphToTime: minimapState?.graphToTime,
     maxTime: minimapBarMaxIndex,
-    visibleWindowFn: visibleTimestepWindow,
-    getViewFocus: () => camera?.getViewFocus(),
-    setViewFocus: nextFocus => camera?.setViewFocus(nextFocus),
+    camera,
+    viewportWidth: Math.max(1, chartWrap.clientWidth),
     scheduleViewportUpdate
   });
 }
@@ -1307,6 +1300,24 @@ function renderMiniMap() {
     .domain([0, maxIndex || 1])
     .range([20, width - 20]);
 
+    const rangeBarController = window.ReebViewerCommon.createRangeBarController({
+      getState: () => ({ ranges, selectedRangeIndex, rangeDrag, viewportDrag }),
+      applyRangeAction,
+      setViewportDrag: next => {
+        viewportDrag = next;
+      },
+      onRangeCommitted: () => {
+        renderRangeRows();
+        renderSankey({ preserveFocus: true });
+      },
+      onBarOnlyUpdate: () => {
+        renderMiniMap();
+      },
+      onViewportRecenter: idx => {
+        recenterViewportFromBarIndex(idx);
+      }
+    });
+
     window.ReebViewerCommon.renderRangeBar(svg, {
       width,
       height,
@@ -1321,37 +1332,14 @@ function renderMiniMap() {
         getLabel: value => timestepLabelAt(value)
       }),
       tickLabelFn: value => timestepLabelAt(value),
-    onRangeSelected: index => selectRangeIndex(index),
-    onRangeDragStart: idx => {
-      applyRangeAction({ type: "drag-start", index: idx });
-      renderMiniMap();
-    },
-    onRangeDragMove: idx => {
-      applyRangeAction({ type: "drag-move", index: idx });
-      renderMiniMap();
-    },
-    onRangeDragEnd: idx => {
-      applyRangeAction({ type: "drag-move", index: idx });
-      const previousCount = ranges.length;
-      applyRangeAction({ type: "drag-commit" });
-      if (ranges.length === previousCount) return;
-      renderRangeRows();
-      renderSankey({ preserveFocus: true });
-    },
-    onViewportClick: idx => {
-      recenterViewportFromBarIndex(idx);
-    },
-    onViewportDragStart: () => {
-      viewportDrag = { active: true };
-      renderMiniMap();
-    },
-    onViewportDragMove: idx => {
-      recenterViewportFromBarIndex(idx);
-    },
-    onViewportDragEnd: () => {
-      viewportDrag = null;
-      renderMiniMap();
-    }
+    onRangeSelected: index => rangeBarController.onRangeSelected(index),
+    onRangeDragStart: idx => rangeBarController.onRangeDragStart(idx),
+    onRangeDragMove: idx => rangeBarController.onRangeDragMove(idx),
+    onRangeDragEnd: idx => rangeBarController.onRangeDragEnd(idx),
+    onViewportClick: idx => rangeBarController.onViewportClick(idx),
+    onViewportDragStart: () => rangeBarController.onViewportDragStart(),
+    onViewportDragMove: idx => rangeBarController.onViewportDragMove(idx),
+    onViewportDragEnd: () => rangeBarController.onViewportDragEnd()
   });
 }
 

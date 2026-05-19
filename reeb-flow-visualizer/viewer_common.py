@@ -781,6 +781,107 @@ window.ReebViewerCommon.recenterViewportFromBarIndex = function(targetTime, opts
   scheduleViewportUpdate();
 };
 
+window.ReebViewerCommon.computeVisibleTimestepWindow = function(opts) {
+  const graphToTime = opts?.graphToTime;
+  const camera = opts?.camera;
+  const viewportWidth = Number(opts?.viewportWidth ?? 0);
+  if (!graphToTime || !camera || !(viewportWidth > 0)) return null;
+
+  const viewFocus = camera.getViewFocus?.();
+  const zoomScale = camera.getZoomScale?.() ?? 1;
+  if (!viewFocus || !Number.isFinite(viewFocus.x) || !Number.isFinite(zoomScale) || zoomScale <= 0) return null;
+
+  const startX = viewFocus.x - viewportWidth / (2 * zoomScale);
+  const endX = viewFocus.x + viewportWidth / (2 * zoomScale);
+  return {
+    start: graphToTime(startX),
+    end: graphToTime(endX)
+  };
+};
+
+window.ReebViewerCommon.recenterCameraFromRangeBar = function(targetTime, opts) {
+  const graphToTime = opts?.graphToTime;
+  const maxTime = opts?.maxTime;
+  const camera = opts?.camera;
+  const viewportWidth = Number(opts?.viewportWidth ?? 0);
+  const scheduleViewportUpdate = typeof opts?.scheduleViewportUpdate === "function"
+    ? opts.scheduleViewportUpdate
+    : (() => camera?.scheduleApply?.());
+
+  return window.ReebViewerCommon.recenterViewportFromBarIndex(targetTime, {
+    graphToTime,
+    maxTime,
+    visibleWindowFn: () => window.ReebViewerCommon.computeVisibleTimestepWindow({
+      graphToTime,
+      camera,
+      viewportWidth
+    }),
+    getViewFocus: () => camera?.getViewFocus?.(),
+    setViewFocus: nextFocus => camera?.setViewFocus?.(nextFocus),
+    scheduleViewportUpdate
+  });
+};
+
+window.ReebViewerCommon.createRangeBarController = function(opts) {
+  const getState = typeof opts?.getState === "function" ? opts.getState : (() => ({}));
+  const applyRangeAction = typeof opts?.applyRangeAction === "function" ? opts.applyRangeAction : null;
+  const setViewportDrag = typeof opts?.setViewportDrag === "function" ? opts.setViewportDrag : null;
+  const onRangeCommitted = typeof opts?.onRangeCommitted === "function" ? opts.onRangeCommitted : null;
+  const onBarOnlyUpdate = typeof opts?.onBarOnlyUpdate === "function" ? opts.onBarOnlyUpdate : null;
+  const onViewportRecenter = typeof opts?.onViewportRecenter === "function" ? opts.onViewportRecenter : null;
+
+  const callBarOnly = () => {
+    if (onBarOnlyUpdate) onBarOnlyUpdate();
+  };
+  const callCommitted = () => {
+    if (onRangeCommitted) onRangeCommitted();
+  };
+
+  return {
+    onRangeSelected(index) {
+      if (!applyRangeAction) return;
+      applyRangeAction({ type: "select", index });
+      callCommitted();
+    },
+    onRangeDragStart(idx) {
+      if (!applyRangeAction) return;
+      applyRangeAction({ type: "drag-start", index: idx });
+      callBarOnly();
+    },
+    onRangeDragMove(idx) {
+      if (!applyRangeAction) return;
+      applyRangeAction({ type: "drag-move", index: idx });
+      callBarOnly();
+    },
+    onRangeDragEnd(idx) {
+      if (!applyRangeAction) return;
+      applyRangeAction({ type: "drag-move", index: idx });
+      const before = Array.isArray(getState()?.ranges) ? getState().ranges.length : 0;
+      applyRangeAction({ type: "drag-commit" });
+      const after = Array.isArray(getState()?.ranges) ? getState().ranges.length : 0;
+      if (after !== before) {
+        callCommitted();
+      } else {
+        callBarOnly();
+      }
+    },
+    onViewportClick(idx) {
+      if (onViewportRecenter) onViewportRecenter(idx);
+    },
+    onViewportDragStart() {
+      if (setViewportDrag) setViewportDrag({ active: true });
+      callBarOnly();
+    },
+    onViewportDragMove(idx) {
+      if (onViewportRecenter) onViewportRecenter(idx);
+    },
+    onViewportDragEnd() {
+      if (setViewportDrag) setViewportDrag(null);
+      callBarOnly();
+    }
+  };
+};
+
 window.ReebViewerCommon.renderRangeBar = function(svg, opts) {
   const width = Math.max(1, +opts.width || 1);
   const height = Math.max(1, +opts.height || 1);

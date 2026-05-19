@@ -994,27 +994,21 @@ d3.json("data.json").then(data => {
 
   function visibleTimestepWindow() {
     const panel = currentPanel();
-    const viewFocus = camera?.getViewFocus();
-    const zoomScale = camera?.getZoomScale() ?? 1;
-    if (!panel || !panel.graphToTime || !panel.canvasNode || !viewFocus) return null;
-
-    const width = Math.max(1, panel.canvasNode.clientWidth || 1);
-    const startX = viewFocus.x - width / (2 * zoomScale);
-    const endX = viewFocus.x + width / (2 * zoomScale);
-    return {
-      start: panel.graphToTime(startX),
-      end: panel.graphToTime(endX)
-    };
+    if (!panel || !panel.graphToTime || !panel.canvasNode) return null;
+    return window.ReebViewerCommon.computeVisibleTimestepWindow({
+      graphToTime: panel.graphToTime,
+      camera,
+      viewportWidth: Math.max(1, panel.canvasNode.clientWidth || 1)
+    });
   }
 
   function recenterViewportFromBarIndex(targetTime) {
     const panel = currentPanel();
-    window.ReebViewerCommon.recenterViewportFromBarIndex(targetTime, {
+    window.ReebViewerCommon.recenterCameraFromRangeBar(targetTime, {
       graphToTime: panel?.graphToTime,
       maxTime: timestepMax,
-      visibleWindowFn: visibleTimestepWindow,
-      getViewFocus: () => camera?.getViewFocus(),
-      setViewFocus: nextFocus => camera?.setViewFocus(nextFocus),
+      camera,
+      viewportWidth: Math.max(1, panel?.canvasNode?.clientWidth || 1),
       scheduleViewportUpdate
     });
   }
@@ -1175,6 +1169,28 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     const svg = rangeBar.attr("width", width).attr("height", height);
 
     const tickStep = Math.max(1, Math.ceil(timestepMax / 12));
+    const rangeBarController = window.ReebViewerCommon.createRangeBarController({
+      getState: () => ({
+        ranges: state.ranges,
+        selectedRangeIndex: state.selectedRangeIndex,
+        rangeDrag: state.rangeDrag,
+        viewportDrag: state.viewportDrag
+      }),
+      applyRangeAction,
+      setViewportDrag: next => {
+        state.viewportDrag = next;
+      },
+      onRangeCommitted: () => {
+        renderAll();
+      },
+      onBarOnlyUpdate: () => {
+        renderRangeBar();
+      },
+      onViewportRecenter: idx => {
+        recenterViewportFromBarIndex(idx);
+      }
+    });
+
     window.ReebViewerCommon.renderRangeBar(svg, {
       width,
       height,
@@ -1190,42 +1206,14 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         const ts = timestepByIndex.get(value);
         return ts ? ts.label : value;
       },
-      onRangeSelected: index => {
-        applyRangeAction({ type: "select", index });
-        renderAll();
-      },
-      onRangeDragStart: idx => {
-        applyRangeAction({ type: "drag-start", index: idx });
-        renderRangeBar();
-      },
-      onRangeDragMove: idx => {
-        applyRangeAction({ type: "drag-move", index: idx });
-        renderRangeBar();
-      },
-      onRangeDragEnd: idx => {
-        applyRangeAction({ type: "drag-move", index: idx });
-        const previousCount = state.ranges.length;
-        applyRangeAction({ type: "drag-commit" });
-        if (state.ranges.length === previousCount) {
-          renderRangeBar();
-          return;
-        }
-        renderAll();
-      },
-      onViewportClick: idx => {
-        recenterViewportFromBarIndex(idx);
-      },
-      onViewportDragStart: () => {
-        state.viewportDrag = { active: true };
-        renderRangeBar();
-      },
-      onViewportDragMove: idx => {
-        recenterViewportFromBarIndex(idx);
-      },
-      onViewportDragEnd: () => {
-        state.viewportDrag = null;
-        renderRangeBar();
-      }
+      onRangeSelected: index => rangeBarController.onRangeSelected(index),
+      onRangeDragStart: idx => rangeBarController.onRangeDragStart(idx),
+      onRangeDragMove: idx => rangeBarController.onRangeDragMove(idx),
+      onRangeDragEnd: idx => rangeBarController.onRangeDragEnd(idx),
+      onViewportClick: idx => rangeBarController.onViewportClick(idx),
+      onViewportDragStart: () => rangeBarController.onViewportDragStart(),
+      onViewportDragMove: idx => rangeBarController.onViewportDragMove(idx),
+      onViewportDragEnd: () => rangeBarController.onViewportDragEnd()
     });
   }
 
