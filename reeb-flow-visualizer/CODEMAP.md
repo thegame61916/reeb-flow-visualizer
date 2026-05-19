@@ -17,6 +17,8 @@ The key idea is:
 - `rs` files store the Reeb-space traversal/cache state
 - `sheet_overlaps.json` is derived from the `rsi` data
 - the viewer reads the overlap JSON and renders an interactive Sankey-like view
+- `compareSheetShapes/` builds an additional score-based sheet-matching cache
+- `match_summary_viewer/` renders a separate correspondence dashboard from that cache
 
 ## Directory layout
 
@@ -29,8 +31,11 @@ Important files:
 - `stage_03_compute_sheet_overlaps.py`
 - `stage_04_plot_sankey.py`
 - `interactive_sankey_viewer/stage_04_interactive_sankey_viewer.py`
+- `match_summary_viewer/stage_05_match_summary_viewer.py`
+- `dashboard_shell/stage_06_dashboard_shell.py`
 - `SheetRenderer/render_rs_directory_orbital_colours.py`
 - `SheetRenderer/render_rs_sheets.py`
+- `compareSheetShapes/compare_sheet_shapes.py`
 
 Generated outputs live under `BASE_DIR`:
 
@@ -40,6 +45,11 @@ Generated outputs live under `BASE_DIR`:
 - `sheetREndering/`
 - `sankey/`
 - `sankey/interactive_sankey_viewer/`
+- `sankey/match_summary_viewer/`
+- `sankey/index.html`
+- `sankey/dashboard.css`
+- `sankey/dashboard.js`
+- `compareSheetShapesCache/`
 
 ## Shared config: `common.py`
 
@@ -82,7 +92,9 @@ Current stage list:
 1. `stage_02_build_sankey_data.build_rsi_json_stage`
 2. `stage_03_compute_sheet_overlaps.compute_sheet_overlaps_stage`
 3. `interactive_sankey_viewer.stage_04_interactive_sankey_viewer.build_interactive_sankey_viewer_stage`
-4. `stage_04_plot_sankey.plot_sankey_stage`
+4. `match_summary_viewer.stage_05_match_summary_viewer.build_match_summary_viewer_stage`
+5. `dashboard_shell.stage_06_dashboard_shell.build_dashboard_shell_stage`
+6. `stage_04_plot_sankey.plot_sankey_stage`
 
 Stage 1 (`fv99`) is commented out in the current pipeline runner.
 
@@ -182,6 +194,42 @@ Important invariant:
 
 - links only exist between adjacent timesteps
 
+## `compareSheetShapes/compare_sheet_shapes.py`
+
+Purpose:
+
+- compute sheet-shape correspondence scores without using PNG pixels
+- cache per-timestep descriptors and adjacent-pair match results
+- provide the data source for the match summary viewer
+
+Key input caches:
+
+- `compareSheetShapesCache/cache/timesteps/*.json`
+- `compareSheetShapesCache/cache/timesteps/*.npz`
+- `compareSheetShapesCache/results/sheet_shape_matches.json`
+- `compareSheetShapesCache/results/sheet_shape_summary.json`
+
+Per-sheet descriptors include:
+
+- `sheet_id`
+- `rank`
+- `area`
+- `num_vertices`
+- `bbox`
+- `centroid`
+- `thumbnail` if a sheet image can be linked
+
+Per-match scores include:
+
+- `final_score`
+- `shape_iou`
+- `support_jaccard`
+- `area_ratio`
+- `bbox_iou`
+- `centroid_similarity`
+
+The new summary viewer reads these cached results directly.
+
 ## Stage 4b: `stage_04_plot_sankey.py`
 
 Purpose:
@@ -196,6 +244,69 @@ Current behavior:
 - colors nodes by area using a linear RGB interpolation
 
 This file is mostly a fallback/reference now.
+
+## Stage 5: `match_summary_viewer/stage_05_match_summary_viewer.py`
+
+Purpose:
+
+- build a separate score-based sheet correspondence dashboard
+- consume the cached outputs from `compareSheetShapes/`
+- keep the existing overlap Sankey untouched
+
+Key inputs:
+
+- `compareSheetShapesCache/cache/timesteps/*.json`
+- `compareSheetShapesCache/results/sheet_shape_matches.json`
+- `sheetREndering/` for hover thumbnails
+
+Key output:
+
+- `sankey/match_summary_viewer/`
+
+Viewer behavior:
+
+- nodes represent sheets
+- node height is based on sheet area
+- links represent similarity scores between adjacent timesteps
+- link thickness is globally normalized by the selected score mode
+- a top range bar is rendered above the panel stack
+- timestep labels are rendered along the top of each score panel as `index. label` with a femtosecond sublabel
+- the top bar shows the current visible viewport as a black window
+- the black window is the drag handle for horizontal panning and recenters the view on click
+- zoom and pan are shared across all score panels so the match views stay linked
+- score panels can be added with `+`
+- each panel can choose one score mode or the combined score
+- timestep ranges and thresholding work like the overlap viewer, but only affect the summary dashboard
+- threshold slider updates are coalesced onto animation frames and only toggle link visibility, so dragging stays smooth
+- summary links use the same neutral overlap-style fill and hover palette as the domain-based local-scaling viewer, with no per-link color tinting
+- range row textboxes ignore pointer clicks on the row itself; they commit only on Enter or when focus leaves the whole row
+- summary range gaps are proportional to the number of hidden timesteps between selected ranges, with extra slack for ribbon width
+- the summary viewer camera and top labels use the actual timestep-center x positions, so the black window and labels stay aligned across gaps
+- the summary viewer camera fit now includes the proportional gap space, not just node bounds
+- the summary viewer uses a gap scale factor so large hidden ranges are visibly separated after fit-to-view
+
+This viewer is intentionally standalone and additive.
+
+## Stage 6: `dashboard_shell/stage_06_dashboard_shell.py`
+
+Purpose:
+
+- build the root dashboard shell at `sankey/index.html`
+- switch between the overlap viewer and the match-summary viewer
+- keep both viewers isolated inside an iframe
+
+Key output:
+
+- `sankey/index.html`
+- `sankey/dashboard.css`
+- `sankey/dashboard.js`
+
+Behavior:
+
+- defaults to the domain-based Sankey
+- provides a dropdown for `Domain based` and `Range based`
+- updates the iframe source when the selection changes
+- leaves the underlying viewer directories untouched
 
 ## Interactive viewer: `interactive_sankey_viewer/stage_04_interactive_sankey_viewer.py`
 
@@ -507,11 +618,13 @@ The viewer currently starts with:
 
 ## Files most likely to be edited next
 
-1. `interactive_sankey_viewer/stage_04_interactive_sankey_viewer.py`
-2. `common.py`
-3. `stage_03_compute_sheet_overlaps.py`
-4. `stage_02_build_sankey_data.py`
-5. `stage_04_plot_sankey.py`
+- `interactive_sankey_viewer/stage_04_interactive_sankey_viewer.py`
+- `match_summary_viewer/stage_05_match_summary_viewer.py`
+- `common.py`
+- `compareSheetShapes/compare_sheet_shapes.py`
+- `stage_03_compute_sheet_overlaps.py`
+- `stage_02_build_sankey_data.py`
+- `stage_04_plot_sankey.py`
 
 ## Notes for future Codex sessions
 
@@ -525,4 +638,3 @@ If behavior looks wrong, inspect both:
 - the generated `viewer.js`
 
 That file is the real runtime source for the browser.
-

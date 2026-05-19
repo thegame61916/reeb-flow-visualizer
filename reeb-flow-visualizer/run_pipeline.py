@@ -7,6 +7,12 @@ import stage_04_plot_sankey as s4
 from interactive_sankey_viewer.stage_04_interactive_sankey_viewer import (
     build_interactive_sankey_viewer_stage,
 )
+from match_summary_viewer.stage_05_match_summary_viewer import (
+    build_match_summary_viewer_stage,
+)
+from dashboard_shell.stage_06_dashboard_shell import (
+    build_dashboard_shell_stage,
+)
 
 
 STAGES = [
@@ -14,6 +20,8 @@ STAGES = [
     ("Stage 2: build RSI JSON files", s2.build_rsi_json_stage),
     ("Stage 3: compute sheet overlaps", s3.compute_sheet_overlaps_stage),
     ("Stage 4: build interactive Sankey viewer", build_interactive_sankey_viewer_stage),
+    ("Stage 5: build match summary viewer", build_match_summary_viewer_stage),
+    ("Stage 6: build dashboard shell", build_dashboard_shell_stage),
     ("Stage 4b: plot legacy Plotly Sankey HTML", s4.plot_sankey_stage),
 ]
 
