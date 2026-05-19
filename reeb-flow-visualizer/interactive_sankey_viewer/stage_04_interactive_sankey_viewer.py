@@ -283,9 +283,9 @@ label.inline { display: flex; align-items: center; gap: 8px; }
 .node rect { cursor: pointer; stroke: rgba(20, 30, 40, 0.4); stroke-width: 0.6; fill: #6f9ed4; }
 .node text { font-size: 13px; font-weight: 600; pointer-events: none; fill: #15202b; }
 .link { fill: rgba(80, 80, 80, 0.16); stroke: none; cursor: pointer; }
-.link.global-link-mode { fill: rgba(80, 80, 80, 0.50); }
+.link.global-link-mode { fill: rgba(48, 60, 74, 0.55); }
 .link:hover { fill: rgba(45, 65, 85, 0.42); }
-.link.global-link-mode:hover { fill: rgba(45, 65, 85, 0.76); }
+.link.global-link-mode:hover { fill: rgba(34, 46, 58, 0.65); }
 .context-node { fill: #6f7d8b; opacity: 0.10; pointer-events: none; }
 .context-link { fill: none; stroke: #6f7d8b; stroke-width: 0.7; opacity: 0.06; pointer-events: none; }
 .context-range { fill: rgba(120, 130, 140, 0.12); opacity: 1; pointer-events: none; }
@@ -988,13 +988,13 @@ function renderSankey({ preserveFocus = true } = {}) {
       x: d3.mean(ns, n => (n.x0 + n.x1) / 2),
       label: ns[0].timestep_label
     }));
-  const useGlobalAreaMode = filtered.controls.nodeSizeMode === "area" && filtered.controls.nodeSizeScaleMode === "global";
+  const useGlobalLinkMode = filtered.controls.nodeSizeScaleMode === "global";
 
   root.append("g")
     .selectAll("path")
     .data(graph.links)
     .join("path")
-    .attr("class", useGlobalAreaMode ? "link global-link-mode" : "link")
+    .attr("class", useGlobalLinkMode ? "link global-link-mode" : "link")
     .attr("d", sankeyRibbonPath)
     .on("mousemove", (event, d) => showTooltip(event, linkTooltip(d)))
     .on("mouseleave", hideTooltip)
@@ -1538,7 +1538,15 @@ function bindControls() {
     setThresholdValue(event.target.value, true);
   });
 
-  document.getElementById("thresholdBox").addEventListener("input", event => {
+  const thresholdBox = document.getElementById("thresholdBox");
+  thresholdBox.addEventListener("keydown", event => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    setThresholdValue(event.target.value, true);
+    thresholdBox.blur();
+  });
+
+  thresholdBox.addEventListener("blur", event => {
     setThresholdValue(event.target.value, true);
   });
 
