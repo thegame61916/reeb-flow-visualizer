@@ -829,6 +829,7 @@ window.ReebViewerCommon.createRangeBarController = function(opts) {
   const onRangeCommitted = typeof opts?.onRangeCommitted === "function" ? opts.onRangeCommitted : null;
   const onBarOnlyUpdate = typeof opts?.onBarOnlyUpdate === "function" ? opts.onBarOnlyUpdate : null;
   const onViewportRecenter = typeof opts?.onViewportRecenter === "function" ? opts.onViewportRecenter : null;
+  const clickAction = opts?.clickAction || "recenter";
 
   const callBarOnly = () => {
     if (onBarOnlyUpdate) onBarOnlyUpdate();
@@ -855,6 +856,14 @@ window.ReebViewerCommon.createRangeBarController = function(opts) {
     },
     onRangeDragEnd(idx) {
       if (!applyRangeAction) return;
+      const start = getState()?.rangeDrag?.start;
+      if (clickAction === "recenter" && Number.isFinite(+start) && +idx === +start) {
+        applyRangeAction({ type: "drag-clear" });
+        if (onViewportRecenter) onViewportRecenter(idx);
+        callBarOnly();
+        return;
+      }
+
       applyRangeAction({ type: "drag-move", index: idx });
       const before = Array.isArray(getState()?.ranges) ? getState().ranges.length : 0;
       applyRangeAction({ type: "drag-commit" });
