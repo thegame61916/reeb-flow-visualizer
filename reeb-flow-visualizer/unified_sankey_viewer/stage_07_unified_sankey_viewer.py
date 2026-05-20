@@ -9,7 +9,7 @@ import shutil
 from pathlib import Path
 
 from common import BASE_DIR, OUTPUT_DIR, SHEET_IMAGE_DIR, OVERLAP_FILE
-from viewer_common import (
+from unified_sankey_viewer.viewer_common import (
     shared_viewer_css,
     shared_viewer_script_tags,
     write_viewer_common_js,
@@ -441,6 +441,10 @@ def write_index_html() -> Path:
           <input id="linkDarkness" type="range" min="0" max="100" step="1" value="55">
           <span id="linkDarknessValue">55%</span>
         </label>
+        <label class="inline">
+          <input id="hideIsolated" type="checkbox">
+          Hide nodes with no visible links
+        </label>
       </section>
     </aside>
 
@@ -743,6 +747,15 @@ h2 {
 .panel-controls input[type="range"] {
   width: 150px;
 }
+label.inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+label.inline input[type="checkbox"] {
+  margin: 0;
+  width: auto;
+}
 .panel-canvas {
   border: 1px solid #d9dee5;
   border-radius: 6px;
@@ -874,7 +887,8 @@ d3.json("data.json").then(data => {
       nodeSizeMode: "vertices",
       topSheets: 10,
       nodeColorMode: "area",
-      linkDarkness: 55
+      linkDarkness: 55,
+      hideIsolated: false
     }
   };
 
@@ -1697,15 +1711,37 @@ d3.json("data.json").then(data => {
       if (!panel || !view.linkSelection) return;
       const threshold = clamp(Number(panel.threshold) || 0, 0, 100) / 100;
       const metricMax = metricMaxima[panel.metricId] || 1;
-      view.linkSelection
-        .style("display", d => {
-          const normalized = metricMax > 0 ? metricValue(d, panel.metricId) / metricMax : 0;
-          return normalized >= threshold ? null : "none";
-        })
-        .style("pointer-events", d => {
-          const normalized = metricMax > 0 ? metricValue(d, panel.metricId) / metricMax : 0;
-          return normalized >= threshold ? "all" : "none";
+      const hideIsolated = Boolean(state.layoutControls.hideIsolated);
+      if (!hideIsolated) {
+        if (view.nodeSelection) view.nodeSelection.style("display", null);
+        view.linkSelection
+          .style("display", d => {
+            const normalized = metricMax > 0 ? metricValue(d, panel.metricId) / metricMax : 0;
+            return normalized >= threshold ? null : "none";
+          })
+          .style("pointer-events", d => {
+            const normalized = metricMax > 0 ? metricValue(d, panel.metricId) / metricMax : 0;
+            return normalized >= threshold ? "all" : "none";
+          });
+        return;
+      }
+
+      const incidentNodes = new Set();
+      view.linkSelection.each(function(d) {
+        const normalized = metricMax > 0 ? metricValue(d, panel.metricId) / metricMax : 0;
+        const visible = normalized >= threshold;
+        this.style.display = visible ? "" : "none";
+        this.style.pointerEvents = visible ? "all" : "none";
+        if (visible) {
+          incidentNodes.add(`${d.source_timestep_index}:${d.source_sheet_id}`);
+          incidentNodes.add(`${d.target_timestep_index}:${d.target_sheet_id}`);
+        }
+      });
+      if (view.nodeSelection) {
+        view.nodeSelection.each(function(d) {
+          this.style.display = incidentNodes.has(`${d.timestep_index}:${d.sheet_id}`) ? "" : "none";
         });
+      }
     });
     renderStats();
     renderRangeBar();
@@ -2210,6 +2246,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     const nodeColorNode = document.getElementById("nodeColorMode");
     const darknessNode = document.getElementById("linkDarkness");
     const darknessValueNode = document.getElementById("linkDarknessValue");
+    const hideIsolatedNode = document.getElementById("hideIsolated");
 
     if (orderingNode) {
       orderingNode.value = state.layoutControls.orderingMode;
@@ -2262,6 +2299,14 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       applyDarkness(state.layoutControls.linkDarkness);
       darknessNode.addEventListener("input", event => applyDarkness(event.target.value));
       darknessNode.addEventListener("change", event => applyDarkness(event.target.value));
+    }
+
+    if (hideIsolatedNode) {
+      hideIsolatedNode.checked = Boolean(state.layoutControls.hideIsolated);
+      hideIsolatedNode.addEventListener("change", event => {
+        state.layoutControls.hideIsolated = Boolean(event.target.checked);
+        scheduleThresholdSync();
+      });
     }
   }
 

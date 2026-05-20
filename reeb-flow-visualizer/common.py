@@ -26,7 +26,8 @@ RSI_DIR = BASE_DIR / "sheetInfo"
 
 OUTPUT_DIR = BASE_DIR / "sankey"
 RSI_JSON_DIR = OUTPUT_DIR / "rsi_json"
-VIEWER_DIR = OUTPUT_DIR / "interactive_sankey_viewer"
+UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
+VIEWER_DIR = UNIFIED_VIEWER_DIR
 SHEET_IMAGE_DIR = BASE_DIR / "sheetRendering"
 
 

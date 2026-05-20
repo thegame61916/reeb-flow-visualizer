@@ -32,11 +32,10 @@ Important files:
 - `stage_04_plot_sankey.py`
 - `interactive_sankey_viewer/stage_04_interactive_sankey_viewer.py`
 - `match_summary_viewer/stage_05_match_summary_viewer.py`
-- `dashboard_shell/stage_06_dashboard_shell.py`
 - `SheetRenderer/render_rs_directory_orbital_colours.py`
 - `SheetRenderer/render_rs_sheets.py`
 - `compareSheetShapes/compare_sheet_shapes.py`
-- `viewer_common.py`
+- `unified_sankey_viewer/viewer_common.py`
 
 Generated outputs live under `BASE_DIR`:
 
@@ -86,7 +85,7 @@ Runtime library paths:
 The Python stages import from `common.py`, so future path changes should usually happen there
 first.
 
-## Shared viewer runtime: `viewer_common.py`
+## Shared viewer runtime: `unified_sankey_viewer/viewer_common.py`
 
 This module holds browser-runtime helpers that both generated viewers load:
 
@@ -107,11 +106,10 @@ The shared JS currently provides:
 Current stage list:
 
 1. `stage_02_build_sankey_data.build_rsi_json_stage`
-2. `stage_03_compute_sheet_overlaps.compute_sheet_overlaps_stage`
-3. `interactive_sankey_viewer.stage_04_interactive_sankey_viewer.build_interactive_sankey_viewer_stage`
-4. `match_summary_viewer.stage_05_match_summary_viewer.build_match_summary_viewer_stage`
-5. `dashboard_shell.stage_06_dashboard_shell.build_dashboard_shell_stage`
-6. `stage_04_plot_sankey.plot_sankey_stage`
+2. `compareSheetShapes.compare_sheet_shapes.main` (stage 2b)
+3. `stage_03_compute_sheet_overlaps.compute_sheet_overlaps_stage`
+4. `unified_sankey_viewer.stage_07_unified_sankey_viewer.build_unified_sankey_viewer_stage`
+5. `stage_04_plot_sankey.plot_sankey_stage`
 
 Stage 1 (`fv99`) is commented out in the current pipeline runner.
 
@@ -297,7 +295,7 @@ Viewer behavior:
 - threshold slider updates are coalesced onto animation frames and only toggle link visibility, so dragging stays smooth
 - summary links use the same neutral overlap-style fill and hover palette as the domain-based local-scaling viewer, with no per-link color tinting
 - range row textboxes ignore pointer clicks on the row itself; they commit only on Enter or when focus leaves the whole row
-- the top range bar and range-row editing are drawn through shared helpers in `viewer_common.py` so the domain-based and range-based viewers use the same controller path
+- the top range bar and range-row editing are drawn through shared helpers in `unified_sankey_viewer/viewer_common.py`
 - the top range bar disables browser text selection while dragging so tick labels do not get highlighted
 - summary range gaps are proportional to the number of hidden timesteps between selected ranges, with extra slack for ribbon width
 - the summary viewer camera and top labels use the actual timestep-center x positions, so the black window and labels stay aligned across gaps
@@ -305,27 +303,6 @@ Viewer behavior:
 - the summary viewer uses a gap scale factor so large hidden ranges are visibly separated after fit-to-view
 
 This viewer is intentionally standalone and additive.
-
-## Stage 6: `dashboard_shell/stage_06_dashboard_shell.py`
-
-Purpose:
-
-- build the root dashboard shell at `sankey/index.html`
-- switch between the overlap viewer and the match-summary viewer
-- keep both viewers isolated inside an iframe
-
-Key output:
-
-- `sankey/index.html`
-- `sankey/dashboard.css`
-- `sankey/dashboard.js`
-
-Behavior:
-
-- defaults to the domain-based Sankey
-- provides a dropdown for `Domain based` and `Range based`
-- updates the iframe source when the selection changes
-- leaves the underlying viewer directories untouched
 
 ## Interactive viewer: `interactive_sankey_viewer/stage_04_interactive_sankey_viewer.py`
 
@@ -375,7 +352,7 @@ Defines the static layout and visual style:
 - node/link styles
 - range bar styles
 
-The shared range-bar / viewport styles live in `viewer_common.py` and are appended to the generated CSS.
+The shared range-bar / viewport styles live in `unified_sankey_viewer/viewer_common.py` and are appended to the generated CSS.
 
 The viewer also loads `viewer_common.js`, which provides the shared top-bar renderer and committed-number-input helper.
 

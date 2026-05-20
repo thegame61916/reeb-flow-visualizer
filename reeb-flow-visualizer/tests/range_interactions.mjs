@@ -4,18 +4,13 @@ import { chromium } from "playwright";
 
 function parseArgs(argv) {
   const args = {
-    domainUrl: process.env.DOMAIN_VIEW_URL || "http://127.0.0.1:8000/interactive_sankey_viewer/",
-    rangeUrl: process.env.RANGE_VIEW_URL || "http://127.0.0.1:8000/match_summary_viewer/",
+    unifiedUrl: process.env.UNIFIED_VIEW_URL || "http://127.0.0.1:8000/unified_sankey_viewer/",
     headless: true
   };
   for (let i = 2; i < argv.length; i += 1) {
     const token = argv[i];
-    if (token === "--domain-url" && argv[i + 1]) {
-      args.domainUrl = argv[++i];
-      continue;
-    }
-    if (token === "--range-url" && argv[i + 1]) {
-      args.rangeUrl = argv[++i];
+    if (token === "--url" && argv[i + 1]) {
+      args.unifiedUrl = argv[++i];
       continue;
     }
     if (token === "--headed") {
@@ -106,14 +101,10 @@ async function main() {
 
   try {
     await runScenario(page, {
-      url: args.domainUrl,
-      thresholdSelector: "#threshold"
-    });
-    await runScenario(page, {
-      url: args.rangeUrl,
+      url: args.unifiedUrl,
       thresholdSelector: ".panel-controls input[type='range']"
     });
-    console.log("OK: range interactions passed for domain and range viewers");
+    console.log("OK: range interactions passed for unified viewer");
   } finally {
     await browser.close();
   }
@@ -123,4 +114,3 @@ main().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
-

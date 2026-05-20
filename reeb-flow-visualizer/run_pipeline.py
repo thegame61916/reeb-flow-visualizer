@@ -9,15 +9,6 @@ from compareSheetShapes.compare_sheet_shapes import (
     main as run_shape_matching_main,
 )
 
-from interactive_sankey_viewer.stage_04_interactive_sankey_viewer import (
-    build_interactive_sankey_viewer_stage,
-)
-from match_summary_viewer.stage_05_match_summary_viewer import (
-    build_match_summary_viewer_stage,
-)
-from dashboard_shell.stage_06_dashboard_shell import (
-    build_dashboard_shell_stage,
-)
 from unified_sankey_viewer.stage_07_unified_sankey_viewer import (
     build_unified_sankey_viewer_stage,
 )
@@ -30,9 +21,6 @@ RUN_STAGE_2_RSI_JSON = True
 RUN_STAGE_2B_SHAPE_MATCHING = True
 RUN_STAGE_3_OVERLAPS = True
 
-RUN_INTERACTIVE_SANKEY_VIEWER = False
-RUN_MATCH_SUMMARY_VIEWER = False
-RUN_DASHBOARD_SHELL = False
 RUN_UNIFIED_SANKEY_VIEWER = True
 
 RUN_LEGACY_PLOTLY_SANKEY = False
@@ -79,34 +67,10 @@ def enabled_stages():
             )
         )
 
-    if RUN_INTERACTIVE_SANKEY_VIEWER:
-        stages.append(
-            (
-                "Stage 4: build interactive Sankey viewer",
-                build_interactive_sankey_viewer_stage,
-            )
-        )
-
-    if RUN_MATCH_SUMMARY_VIEWER:
-        stages.append(
-            (
-                "Stage 5: build match summary viewer",
-                build_match_summary_viewer_stage,
-            )
-        )
-
-    if RUN_DASHBOARD_SHELL:
-        stages.append(
-            (
-                "Stage 6: build dashboard shell",
-                build_dashboard_shell_stage,
-            )
-        )
-
     if RUN_UNIFIED_SANKEY_VIEWER:
         stages.append(
             (
-                "Stage 7: build unified Sankey viewer",
+                "Stage 4: build unified Sankey viewer",
                 build_unified_sankey_viewer_stage,
             )
         )
