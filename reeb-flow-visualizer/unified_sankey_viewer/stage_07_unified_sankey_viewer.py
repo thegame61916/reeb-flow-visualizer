@@ -20,6 +20,7 @@ TIMESTEP_CACHE_DIR = STORAGE_ROOT / "cache" / "timesteps"
 MATCHES_FILE = STORAGE_ROOT / "results" / "sheet_shape_matches.json"
 
 UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
+ROOT_INDEX_FILE = OUTPUT_DIR / "index.html"
 
 SHAPE_METRICS = [
     {"id": "combined", "label": "combined", "field": "final_score"},
@@ -376,13 +377,13 @@ def write_index_html() -> Path:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Unified Reeb Sankey Viewer</title>
+  <title>Reeb Flow Visualizer</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
     <div class="title-block">
-      <h1>Unified Reeb Sankey Viewer</h1>
+      <h1>Reeb Flow Visualizer</h1>
       <p>Compare vertex-overlap and shape metrics in synchronized Sankey panels.</p>
     </div>
     <div class="header-actions">
@@ -432,7 +433,8 @@ def write_index_html() -> Path:
         <label>
           Node Color
           <select id="nodeColorMode">
-            <option value="area" selected>sheet area</option>
+            <option value="solid" selected>solid</option>
+            <option value="area">sheet area</option>
             <option value="vertices">vertex count</option>
           </select>
         </label>
@@ -780,7 +782,6 @@ svg.summary-chart {
   background: #fff;
 }
 .node rect {
-  fill: #6f9ed4;
   stroke: rgba(20, 30, 40, 0.35);
   stroke-width: 0.6;
   transition: stroke-width 120ms ease, stroke 120ms ease, fill 120ms ease, opacity 120ms ease;
@@ -865,6 +866,31 @@ svg.summary-chart {
     return path
 
 
+def write_root_index_html() -> Path:
+    ROOT_INDEX_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ROOT_INDEX_FILE.write_text(
+        """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unified Reeb Sankey Viewer</title>
+  <meta http-equiv="refresh" content="0; url=unified_sankey_viewer/index.html">
+</head>
+<body>
+  <script>
+    window.location.replace("unified_sankey_viewer/index.html");
+  </script>
+  <noscript>
+    <a href="unified_sankey_viewer/index.html">Open unified viewer</a>
+  </noscript>
+</body>
+</html>
+"""
+    )
+    return ROOT_INDEX_FILE
+
+
 def write_viewer_js() -> Path:
     path = UNIFIED_VIEWER_DIR / "viewer.js"
     path.write_text(
@@ -886,7 +912,7 @@ d3.json("data.json").then(data => {
       orderingMode: "crossings",
       nodeSizeMode: "vertices",
       topSheets: 10,
-      nodeColorMode: "area",
+      nodeColorMode: "solid",
       linkDarkness: 55,
       hideIsolated: false
     }
@@ -1036,13 +1062,19 @@ d3.json("data.json").then(data => {
 
   function nodeColorFill(node) {
     const mode = state.layoutControls.nodeColorMode;
+    if (mode === "solid") {
+      return "#6f9ed4";
+    }
     const value = nodeMetricValue(node, mode);
     const maxValue = nodeMetricMax(mode);
     if (!(value > 0) || !(maxValue > 0)) {
       return "#93c5fd";
     }
     const ratio = clamp(value / maxValue, 0, 1);
-    return d3.interpolateRgb("#dbeafe", "#1d4ed8")(ratio);
+    const mappedRatio = mode === "area"
+      ? (Math.log1p(ratio * 40) / Math.log1p(40))
+      : ratio;
+    return d3.interpolateRgb("#8fbfff", "#123ea8")(mappedRatio);
   }
 
   function linkFillColor(opacity, hover) {
@@ -1532,6 +1564,7 @@ d3.json("data.json").then(data => {
     const maxAllowedColumnHeight = 860;
     const minNodeHeight = 5;
     const fallbackNodeHeight = 10;
+    const linkHeadroom = 1.04;
 
     const visibleNodes = [];
     const nodeByKey = new Map();
@@ -1565,6 +1598,31 @@ d3.json("data.json").then(data => {
       }
     }
 
+    const selectedNodeKeys = new Set();
+    for (const [timeIndex, nodes] of columnNodesByTime.entries()) {
+      for (const node of nodes) {
+        selectedNodeKeys.add(`${timeIndex}:${node.sheet_id}`);
+      }
+    }
+    const outgoingTotalsByNode = new Map();
+    const incomingTotalsByNode = new Map();
+    for (const edge of edgeList || []) {
+      const sourceKey = `${edge.source_timestep_index}:${edge.source_sheet_id}`;
+      const targetKey = `${edge.target_timestep_index}:${edge.target_sheet_id}`;
+      if (!selectedNodeKeys.has(sourceKey) || !selectedNodeKeys.has(targetKey)) continue;
+      const width = Math.max(0, Number(edge.width) || 0);
+      if (width <= 0) continue;
+      outgoingTotalsByNode.set(sourceKey, (outgoingTotalsByNode.get(sourceKey) || 0) + width);
+      incomingTotalsByNode.set(targetKey, (incomingTotalsByNode.get(targetKey) || 0) + width);
+    }
+    const incidentLinkFloorByNode = new Map();
+    for (const key of selectedNodeKeys) {
+      incidentLinkFloorByNode.set(
+        key,
+        Math.max(outgoingTotalsByNode.get(key) || 0, incomingTotalsByNode.get(key) || 0)
+      );
+    }
+
     const sizeMode = "vertices";
     const metricTotalsByTime = new Map();
     let globalTotal = 0;
@@ -1586,11 +1644,15 @@ d3.json("data.json").then(data => {
       let columnHeight = 0;
       const metricValues = nodes.map(node => nodeMetricValue(node, sizeMode));
       const baseScale = globalScale;
-      let heights = metricValues.map(value =>
-        value > 0
+      let heights = metricValues.map((value, nodeIndex) => {
+        const node = nodes[nodeIndex];
+        const nodeKey = `${node.timestep_index}:${node.sheet_id}`;
+        const linkFloor = (incidentLinkFloorByNode.get(nodeKey) || 0) * linkHeadroom;
+        const baseHeight = value > 0
           ? Math.max(minNodeHeight, value * baseScale)
-          : fallbackNodeHeight
-      );
+          : fallbackNodeHeight;
+        return Math.max(baseHeight, linkFloor);
+      });
 
       const allowedHeight = Math.max(160, maxAllowedColumnHeight - nodeGap * Math.max(0, nodes.length - 1));
       const sumHeights = d3.sum(heights);
@@ -2392,12 +2454,14 @@ def build_unified_sankey_viewer_stage() -> None:
     js_path = write_viewer_js()
     css_path = write_style_css()
     common_js_path = write_viewer_common_js(UNIFIED_VIEWER_DIR)
+    root_index_path = write_root_index_html()
 
     print(f"Wrote unified sankey viewer: {UNIFIED_VIEWER_DIR}")
     for artifact in (data_path, index_path, js_path, css_path, common_js_path):
       print(f"  {artifact.name}")
+    print(f"Wrote root entry: {root_index_path}")
     print("\nOpen with:")
-    print(f"  cd {UNIFIED_VIEWER_DIR}")
+    print(f"  cd {OUTPUT_DIR}")
     print("  python3 -m http.server 8000")
     print("  http://localhost:8000")
 
