@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 
-"""Build a root dashboard shell that switches between the two viewers.
-
-This file is intentionally tiny and additive. It does not modify the
-interactive overlap viewer or the match-summary viewer. It only creates a
-root page under OUTPUT_DIR that loads either viewer in an iframe.
-"""
+"""Build a root dashboard shell that loads the unified Sankey app."""
 
 from __future__ import annotations
 
@@ -20,16 +15,10 @@ SHELL_JS = DASHBOARD_DIR / "dashboard.js"
 
 VIEWER_CHOICES = [
     {
-        "id": "overlap",
-        "label": "Domain based",
-        "path": "interactive_sankey_viewer/index.html",
-        "description": "Current domain-based Sankey dashboard.",
-    },
-    {
-        "id": "matching",
-        "label": "Range based",
-        "path": "match_summary_viewer/index.html",
-        "description": "Score-based range matching dashboard.",
+        "id": "unified",
+        "label": "Unified",
+        "path": "unified_sankey_viewer/index.html",
+        "description": "Unified domain/range Sankey dashboard.",
     },
 ]
 
@@ -54,7 +43,7 @@ def write_index_html() -> Path:
   <header class="shell-header">
     <div class="shell-title">
       <h1>Reeb Sankey Dashboard</h1>
-      <p>Switch between the domain-based and range-based views.</p>
+      <p>Unified view for domain overlap and range-based matching metrics.</p>
     </div>
     <div class="shell-actions">
       <label>

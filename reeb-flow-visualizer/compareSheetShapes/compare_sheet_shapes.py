@@ -53,20 +53,18 @@ from render_rs_sheets import (  # noqa: E402
 # User settings
 # ---------------------------------------------------------------------------
 
-BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene")
-RS_DIR = BASE_DIR / "reebSpaces"
-RSI_DIR = BASE_DIR / "sheetInfo"
-VTU_DIR = BASE_DIR / "downsampledGrids"
-
-FV99 = Path(
-    "/home/mohit/Desktop/postdoc/petars_fiber_flexing/"
-    "petarsCode/arrange-and-traverse-algorithm/build/fv99"
+from common import (
+    BASE_DIR,
+    FV99,
+    RESERVE_CORES,
+    RSI_DIR,
+    RS_DIR,
+    TOP_N_SHEETS,
+    TTK_BUILD_LIB_DIR,
+    TTK_INSTALL_LIB_DIR,
+    VTU_DIR,
+    VTK_LIB_DIR,
 )
-
-FV99_ROOT = FV99.parent.parent
-VTK_LIB_DIR = FV99_ROOT / "libraries/vtk/install/lib"
-TTK_BUILD_LIB_DIR = FV99_ROOT / "libraries/ttk/build/lib"
-TTK_INSTALL_LIB_DIR = FV99_ROOT / "libraries/ttk/install/lib"
 
 DEFAULT_LIBRARY_PATH = os.pathsep.join(
     str(path)
@@ -74,9 +72,7 @@ DEFAULT_LIBRARY_PATH = os.pathsep.join(
     if path.exists()
 )
 
-TOP_N_SHEETS = 10
-RESERVE_CORES = 4
-DEFAULT_WORKERS = 42
+DEFAULT_WORKERS = max(1, (os.cpu_count() or 1) - RESERVE_CORES)
 
 GRID_SIZE = 256
 STORAGE_ROOT = BASE_DIR / "compareSheetShapesCache"
@@ -431,6 +427,7 @@ def save_timestep_cache(
         "stem": descriptors.stem,
         "global_bounds": list(descriptors.global_bounds),
         "grid_size": descriptors.grid_size,
+        "top_n_sheets": TOP_N_SHEETS,
         "sheets": [
             {
                 "sheet_id": sheet.sheet_id,

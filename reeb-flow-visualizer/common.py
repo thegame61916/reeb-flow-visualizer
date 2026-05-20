@@ -11,8 +11,8 @@ FV99 = Path(
 )
 
 EPSILON = "0.00000000"
-RESERVE_CORES = 4
-TOP_N_SHEETS = 10
+RESERVE_CORES = 20
+TOP_N_SHEETS = 20
 
 SANKEY_TITLE = "Time-Varying Reeb Sheet Overlap"
 
@@ -27,7 +27,7 @@ RSI_DIR = BASE_DIR / "sheetInfo"
 OUTPUT_DIR = BASE_DIR / "sankey"
 RSI_JSON_DIR = OUTPUT_DIR / "rsi_json"
 VIEWER_DIR = OUTPUT_DIR / "interactive_sankey_viewer"
-SHEET_IMAGE_DIR = BASE_DIR / "sheetREndering"
+SHEET_IMAGE_DIR = BASE_DIR / "sheetRendering"
 
 
 # Output files

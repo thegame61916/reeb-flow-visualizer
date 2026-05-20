@@ -2,13 +2,65 @@
 
 import json
 import re
+from pathlib import Path
 
 from common import (
+    BASE_DIR,
     OUTPUT_DIR,
     OVERLAP_FILE,
     OVERLAP_WARNINGS_LOG_FILE,
     RSI_JSON_DIR,
 )
+
+SHAPE_MATCHES_FILE = (
+    BASE_DIR
+    / "compareSheetShapesCache"
+    / "results"
+    / "sheet_shape_matches.json"
+)
+
+RANGE_METRIC_FIELDS = (
+    "range_combined_score",
+    "range_shape_iou",
+    "range_support_jaccard",
+    "range_area_ratio",
+    "range_bbox_iou",
+    "range_centroid_similarity",
+)
+
+RANGE_SCORE_DEFAULT_WEIGHTS = {
+    "range_shape_iou": 0.40,
+    "range_support_jaccard": 0.30,
+    "range_area_ratio": 0.15,
+    "range_bbox_iou": 0.10,
+    "range_centroid_similarity": 0.05,
+}
+
+
+def safe_int(value, default=0):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def safe_stem(value):
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    try:
+        return Path(text).stem
+    except Exception:
+        return ""
 
 
 def read_rsi_json(rsijson_file):
@@ -81,6 +133,7 @@ def make_timestep(timestep_index, rsijson_file, data):
     return {
         "index": timestep_index,
         "label": label,
+        "stem": rsijson_file.stem,
         "rsijson_file": str(rsijson_file),
         "rsi_file": data.get("rsi_file"),
         "num_vertices": data.get("num_vertices"),
@@ -118,6 +171,8 @@ def compute_link(source_timestep, target_timestep, source_sheet, target_sheet):
         "target_timestep_index": target_timestep["index"],
         "source_timestep_label": source_timestep["label"],
         "target_timestep_label": target_timestep["label"],
+        "source_stem": source_timestep.get("stem"),
+        "target_stem": target_timestep.get("stem"),
         "source_rsijson_file": source_timestep["rsijson_file"],
         "target_rsijson_file": target_timestep["rsijson_file"],
         "source_rsi_file": source_timestep["rsi_file"],
@@ -155,6 +210,180 @@ def compute_links(timesteps):
     return links
 
 
+def load_shape_match_index(warning_lines):
+    if not SHAPE_MATCHES_FILE.exists():
+        warning_lines.append(
+            f"shape matches missing: {SHAPE_MATCHES_FILE} "
+            "(range metrics will be zero in overlap links)"
+        )
+        return {}, {
+            field: 0.0
+            for field in RANGE_METRIC_FIELDS
+        }, 0, 0
+
+    try:
+        payload = json.loads(SHAPE_MATCHES_FILE.read_text())
+    except Exception as exc:
+        warning_lines.append(
+            f"failed to read shape matches: {SHAPE_MATCHES_FILE}: {exc}"
+        )
+        return {}, {
+            field: 0.0
+            for field in RANGE_METRIC_FIELDS
+        }, 0, 0
+
+    match_index_by_stem = {}
+    match_index_by_label = {}
+    match_index_by_index = {}
+    metric_maxima = {
+        field: 0.0
+        for field in RANGE_METRIC_FIELDS
+    }
+    pair_count = 0
+    match_count = 0
+
+    for pair in payload.get("pairwise_matches", []):
+        pair_count += 1
+        source_stem = str(pair.get("source_stem", "")).strip()
+        target_stem = str(pair.get("target_stem", "")).strip()
+        source_label = str(pair.get("source_label", "")).strip()
+        target_label = str(pair.get("target_label", "")).strip()
+        source_timestep_index = safe_int(pair.get("source_timestep_index"))
+        target_timestep_index = safe_int(pair.get("target_timestep_index"))
+
+        for match in pair.get("matches", []):
+            source_sheet_id = safe_int(match.get("source_sheet_id"))
+            target_sheet_id = safe_int(match.get("target_sheet_id"))
+
+            metrics = {
+                "range_combined_score": safe_float(match.get("final_score")),
+                "range_shape_iou": safe_float(match.get("shape_iou")),
+                "range_support_jaccard": safe_float(match.get("support_jaccard")),
+                "range_area_ratio": safe_float(match.get("area_ratio")),
+                "range_bbox_iou": safe_float(match.get("bbox_iou")),
+                "range_centroid_similarity": safe_float(match.get("centroid_similarity")),
+            }
+
+            for key, value in metrics.items():
+                metric_maxima[key] = max(metric_maxima[key], value)
+
+            if source_stem and target_stem:
+                match_index_by_stem[
+                    (
+                        source_stem,
+                        target_stem,
+                        source_sheet_id,
+                        target_sheet_id,
+                    )
+                ] = metrics
+
+            if source_label and target_label:
+                match_index_by_label[
+                    (
+                        source_label,
+                        target_label,
+                        source_sheet_id,
+                        target_sheet_id,
+                    )
+                ] = metrics
+
+            match_index_by_index[
+                (
+                    source_timestep_index,
+                    target_timestep_index,
+                    source_sheet_id,
+                    target_sheet_id,
+                )
+            ] = metrics
+            match_count += 1
+
+    return {
+        "by_stem": match_index_by_stem,
+        "by_label": match_index_by_label,
+        "by_index": match_index_by_index,
+    }, metric_maxima, pair_count, match_count
+
+
+def attach_range_metrics(links, match_index):
+    attached_count = 0
+    lookup_counts = {
+        "stem": 0,
+        "label": 0,
+        "index": 0,
+        "miss": 0,
+    }
+
+    by_stem = match_index.get("by_stem", {})
+    by_label = match_index.get("by_label", {})
+    by_index = match_index.get("by_index", {})
+
+    for link in links:
+        source_sheet_id = safe_int(link.get("source_sheet_id"))
+        target_sheet_id = safe_int(link.get("target_sheet_id"))
+        source_stem = (
+            str(link.get("source_stem", "")).strip()
+            or safe_stem(link.get("source_rsijson_file"))
+            or safe_stem(link.get("source_rsi_file"))
+        )
+        target_stem = (
+            str(link.get("target_stem", "")).strip()
+            or safe_stem(link.get("target_rsijson_file"))
+            or safe_stem(link.get("target_rsi_file"))
+        )
+        source_label = str(link.get("source_timestep_label", "")).strip()
+        target_label = str(link.get("target_timestep_label", "")).strip()
+
+        index_key = (
+            safe_int(link.get("source_timestep_index")),
+            safe_int(link.get("target_timestep_index")),
+            source_sheet_id,
+            target_sheet_id,
+        )
+
+        stem_key = (
+            source_stem,
+            target_stem,
+            source_sheet_id,
+            target_sheet_id,
+        )
+        label_key = (
+            source_label,
+            target_label,
+            source_sheet_id,
+            target_sheet_id,
+        )
+
+        metrics = None
+        lookup_mode = None
+        if source_stem and target_stem:
+            metrics = by_stem.get(stem_key)
+            if metrics is not None:
+                lookup_mode = "stem"
+
+        if metrics is None and source_label and target_label:
+            metrics = by_label.get(label_key)
+            if metrics is not None:
+                lookup_mode = "label"
+
+        if metrics is None:
+            metrics = by_index.get(index_key)
+            if metrics is not None:
+                lookup_mode = "index"
+
+        if metrics:
+            link.update(metrics)
+            link["has_range_metrics"] = True
+            attached_count += 1
+            lookup_counts[lookup_mode] += 1
+        else:
+            for field in RANGE_METRIC_FIELDS:
+                link[field] = 0.0
+            link["has_range_metrics"] = False
+            lookup_counts["miss"] += 1
+
+    return attached_count, lookup_counts
+
+
 def find_warnings(timesteps):
     warnings = []
 
@@ -178,6 +407,7 @@ def public_timestep_info(timestep):
     return {
         "index": timestep["index"],
         "label": timestep["label"],
+        "stem": timestep.get("stem"),
         "rsijson_file": timestep["rsijson_file"],
         "rsi_file": timestep["rsi_file"],
         "num_vertices": timestep["num_vertices"],
@@ -189,6 +419,8 @@ def public_timestep_info(timestep):
 
 
 def compute_sheet_overlaps_stage():
+    if not RSI_JSON_DIR.exists():
+        raise FileNotFoundError(f"RSI JSON directory not found: {RSI_JSON_DIR}")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     rsijson_files = sorted(
@@ -222,6 +454,16 @@ def compute_sheet_overlaps_stage():
 
     links = compute_links(timesteps)
     warning_lines.extend(find_warnings(timesteps))
+    (
+        shape_match_index,
+        range_metric_maxima,
+        shape_pair_count,
+        shape_match_count,
+    ) = load_shape_match_index(warning_lines)
+    range_metrics_attached, range_metric_lookup_counts = attach_range_metrics(
+        links,
+        shape_match_index,
+    )
 
     nodes = [
         node
@@ -231,9 +473,17 @@ def compute_sheet_overlaps_stage():
 
     output = {
         "rsijson_directory": str(RSI_JSON_DIR),
+        "shape_matches_file": str(SHAPE_MATCHES_FILE),
         "num_timesteps": len(timesteps),
         "num_nodes": len(nodes),
         "num_links": len(links),
+        "range_metric_fields": list(RANGE_METRIC_FIELDS),
+        "range_score_default_weights": RANGE_SCORE_DEFAULT_WEIGHTS,
+        "range_metric_maxima": range_metric_maxima,
+        "range_metric_lookup_counts": range_metric_lookup_counts,
+        "num_shape_pairs": shape_pair_count,
+        "num_shape_matches": shape_match_count,
+        "num_links_with_range_metrics": range_metrics_attached,
         "timesteps": [
             public_timestep_info(timestep)
             for timestep in timesteps
@@ -250,3 +500,5 @@ def compute_sheet_overlaps_stage():
     print(f"Warning log: {OVERLAP_WARNINGS_LOG_FILE}")
     print(f"Nodes: {len(nodes)}")
     print(f"Links: {len(links)}")
+    print(f"Links with range metrics: {range_metrics_attached}")
+    print(f"Range metric lookup: {range_metric_lookup_counts}")

@@ -150,6 +150,8 @@ def find_warnings(rsi_data):
 
 
 def build_rsi_json_stage():
+    if not RSI_DIR.exists():
+        raise FileNotFoundError(f"RSI directory not found: {RSI_DIR}")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     RSI_JSON_DIR.mkdir(parents=True, exist_ok=True)
 

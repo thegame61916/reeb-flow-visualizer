@@ -4,6 +4,11 @@ import stage_01_run_fv99 as s1
 import stage_02_build_sankey_data as s2
 import stage_03_compute_sheet_overlaps as s3
 import stage_04_plot_sankey as s4
+
+from compareSheetShapes.compare_sheet_shapes import (
+    main as run_shape_matching_main,
+)
+
 from interactive_sankey_viewer.stage_04_interactive_sankey_viewer import (
     build_interactive_sankey_viewer_stage,
 )
@@ -13,29 +18,142 @@ from match_summary_viewer.stage_05_match_summary_viewer import (
 from dashboard_shell.stage_06_dashboard_shell import (
     build_dashboard_shell_stage,
 )
+from unified_sankey_viewer.stage_07_unified_sankey_viewer import (
+    build_unified_sankey_viewer_stage,
+)
 
 
-STAGES = [
-    #("Stage 1: run fv99", s1.run_fv99_stage),
-    ("Stage 2: build RSI JSON files", s2.build_rsi_json_stage),
-    ("Stage 3: compute sheet overlaps", s3.compute_sheet_overlaps_stage),
-    ("Stage 4: build interactive Sankey viewer", build_interactive_sankey_viewer_stage),
-    ("Stage 5: build match summary viewer", build_match_summary_viewer_stage),
-    ("Stage 6: build dashboard shell", build_dashboard_shell_stage),
-    ("Stage 4b: plot legacy Plotly Sankey HTML", s4.plot_sankey_stage),
-]
+# ================= USER SETTINGS =================
+
+RUN_STAGE_1_FV99 = False
+RUN_STAGE_2_RSI_JSON = True
+RUN_STAGE_2B_SHAPE_MATCHING = True
+RUN_STAGE_3_OVERLAPS = True
+
+RUN_INTERACTIVE_SANKEY_VIEWER = False
+RUN_MATCH_SUMMARY_VIEWER = False
+RUN_DASHBOARD_SHELL = False
+RUN_UNIFIED_SANKEY_VIEWER = True
+
+RUN_LEGACY_PLOTLY_SANKEY = False
+
+# Shape matching can be expensive.
+# Use a small number for testing, or None to use the default from shape_matching.py.
+SHAPE_MATCHING_WORKERS = None
+
+# ==================================================
+
+
+def enabled_stages():
+    stages = []
+
+    if RUN_STAGE_1_FV99:
+        stages.append(
+            (
+                "Stage 1: run fv99",
+                s1.run_fv99_stage,
+            )
+        )
+
+    if RUN_STAGE_2_RSI_JSON:
+        stages.append(
+            (
+                "Stage 2: build RSI JSON files",
+                s2.build_rsi_json_stage,
+            )
+        )
+
+    if RUN_STAGE_2B_SHAPE_MATCHING:
+        stages.append(
+            (
+                "Stage 2b: compare sheet shapes",
+                run_shape_matching_stage,
+            )
+        )
+
+    if RUN_STAGE_3_OVERLAPS:
+        stages.append(
+            (
+                "Stage 3: compute sheet overlaps",
+                s3.compute_sheet_overlaps_stage,
+            )
+        )
+
+    if RUN_INTERACTIVE_SANKEY_VIEWER:
+        stages.append(
+            (
+                "Stage 4: build interactive Sankey viewer",
+                build_interactive_sankey_viewer_stage,
+            )
+        )
+
+    if RUN_MATCH_SUMMARY_VIEWER:
+        stages.append(
+            (
+                "Stage 5: build match summary viewer",
+                build_match_summary_viewer_stage,
+            )
+        )
+
+    if RUN_DASHBOARD_SHELL:
+        stages.append(
+            (
+                "Stage 6: build dashboard shell",
+                build_dashboard_shell_stage,
+            )
+        )
+
+    if RUN_UNIFIED_SANKEY_VIEWER:
+        stages.append(
+            (
+                "Stage 7: build unified Sankey viewer",
+                build_unified_sankey_viewer_stage,
+            )
+        )
+
+    if RUN_LEGACY_PLOTLY_SANKEY:
+        stages.append(
+            (
+                "Stage 4b: plot legacy Plotly Sankey HTML",
+                s4.plot_sankey_stage,
+            )
+        )
+
+    return stages
+
+
+def run_shape_matching_stage():
+    args = []
+    if SHAPE_MATCHING_WORKERS is not None:
+        args.extend(
+            [
+                "--workers",
+                str(int(SHAPE_MATCHING_WORKERS)),
+            ]
+        )
+
+    exit_code = run_shape_matching_main(args)
+    if exit_code:
+        raise RuntimeError(f"shape matching stage failed with exit code {exit_code}")
 
 
 def run_stage(title, func):
-    print(f"\n{'=' * 80}")
+    print()
+    print("=" * 80)
     print(title)
-    print(f"{'=' * 80}")
+    print("=" * 80)
 
     func()
 
 
 def main():
-    for title, func in STAGES:
+    stages = enabled_stages()
+
+    if not stages:
+        print("No stages enabled.")
+        return
+
+    for title, func in stages:
         run_stage(title, func)
 
 
