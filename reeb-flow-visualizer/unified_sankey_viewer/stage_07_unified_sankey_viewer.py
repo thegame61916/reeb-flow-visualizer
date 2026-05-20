@@ -2314,7 +2314,6 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       .attr("max", 100)
       .attr("step", 0.5)
       .property("value", panel.threshold);
-    const deleteButton = controls.append("button").text("Remove");
 
     window.ReebViewerCommon.bindThresholdControl({
       slider: thresholdRange.node(),
@@ -2333,13 +2332,32 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       }
     });
 
-    deleteButton.on("click", () => {
-      state.panels = state.panels.filter(item => item.id !== panel.id);
-      if (!state.panels.length) {
-        state.panels.push({ id: state.nextPanelId++, dataMode: "overlap", metricId: "overlap_max_percent", threshold: 0 });
-      }
-      renderAll();
-    });
+    if (panel.dataMode === "shape" || panel.dataMode === "hybrid") {
+      ensurePanelShapeWeights(panel);
+      const weightControls = controls.append("div").attr("class", "shape-weight-controls");
+      shapeScoreComponentIds.forEach((metricId, metricIndex) => {
+        const item = weightControls.append("label").attr("class", "shape-weight-item");
+        const labelText = panel.dataMode === "hybrid" && metricIndex === 0
+          ? `Shape metric: combined | ${shapeWeightLabel(metricId)}`
+          : shapeWeightLabel(metricId);
+        item.append("span").text(labelText);
+        const input = item.append("input")
+          .attr("type", "number")
+          .attr("min", 0)
+          .attr("step", 0.01)
+          .property("value", formatWeight(panel.shapeWeights[metricId]));
+        window.ReebViewerCommon.bindCommittedNumberInput(input.node(), raw => {
+          const value = Number(raw);
+          if (!Number.isFinite(value) || value < 0) {
+            input.property("value", formatWeight(panel.shapeWeights[metricId]));
+            return;
+          }
+          panel.shapeWeights[metricId] = value;
+          panel.shapeWeights = sanitizeShapeWeights(panel.shapeWeights);
+          renderAll();
+        });
+      });
+    }
 
     if (panel.dataMode === "hybrid") {
       ensurePanelShapeWeights(panel);
@@ -2347,7 +2365,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       const hybridControls = controls.append("div").attr("class", "hybrid-controls");
 
       const overlapMetricItem = hybridControls.append("label").attr("class", "hybrid-item");
-      overlapMetricItem.append("span").text("Vertex metric");
+      overlapMetricItem.append("span").text("Vertex overlap metric");
       const overlapMetricSelect = overlapMetricItem.append("select");
       overlapMetricIds.forEach(metricId => {
         overlapMetricSelect.append("option")
@@ -2361,7 +2379,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       });
 
       const vertexWeightItem = hybridControls.append("label").attr("class", "hybrid-item");
-      vertexWeightItem.append("span").text("Vertex w");
+      vertexWeightItem.append("span").text("Vertex overlap weight");
       const vertexWeightInput = vertexWeightItem.append("input")
         .attr("type", "number")
         .attr("min", 0)
@@ -2379,7 +2397,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       });
 
       const shapeWeightItem = hybridControls.append("label").attr("class", "hybrid-item");
-      shapeWeightItem.append("span").text("Shape w");
+      shapeWeightItem.append("span").text("Shape combined weight");
       const shapeWeightInput = shapeWeightItem.append("input")
         .attr("type", "number")
         .attr("min", 0)
@@ -2394,30 +2412,6 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         panel.hybridWeights.shape_combined = value;
         panel.hybridWeights = sanitizeHybridWeights(panel.hybridWeights);
         renderAll();
-      });
-    }
-
-    if (panel.dataMode === "shape" || panel.dataMode === "hybrid") {
-      ensurePanelShapeWeights(panel);
-      const weightControls = controls.append("div").attr("class", "shape-weight-controls");
-      shapeScoreComponentIds.forEach(metricId => {
-        const item = weightControls.append("label").attr("class", "shape-weight-item");
-        item.append("span").text(shapeWeightLabel(metricId));
-        const input = item.append("input")
-          .attr("type", "number")
-          .attr("min", 0)
-          .attr("step", 0.01)
-          .property("value", formatWeight(panel.shapeWeights[metricId]));
-        window.ReebViewerCommon.bindCommittedNumberInput(input.node(), raw => {
-          const value = Number(raw);
-          if (!Number.isFinite(value) || value < 0) {
-            input.property("value", formatWeight(panel.shapeWeights[metricId]));
-            return;
-          }
-          panel.shapeWeights[metricId] = value;
-          panel.shapeWeights = sanitizeShapeWeights(panel.shapeWeights);
-          renderAll();
-        });
       });
     }
 
