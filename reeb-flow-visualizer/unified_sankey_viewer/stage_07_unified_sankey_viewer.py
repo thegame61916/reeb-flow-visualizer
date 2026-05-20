@@ -2572,7 +2572,8 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       svgNode: svg.node(),
       graphToTime: buildPanelState(layout)?.graphToTime || null,
       layout,
-      linkSelection: null
+      linkSelection: null,
+      nodeSelection: null
     });
 
     labelLayer.selectAll("text")
@@ -2630,6 +2631,8 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         hideTooltip();
       })
       .on("click", (_, d) => showNodeDetails(d));
+
+    state.panelViews.get(panel.id).nodeSelection = node;
 
     node.append("rect")
       .attr("x", d => d.x0)
