@@ -472,6 +472,10 @@ def write_index_html() -> Path:
           <input id="hideIsolated" type="checkbox">
           Hide nodes with no visible links
         </label>
+        <label class="inline">
+          <input id="strongestOutgoingOnly" type="checkbox">
+          Keep strongest outgoing link per node
+        </label>
       </section>
     </aside>
 
@@ -1004,7 +1008,8 @@ d3.json("data.json").then(data => {
       topSheets: DEFAULT_TOP_SHEETS,
       nodeColorMode: "solid",
       linkDarkness: 55,
-      hideIsolated: false
+      hideIsolated: false,
+      strongestOutgoingOnly: false
     }
   };
 
@@ -1701,6 +1706,43 @@ d3.json("data.json").then(data => {
           opacity: scoreOpacity(score, metricMax)
         });
       }
+    }
+
+    if (state.layoutControls.strongestOutgoingOnly) {
+      const bestBySource = new Map();
+      for (const edge of edges) {
+        const sourceKey = `${edge.source_timestep_index}:${edge.source_sheet_id}`;
+        const current = bestBySource.get(sourceKey);
+        if (!current) {
+          bestBySource.set(sourceKey, edge);
+          continue;
+        }
+        const edgeScore = Number(edge.score) || 0;
+        const currentScore = Number(current.score) || 0;
+        if (edgeScore > currentScore + 1e-12) {
+          bestBySource.set(sourceKey, edge);
+          continue;
+        }
+        if (Math.abs(edgeScore - currentScore) <= 1e-12) {
+          const edgeRank = Number.isFinite(+edge.target_rank) ? +edge.target_rank : Number.POSITIVE_INFINITY;
+          const currentRank = Number.isFinite(+current.target_rank) ? +current.target_rank : Number.POSITIVE_INFINITY;
+          if (edgeRank < currentRank) {
+            bestBySource.set(sourceKey, edge);
+            continue;
+          }
+          if (edgeRank === currentRank) {
+            const edgeSheet = Number.isFinite(+edge.target_sheet_id) ? +edge.target_sheet_id : Number.POSITIVE_INFINITY;
+            const currentSheet = Number.isFinite(+current.target_sheet_id) ? +current.target_sheet_id : Number.POSITIVE_INFINITY;
+            if (edgeSheet < currentSheet) {
+              bestBySource.set(sourceKey, edge);
+            }
+          }
+        }
+      }
+      return edges.filter(edge => {
+        const sourceKey = `${edge.source_timestep_index}:${edge.source_sheet_id}`;
+        return bestBySource.get(sourceKey) === edge;
+      });
     }
     return edges;
   }
@@ -2717,6 +2759,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     const darknessNode = document.getElementById("linkDarkness");
     const darknessValueNode = document.getElementById("linkDarknessValue");
     const hideIsolatedNode = document.getElementById("hideIsolated");
+    const strongestOutgoingNode = document.getElementById("strongestOutgoingOnly");
 
     if (orderingNode) {
       orderingNode.value = state.layoutControls.orderingMode;
@@ -2776,6 +2819,14 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       hideIsolatedNode.addEventListener("change", event => {
         state.layoutControls.hideIsolated = Boolean(event.target.checked);
         scheduleThresholdSync();
+      });
+    }
+
+    if (strongestOutgoingNode) {
+      strongestOutgoingNode.checked = Boolean(state.layoutControls.strongestOutgoingOnly);
+      strongestOutgoingNode.addEventListener("change", event => {
+        state.layoutControls.strongestOutgoingOnly = Boolean(event.target.checked);
+        scheduleRenderAll();
       });
     }
   }
