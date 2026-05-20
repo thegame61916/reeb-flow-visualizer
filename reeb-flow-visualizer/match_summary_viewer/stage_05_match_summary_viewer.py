@@ -540,10 +540,10 @@ svg.summary-chart {
   cursor: pointer;
 }
 .link.global-link {
-  fill: rgba(80, 80, 80, 0.16);
+  fill: rgba(48, 60, 74, 0.55);
 }
 .link:hover {
-  fill: rgba(45, 65, 85, 0.42);
+  fill: rgba(34, 46, 58, 0.65);
 }
 .panel-empty {
   padding: 18px;
@@ -636,8 +636,25 @@ d3.json("data.json").then(data => {
   const timestepByIndex = timestepLookup.byIndex;
   const scoreMaxima = data.meta.score_maxima || {};
   const areaMax = data.meta.global_area_max || 1;
-  const panelNodeHeightMin = data.meta.node_height_min || 8;
-  const panelNodeHeightMax = data.meta.node_height_max || 32;
+  const panelNodeFixedHeight = data.meta.node_height_fixed || 18;
+  const allPositiveAreas = (data.timesteps || [])
+    .flatMap(t => (t.sheets || []).map(s => Math.max(0, Number(s.area) || 0)))
+    .filter(v => v > 0)
+    .sort((a, b) => a - b);
+  const areaColorScale = allPositiveAreas.length
+    ? d3.scaleQuantile()
+      .domain(allPositiveAreas)
+      .range([
+        "#dbeafe",
+        "#bfdbfe",
+        "#93c5fd",
+        "#60a5fa",
+        "#3b82f6",
+        "#2563eb",
+        "#1d4ed8",
+        "#1e3a8a"
+      ])
+    : null;
   const linkMin = data.meta.link_thickness_min || 1.4;
   const linkMax = data.meta.link_thickness_max || 16;
   const scoreModes = data.meta.score_modes || [];
@@ -720,8 +737,15 @@ d3.json("data.json").then(data => {
   }
 
   function nodeHeight(node) {
-    const ratio = areaMax > 0 ? node.area / areaMax : 0;
-    return panelNodeHeightMin + ratio * (panelNodeHeightMax - panelNodeHeightMin);
+    return panelNodeFixedHeight;
+  }
+
+  function nodeAreaFill(node) {
+    const area = Math.max(0, Number(node.area) || 0);
+    if (!(area > 0) || !areaColorScale) {
+      return "#93c5fd";
+    }
+    return areaColorScale(area);
   }
 
   function scoreValue(link, mode) {
@@ -1116,6 +1140,35 @@ d3.json("data.json").then(data => {
       }
     }
 
+    const outgoingTotals = new Map();
+    const incomingTotals = new Map();
+    for (const link of links) {
+      const sourceKey = `${link.source_timestep_index}:${link.source_sheet_id}`;
+      const targetKey = `${link.target_timestep_index}:${link.target_sheet_id}`;
+      outgoingTotals.set(sourceKey, (outgoingTotals.get(sourceKey) || 0) + link.width);
+      incomingTotals.set(targetKey, (incomingTotals.get(targetKey) || 0) + link.width);
+    }
+
+    // Keep global link normalization shape, but apply one panel-wide fit factor
+    // so ribbons never exceed fixed-height node capacity.
+    let panelFitScale = 1;
+    for (const [key, total] of outgoingTotals.entries()) {
+      const node = nodeByKey.get(key);
+      if (!node || !(total > 0)) continue;
+      panelFitScale = Math.min(panelFitScale, node.height / total);
+    }
+    for (const [key, total] of incomingTotals.entries()) {
+      const node = nodeByKey.get(key);
+      if (!node || !(total > 0)) continue;
+      panelFitScale = Math.min(panelFitScale, node.height / total);
+    }
+    panelFitScale = clamp(panelFitScale, 0, 1);
+    if (panelFitScale < 1) {
+      for (const link of links) {
+        link.width *= panelFitScale;
+      }
+    }
+
     return links;
   }
 
@@ -1419,7 +1472,8 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       .attr("x", d => d.x0)
       .attr("y", d => d.y0)
       .attr("width", d => d.x1 - d.x0)
-      .attr("height", d => Math.max(2, d.height));
+      .attr("height", d => Math.max(2, d.height))
+      .attr("fill", d => nodeAreaFill(d));
 
     node.append("text")
       .attr("x", d => d.x1 + 5)
