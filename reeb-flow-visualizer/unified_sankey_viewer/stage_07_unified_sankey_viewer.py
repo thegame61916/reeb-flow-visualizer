@@ -16,6 +16,7 @@ from common import (
     OVERLAP_FILE,
     SHEET_IMAGE_DIR,
     SHAPE_SCORE_DEFAULT_WEIGHTS,
+    VIEWER_DEFAULT_TOP_SHEETS,
 )
 from unified_sankey_viewer.viewer_common import (
     shared_viewer_css,
@@ -369,6 +370,7 @@ def prepare_data(viewer_dir: Path) -> dict:
             "global_area_max": max_area,
             "global_vertex_max": max_vertices,
             "default_ranges": DEFAULT_RANGES,
+            "viewer_default_top_sheets": max(1, safe_int(VIEWER_DEFAULT_TOP_SHEETS, 10)),
             "node_height_fixed": 18,
             "link_thickness_min": 1.4,
             "link_thickness_max": 16,
@@ -450,8 +452,8 @@ def write_index_html() -> Path:
           </select>
         </label>
         <label>
-          Top Sheets / timestep
-          <input id="topSheets" type="number" min="1" step="1" value="10">
+          Top Sheets
+          <input id="topSheets" type="number" min="1" step="1" value="{max(1, safe_int(VIEWER_DEFAULT_TOP_SHEETS, 10))}">
         </label>
         <label>
           Node Color
@@ -819,13 +821,38 @@ label.inline input[type="checkbox"] {
 .panel-canvas {
   border: 1px solid #d9dee5;
   border-radius: 6px;
-  height: 49vh;
-  min-height: 470px;
-  max-height: 620px;
+  height: 560px;
+  min-height: 360px;
+  max-height: none;
   overflow: hidden;
   background: #fff;
   cursor: grab;
   touch-action: none;
+}
+.panel-resizer {
+  margin-top: 6px;
+  height: 12px;
+  border-radius: 6px;
+  cursor: ns-resize;
+  user-select: none;
+  touch-action: none;
+  background:
+    linear-gradient(#edf1f6, #edf1f6) padding-box,
+    repeating-linear-gradient(
+      90deg,
+      #b3bfce 0 12px,
+      transparent 12px 20px
+    ) border-box;
+  border: 4px solid transparent;
+}
+.panel-resizer.active {
+  background:
+    linear-gradient(#e3ebf5, #e3ebf5) padding-box,
+    repeating-linear-gradient(
+      90deg,
+      #8ca2bb 0 12px,
+      transparent 12px 20px
+    ) border-box;
 }
 .panel-canvas.dragging {
   cursor: grabbing;
@@ -955,10 +982,15 @@ def write_viewer_js() -> Path:
         """const DATA = null;
 
 d3.json("data.json").then(data => {
+  const PANEL_HEIGHT_DEFAULT = 560;
+  const DEFAULT_TOP_SHEETS = Math.max(
+    1,
+    Math.floor(Number(data?.meta?.viewer_default_top_sheets) || 10)
+  );
   const state = {
     ranges: (data.meta.default_ranges && data.meta.default_ranges.length ? data.meta.default_ranges : [{start: 0, end: 20}]).map(r => ({...r})),
     selectedRangeIndex: 0,
-    panels: [{ id: 1, dataMode: "overlap", metricId: "overlap_max_percent", threshold: 0 }],
+    panels: [{ id: 1, dataMode: "overlap", metricId: "overlap_max_percent", threshold: 0, panelHeight: PANEL_HEIGHT_DEFAULT }],
     nextPanelId: 2,
     rangeDrag: null,
     viewportDrag: null,
@@ -969,7 +1001,7 @@ d3.json("data.json").then(data => {
     layoutControls: {
       orderingMode: "crossings",
       nodeSizeMode: "vertices",
-      topSheets: 10,
+      topSheets: DEFAULT_TOP_SHEETS,
       nodeColorMode: "solid",
       linkDarkness: 55,
       hideIsolated: false
@@ -1015,6 +1047,8 @@ d3.json("data.json").then(data => {
   const ZOOM_MAX = 20;
   const ZOOM_STEP = 1.2;
   const PAN_DRAG_THRESHOLD = 4;
+  const PANEL_HEIGHT_MIN = 360;
+  const PANEL_HEIGHT_MAX = 1400;
 
   const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 });
   const shapeMatchLookup = new Map();
@@ -1029,6 +1063,12 @@ d3.json("data.json").then(data => {
 
   function clamp(n, low, high) {
     return Math.min(high, Math.max(low, n));
+  }
+
+  function clampPanelHeight(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return PANEL_HEIGHT_DEFAULT;
+    return Math.round(clamp(numeric, PANEL_HEIGHT_MIN, PANEL_HEIGHT_MAX));
   }
 
   function formatScore(value) {
@@ -1245,6 +1285,7 @@ d3.json("data.json").then(data => {
   function ensurePanelMetric(panel) {
     ensurePanelShapeWeights(panel);
     ensurePanelHybridConfig(panel);
+    panel.panelHeight = clampPanelHeight(panel.panelHeight);
     const metrics = metricsForMode(panel.dataMode);
     if (!metrics.length) {
       panel.metricId = "";
@@ -1697,7 +1738,7 @@ d3.json("data.json").then(data => {
 
   function normalizeTopSheets(value) {
     const n = Number(value);
-    if (!Number.isFinite(n)) return 10;
+    if (!Number.isFinite(n)) return DEFAULT_TOP_SHEETS;
     return Math.max(1, Math.floor(n));
   }
 
@@ -2263,6 +2304,69 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     });
   }
 
+  function bindPanelResizeHandle(panel, canvas, svg, layoutBounds) {
+    const handle = panel.container.append("div")
+      .attr("class", "panel-resizer")
+      .attr("title", "Drag to resize panel");
+    const handleNode = handle.node();
+    const canvasNode = canvas.node();
+    if (!handleNode || !canvasNode) return;
+
+    let dragState = null;
+    const applyHeight = nextHeight => {
+      panel.panelHeight = clampPanelHeight(nextHeight);
+      canvas.style("height", `${panel.panelHeight}px`);
+      if (svg && layoutBounds) {
+        const minSvgHeight = Math.max(1, (layoutBounds.maxY - layoutBounds.minY) + 140);
+        svg.attr("height", Math.max(minSvgHeight, panel.panelHeight));
+      }
+      scheduleViewportUpdate();
+    };
+
+    const finishDrag = event => {
+      if (!dragState) return;
+      dragState = null;
+      handle.classed("active", false);
+      try {
+        if (handleNode.hasPointerCapture(event.pointerId)) {
+          handleNode.releasePointerCapture(event.pointerId);
+        }
+      } catch (_) {}
+    };
+
+    handleNode.addEventListener("pointerdown", event => {
+      if (event.button !== 0) return;
+      state.activePanelId = panel.id;
+      const startFitZoom = layoutBounds ? fitZoomForBounds(layoutBounds, canvasNode) : null;
+      dragState = {
+        startY: event.clientY,
+        startHeight: panel.panelHeight,
+        startZoom: camera?.getZoomScale() ?? 1,
+        startFitZoom: Number.isFinite(startFitZoom) && startFitZoom > 0 ? startFitZoom : null
+      };
+      handle.classed("active", true);
+      handleNode.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+
+    handleNode.addEventListener("pointermove", event => {
+      if (!dragState) return;
+      const dy = event.clientY - dragState.startY;
+      applyHeight(dragState.startHeight + dy);
+      if (layoutBounds && dragState.startFitZoom && camera) {
+        const currentFit = fitZoomForBounds(layoutBounds, canvasNode);
+        if (Number.isFinite(currentFit) && currentFit > 0) {
+          const scaledZoom = dragState.startZoom * (currentFit / dragState.startFitZoom);
+          camera.setZoomScale(scaledZoom);
+        }
+      }
+      event.preventDefault();
+    });
+
+    handleNode.addEventListener("pointerup", finishDrag);
+    handleNode.addEventListener("pointercancel", finishDrag);
+  }
+
   function renderPanel(panel) {
     ensurePanelMetric(panel);
     const container = panel.container;
@@ -2415,7 +2519,9 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       });
     }
 
-    const canvas = container.append("div").attr("class", "panel-canvas");
+    const canvas = container.append("div")
+      .attr("class", "panel-canvas")
+      .style("height", `${panel.panelHeight}px`);
     const svg = canvas.append("svg").attr("class", "summary-chart");
 
     const columns = buildVisibleColumns();
@@ -2432,6 +2538,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
 
     if (!layout.visibleNodes.length) {
       canvas.append("div").attr("class", "panel-empty").text("No timesteps in the selected range.");
+      bindPanelResizeHandle(panel, canvas, null, null);
       return;
     }
 
@@ -2563,6 +2670,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       renderRangeBar();
     });
 
+    bindPanelResizeHandle(panel, canvas, svg, layoutBounds);
     syncThresholdVisibility();
   }
 
@@ -2670,12 +2778,14 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
   }
 
   function addPanel() {
+    const activePanel = getPanelById(state.activePanelId);
     state.panels.push({
       id: state.nextPanelId++,
       dataMode: "shape",
       metricId: "combined",
       threshold: 0,
-      shapeWeights: cloneDefaultShapeWeights()
+      shapeWeights: cloneDefaultShapeWeights(),
+      panelHeight: clampPanelHeight(activePanel?.panelHeight ?? PANEL_HEIGHT_DEFAULT)
     });
     renderAll();
   }
