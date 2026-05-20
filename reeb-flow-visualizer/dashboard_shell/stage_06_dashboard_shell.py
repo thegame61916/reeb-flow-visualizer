@@ -63,7 +63,6 @@ def write_index_html() -> Path:
           {options}
         </select>
       </label>
-      <button id="openCurrent">Open view</button>
     </div>
   </header>
 
@@ -155,7 +154,6 @@ def write_viewer_js() -> Path:
     path.write_text(
         """const select = document.getElementById("viewerSelect");
 const frame = document.getElementById("viewerFrame");
-const button = document.getElementById("openCurrent");
 
 function setViewer(path) {
   frame.src = path;
@@ -175,7 +173,6 @@ function loadFromQuery() {
 }
 
 select.addEventListener("change", () => setViewer(select.value));
-button.addEventListener("click", () => setViewer(select.value));
 
 loadFromQuery();
 """

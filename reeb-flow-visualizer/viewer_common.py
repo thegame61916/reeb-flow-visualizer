@@ -62,7 +62,7 @@ def shared_viewer_css() -> str:
 """
 
 
-def shared_viewer_script_tags(include_sankey: bool = False, version: str = "2") -> str:
+def shared_viewer_script_tags(include_sankey: bool = False, version: str = "4") -> str:
     scripts = ['<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>']
     if include_sankey:
         scripts.append('<script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>')
@@ -725,8 +725,11 @@ window.ReebViewerCommon.addRangeAfterLast = function(ranges, timestepMax, opts) 
   const max = Math.max(0, Number.isFinite(+timestepMax) ? +timestepMax : 0);
   const next = window.ReebViewerCommon.normalizeRanges(ranges, max);
   const span = Math.max(0, Math.round(Number(opts?.span ?? 20)));
-  const start = next.length
-    ? Math.max(0, Math.min(max, next[next.length - 1].end + 1))
+  const maxExistingEnd = next.length
+    ? (d3.max(next, range => Number(range?.end)) ?? -1)
+    : -1;
+  const start = maxExistingEnd >= 0
+    ? Math.max(0, Math.min(max, Math.round(maxExistingEnd) + 1))
     : 0;
   const end = Math.max(start, Math.min(max, start + span));
   next.push({ start, end });

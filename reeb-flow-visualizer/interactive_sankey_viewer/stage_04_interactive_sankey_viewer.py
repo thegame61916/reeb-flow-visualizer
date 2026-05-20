@@ -160,7 +160,6 @@ def write_index_html():
         <h2>Timestep Ranges</h2>
         <div id="rangeRows"></div>
         <button id="addRange">+ Add range</button>
-        <button id="deleteRange">Delete selected range</button>
         <p class="hint">Drag on the bar to create a range. Click a range to select it. Delete removes the selected range.</p>
       </section>
 
@@ -408,8 +407,9 @@ function applyRangeAction(action) {
     action,
     {
       timestepMax: currentTimestepMax(),
-      keepOne: false,
-      emptySelectedIndex: -1,
+      keepOne: true,
+      fallbackRange: ranges.length ? ranges[ranges.length - 1] : { start: 0, end: Math.min(20, currentTimestepMax()) },
+      emptySelectedIndex: 0,
       defaultSpan: 20,
       minSpan: 1
     }
@@ -1187,20 +1187,12 @@ function renderRangeRows() {
   });
 }
 
-function addRange(start = 0, end = 20) {
-  if (Number.isFinite(start) && Number.isFinite(end) && arguments.length >= 2) {
-    if (rangeDispatcher) {
-      rangeDispatcher.addExplicitRange(start, end);
-      return;
-    }
-    applyRangeAction({ type: "add-explicit", start, end });
-  } else {
-    if (rangeDispatcher) {
-      rangeDispatcher.addRange();
-      return;
-    }
-    applyRangeAction({ type: "add" });
+function addRange() {
+  if (rangeDispatcher) {
+    rangeDispatcher.addRange();
+    return;
   }
+  applyRangeAction({ type: "add" });
   renderRangeRows();
   renderSankey({ preserveFocus: true });
   renderMiniMap();
@@ -1419,12 +1411,11 @@ function bindControls() {
   });
 
   document.getElementById("addRange").addEventListener("click", () => {
-    addRange(0, Math.min(20, currentTimestepMax()));
+    addRange();
   });
 
   document.getElementById("zoomOut").addEventListener("click", () => camera.zoomBy(1 / camera.zoomStep));
   document.getElementById("zoomIn").addEventListener("click", () => camera.zoomBy(camera.zoomStep));
-  document.getElementById("deleteRange").addEventListener("click", () => deleteRange());
   document.getElementById("centerView").addEventListener("click", () => centerSankey());
 
   window.ReebViewerCommon.bindKeyboardShortcuts({

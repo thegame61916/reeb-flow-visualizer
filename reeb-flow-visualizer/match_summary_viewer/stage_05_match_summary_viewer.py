@@ -246,7 +246,6 @@ def write_index_html() -> Path:
         <div id="rangeRows"></div>
         <div class="row-actions">
           <button id="addRange">+ Add range</button>
-          <button id="deleteRange">Delete selected range</button>
         </div>
         <p class="hint">Drag on the bar to create a range. Click a range to select it. Delete removes the selected range.</p>
       </section>
@@ -1508,7 +1507,6 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
   }
 
   document.getElementById("addRange").addEventListener("click", addRange);
-  document.getElementById("deleteRange").addEventListener("click", () => removeRange(state.selectedRangeIndex));
   document.getElementById("addPanel").addEventListener("click", addPanel);
   document.getElementById("zoomOut").addEventListener("click", () => camera.zoomBy(1 / camera.zoomStep));
   document.getElementById("zoomIn").addEventListener("click", () => camera.zoomBy(camera.zoomStep));
