@@ -9,6 +9,7 @@ from common import (
     OUTPUT_DIR,
     OVERLAP_FILE,
     OVERLAP_WARNINGS_LOG_FILE,
+    RANGE_SCORE_DEFAULT_WEIGHTS,
     RSI_JSON_DIR,
 )
 
@@ -27,15 +28,6 @@ RANGE_METRIC_FIELDS = (
     "range_bbox_iou",
     "range_centroid_similarity",
 )
-
-RANGE_SCORE_DEFAULT_WEIGHTS = {
-    "range_shape_iou": 0.40,
-    "range_support_jaccard": 0.30,
-    "range_area_ratio": 0.15,
-    "range_bbox_iou": 0.10,
-    "range_centroid_similarity": 0.05,
-}
-
 
 def safe_int(value, default=0):
     try:

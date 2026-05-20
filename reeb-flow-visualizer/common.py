@@ -16,6 +16,32 @@ TOP_N_SHEETS = 20
 
 SANKEY_TITLE = "Time-Varying Reeb Sheet Overlap"
 
+# Default weights for combined shape score.
+# These are used by compareSheetShapes, overlap attachment metadata,
+# and unified viewer defaults.
+SHAPE_SCORE_DEFAULT_WEIGHTS = {
+    "shape_iou": 0.40,
+    "support_jaccard": 0.30,
+    "area_ratio": 0.15,
+    "bbox_iou": 0.10,
+    "centroid_similarity": 0.05,
+}
+
+# Same weights with stage_03 range-metric key prefix.
+RANGE_SCORE_DEFAULT_WEIGHTS = {
+    f"range_{metric}": weight
+    for metric, weight in SHAPE_SCORE_DEFAULT_WEIGHTS.items()
+}
+
+# Default weights for hybrid score in unified viewer.
+HYBRID_SCORE_DEFAULT_WEIGHTS = {
+    "vertex_overlap": 0.50,
+    "shape_combined": 0.50,
+}
+
+# Default overlap metric used as vertex component in hybrid mode.
+HYBRID_VERTEX_METRIC_DEFAULT = "overlap_max_percent"
+
 # ==================================================
 
 

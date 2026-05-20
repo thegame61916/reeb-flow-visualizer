@@ -8,7 +8,15 @@ import json
 import shutil
 from pathlib import Path
 
-from common import BASE_DIR, OUTPUT_DIR, SHEET_IMAGE_DIR, OVERLAP_FILE
+from common import (
+    BASE_DIR,
+    HYBRID_SCORE_DEFAULT_WEIGHTS,
+    HYBRID_VERTEX_METRIC_DEFAULT,
+    OUTPUT_DIR,
+    OVERLAP_FILE,
+    SHEET_IMAGE_DIR,
+    SHAPE_SCORE_DEFAULT_WEIGHTS,
+)
 from unified_sankey_viewer.viewer_common import (
     shared_viewer_css,
     shared_viewer_script_tags,
@@ -38,6 +46,10 @@ OVERLAP_METRICS = [
     {"id": "overlap_max_percent", "label": "max overlap %", "field": "max_percent"},
 ]
 
+HYBRID_METRICS = [
+    {"id": "hybrid_combined", "label": "hybrid combined", "field": "hybrid_combined"},
+]
+
 DATA_MODES = [
     {
         "id": "overlap",
@@ -52,6 +64,13 @@ DATA_MODES = [
         "pair_field": "shape_pairs",
         "default_metric": "combined",
         "metrics": SHAPE_METRICS,
+    },
+    {
+        "id": "hybrid",
+        "label": "Hybrid metrics",
+        "pair_field": "",
+        "default_metric": "hybrid_combined",
+        "metrics": HYBRID_METRICS,
     },
 ]
 
@@ -343,6 +362,10 @@ def prepare_data(viewer_dir: Path) -> dict:
             "timesteps": len(timesteps),
             "data_modes": DATA_MODES,
             "metric_maxima": metric_maxima,
+            "shape_score_components": list(SHAPE_SCORE_DEFAULT_WEIGHTS.keys()),
+            "shape_score_default_weights": SHAPE_SCORE_DEFAULT_WEIGHTS,
+            "hybrid_score_default_weights": HYBRID_SCORE_DEFAULT_WEIGHTS,
+            "hybrid_vertex_metric_default": HYBRID_VERTEX_METRIC_DEFAULT,
             "global_area_max": max_area,
             "global_vertex_max": max_vertices,
             "default_ranges": DEFAULT_RANGES,
@@ -749,6 +772,41 @@ h2 {
 .panel-controls input[type="range"] {
   width: 150px;
 }
+.shape-weight-controls {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(72px, 1fr));
+  gap: 6px;
+  width: 100%;
+  flex-basis: 100%;
+}
+.shape-weight-item {
+  display: grid;
+  gap: 3px;
+  font-size: 11px;
+  color: #556371;
+}
+.shape-weight-item input {
+  height: 26px;
+  min-width: 0;
+}
+.hybrid-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(88px, 1fr));
+  gap: 6px;
+  width: 100%;
+  flex-basis: 100%;
+}
+.hybrid-item {
+  display: grid;
+  gap: 3px;
+  font-size: 11px;
+  color: #556371;
+}
+.hybrid-item input,
+.hybrid-item select {
+  height: 26px;
+  min-width: 0;
+}
 label.inline {
   display: flex;
   align-items: center;
@@ -938,6 +996,15 @@ d3.json("data.json").then(data => {
   const dataModes = data.meta.data_modes || [];
   const modeById = new Map(dataModes.map(mode => [mode.id, mode]));
   const metricMaxima = data.meta.metric_maxima || {};
+  const overlapMetricIds = (modeById.get("overlap")?.metrics || []).map(metric => metric.id);
+  const shapeScoreComponentIds = Array.isArray(data.meta.shape_score_components) && data.meta.shape_score_components.length
+    ? data.meta.shape_score_components.slice()
+    : ["shape_iou", "support_jaccard", "area_ratio", "bbox_iou", "centroid_similarity"];
+  const shapeScoreDefaultWeightsRaw = data.meta.shape_score_default_weights || {};
+  const hybridScoreDefaultWeightsRaw = data.meta.hybrid_score_default_weights || {};
+  const hybridVertexMetricDefault = overlapMetricIds.includes(data.meta.hybrid_vertex_metric_default)
+    ? data.meta.hybrid_vertex_metric_default
+    : (overlapMetricIds.includes("overlap_max_percent") ? "overlap_max_percent" : (overlapMetricIds[0] || "overlap_max_percent"));
   const areaMax = data.meta.global_area_max || 1;
   const vertexMax = data.meta.global_vertex_max || 1;
   const linkMin = data.meta.link_thickness_min || 1.4;
@@ -950,6 +1017,15 @@ d3.json("data.json").then(data => {
   const PAN_DRAG_THRESHOLD = 4;
 
   const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 });
+  const shapeMatchLookup = new Map();
+  for (const pair of (Array.isArray(data.shape_pairs) ? data.shape_pairs : [])) {
+    for (const match of (pair.matches || [])) {
+      shapeMatchLookup.set(
+        `${pair.source_timestep_index}:${match.source_sheet_id}->${pair.target_timestep_index}:${match.target_sheet_id}`,
+        match
+      );
+    }
+  }
 
   function clamp(n, low, high) {
     return Math.min(high, Math.max(low, n));
@@ -957,6 +1033,112 @@ d3.json("data.json").then(data => {
 
   function formatScore(value) {
     return numberFormat.format(Number(value || 0));
+  }
+
+  function sanitizeShapeWeights(weights) {
+    const next = {};
+    let anyPositive = false;
+    for (const metricId of shapeScoreComponentIds) {
+      const fallback = Math.max(0, Number(shapeScoreDefaultWeightsRaw?.[metricId]) || 0);
+      const raw = Number(weights?.[metricId]);
+      const value = Number.isFinite(raw) && raw >= 0 ? raw : fallback;
+      next[metricId] = value;
+      anyPositive = anyPositive || value > 0;
+    }
+    if (!anyPositive) {
+      for (const metricId of shapeScoreComponentIds) {
+        next[metricId] = Math.max(0, Number(shapeScoreDefaultWeightsRaw?.[metricId]) || 0);
+      }
+    }
+    return next;
+  }
+
+  function cloneDefaultShapeWeights() {
+    return sanitizeShapeWeights(shapeScoreDefaultWeightsRaw);
+  }
+
+  function sanitizeHybridWeights(weights) {
+    const fallbackVertex = Math.max(0, Number(hybridScoreDefaultWeightsRaw?.vertex_overlap) || 0);
+    const fallbackShape = Math.max(0, Number(hybridScoreDefaultWeightsRaw?.shape_combined) || 0);
+    const vertexRaw = Number(weights?.vertex_overlap);
+    const shapeRaw = Number(weights?.shape_combined);
+    const vertex = Number.isFinite(vertexRaw) && vertexRaw >= 0 ? vertexRaw : fallbackVertex;
+    const shape = Number.isFinite(shapeRaw) && shapeRaw >= 0 ? shapeRaw : fallbackShape;
+    if (vertex > 0 || shape > 0) {
+      return { vertex_overlap: vertex, shape_combined: shape };
+    }
+    return { vertex_overlap: fallbackVertex, shape_combined: fallbackShape };
+  }
+
+  function cloneDefaultHybridWeights() {
+    return sanitizeHybridWeights(hybridScoreDefaultWeightsRaw);
+  }
+
+  function sanitizeHybridVertexMetric(metricId) {
+    const id = String(metricId || "");
+    if (overlapMetricIds.includes(id)) return id;
+    return hybridVertexMetricDefault;
+  }
+
+  function ensurePanelShapeWeights(panel) {
+    if (!panel || (panel.dataMode !== "shape" && panel.dataMode !== "hybrid")) return;
+    panel.shapeWeights = sanitizeShapeWeights(panel.shapeWeights || cloneDefaultShapeWeights());
+  }
+
+  function ensurePanelHybridConfig(panel) {
+    if (!panel || panel.dataMode !== "hybrid") return;
+    panel.hybridWeights = sanitizeHybridWeights(panel.hybridWeights || cloneDefaultHybridWeights());
+    panel.hybridVertexMetric = sanitizeHybridVertexMetric(panel.hybridVertexMetric);
+  }
+
+  function combinedShapeScore(metrics, weights) {
+    let weightedSum = 0;
+    let weightSum = 0;
+    for (const metricId of shapeScoreComponentIds) {
+      const weight = Math.max(0, Number(weights?.[metricId]) || 0);
+      const value = Math.max(0, Number(metrics?.[metricId]) || 0);
+      weightedSum += weight * value;
+      weightSum += weight;
+    }
+    return weightSum > 0 ? (weightedSum / weightSum) : 0;
+  }
+
+  function metricValue(link, panel, metricId = null) {
+    const id = metricId || panel?.metricId || "";
+    if (panel?.dataMode === "shape" && id === "combined") {
+      return combinedShapeScore(link.metrics || {}, panel.shapeWeights || cloneDefaultShapeWeights());
+    }
+    if (panel?.dataMode === "hybrid" && id === "hybrid_combined") {
+      const weights = sanitizeHybridWeights(panel.hybridWeights || cloneDefaultHybridWeights());
+      const overlapMetricId = sanitizeHybridVertexMetric(panel.hybridVertexMetric);
+      const overlapRaw = Math.max(0, Number(link.metrics?.[overlapMetricId]) || 0);
+      const overlapMax = Math.max(1e-12, Number(metricMaxima?.[overlapMetricId]) || 0);
+      const overlapNorm = overlapMax > 0 ? clamp(overlapRaw / overlapMax, 0, 1) : 0;
+      const shapeNorm = combinedShapeScore(link.metrics || {}, panel.shapeWeights || cloneDefaultShapeWeights());
+      const wVertex = Math.max(0, Number(weights.vertex_overlap) || 0);
+      const wShape = Math.max(0, Number(weights.shape_combined) || 0);
+      const denom = wVertex + wShape;
+      return denom > 0 ? ((wVertex * overlapNorm + wShape * shapeNorm) / denom) : 0;
+    }
+    return Number(link.metrics?.[id] ?? 0);
+  }
+
+  function metricMaxForPanel(panel, metricId = null) {
+    const id = metricId || panel?.metricId || "";
+    if (panel?.dataMode === "shape" && id === "combined") {
+      const pairs = pairsForMode("shape");
+      let maxValue = 0;
+      for (const pair of pairs) {
+        for (const match of pair.matches || []) {
+          maxValue = Math.max(maxValue, combinedShapeScore(match.metrics || {}, panel.shapeWeights || cloneDefaultShapeWeights()));
+        }
+      }
+      return maxValue > 0 ? maxValue : 1;
+    }
+    if (panel?.dataMode === "hybrid" && id === "hybrid_combined") {
+      return 1;
+    }
+    return metricMaxima[id] || 1;
   }
 
   function applyRangeAction(action) {
@@ -1020,7 +1202,37 @@ d3.json("data.json").then(data => {
     return modeById.get(modeId)?.pair_field || "";
   }
 
-  function pairsForMode(modeId) {
+  function buildHybridPairsForPanel(panel) {
+    const overlapPairs = Array.isArray(data.overlap_pairs) ? data.overlap_pairs : [];
+    const hybridPairs = [];
+    for (const pair of overlapPairs) {
+      const matches = [];
+      for (const overlapMatch of (pair.matches || [])) {
+        const key = `${pair.source_timestep_index}:${overlapMatch.source_sheet_id}->${pair.target_timestep_index}:${overlapMatch.target_sheet_id}`;
+        const shapeMatch = shapeMatchLookup.get(key) || null;
+        const shapeMetrics = shapeMatch?.metrics || {};
+        const mergedMetrics = {
+          ...(overlapMatch.metrics || {}),
+          ...(shapeMetrics || {}),
+        };
+        matches.push({
+          ...overlapMatch,
+          metrics: mergedMetrics,
+        });
+      }
+      hybridPairs.push({
+        ...pair,
+        matches,
+      });
+    }
+    return hybridPairs;
+  }
+
+  function pairsForMode(modeId, panel = null) {
+    if (modeId === "hybrid") {
+      if (!panel) return Array.isArray(data.overlap_pairs) ? data.overlap_pairs : [];
+      return buildHybridPairsForPanel(panel);
+    }
     const field = pairFieldForMode(modeId);
     if (!field) return [];
     return Array.isArray(data[field]) ? data[field] : [];
@@ -1031,6 +1243,8 @@ d3.json("data.json").then(data => {
   }
 
   function ensurePanelMetric(panel) {
+    ensurePanelShapeWeights(panel);
+    ensurePanelHybridConfig(panel);
     const metrics = metricsForMode(panel.dataMode);
     if (!metrics.length) {
       panel.metricId = "";
@@ -1087,22 +1301,31 @@ d3.json("data.json").then(data => {
     return `rgba(${shade}, ${shade}, ${blue}, ${alpha})`;
   }
 
-  function metricValue(link, metricId) {
-    return Number(link.metrics?.[metricId] ?? 0);
-  }
-
-  function scoreOpacity(link, metricId) {
-    const maxScore = metricMaxima[metricId] || 1;
-    const value = metricValue(link, metricId);
+  function scoreOpacity(value, maxScore) {
     const ratio = maxScore > 0 ? clamp(value / maxScore, 0, 1) : 0;
     return 0.18 + ratio * 0.64;
   }
 
-  function linkWidth(link, metricId) {
-    const maxScore = metricMaxima[metricId] || 1;
-    const value = metricValue(link, metricId);
+  function linkWidth(value, maxScore) {
     const ratio = maxScore > 0 ? clamp(value / maxScore, 0, 1) : 0;
     return linkMin + ratio * (linkMax - linkMin);
+  }
+
+  function shapeWeightLabel(metricId) {
+    const labels = {
+      shape_iou: "Shape",
+      support_jaccard: "Jaccard",
+      area_ratio: "Area",
+      bbox_iou: "BBox",
+      centroid_similarity: "Center"
+    };
+    return labels[metricId] || metricId;
+  }
+
+  function formatWeight(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "0";
+    return (Math.round(n * 1000) / 1000).toString();
   }
 
   function rangeLabel(range) {
@@ -1228,11 +1451,11 @@ d3.json("data.json").then(data => {
     const targetRsi = pathFilename(link.target_rsi_file || targetNode?.rsi_file) || "N/A";
     const sourceRsijson = pathFilename(link.source_rsijson_file || sourceNode?.rsijson_file) || "N/A";
     const targetRsijson = pathFilename(link.target_rsijson_file || targetNode?.rsijson_file) || "N/A";
-    const metricValueNow = metricValue(link, panel.metricId);
-    const metricMax = metricMaxima[panel.metricId] || 1;
+    const metricValueNow = metricValue(link, panel, panel.metricId);
+    const metricMax = metricMaxForPanel(panel, panel.metricId);
     const metricRatio = metricMax > 0 ? clamp(metricValueNow / metricMax, 0, 1) : 0;
     const scoreRows = metricsForMode(panel.dataMode)
-      .map(metric => `<div>${escapeHtml(metric.label)}</div><div>${escapeHtml(formatScore(metricValue(link, metric.id)))}</div>`)
+      .map(metric => `<div>${escapeHtml(metric.label)}</div><div>${escapeHtml(formatScore(metricValue(link, panel, metric.id)))}</div>`)
       .join("");
     return `
       <h3>Match ${escapeHtml(link.source_sheet_id)} → ${escapeHtml(link.target_sheet_id)}</h3>
@@ -1310,7 +1533,7 @@ d3.json("data.json").then(data => {
     const sourceImage = sourceNode?.thumbnail ? `<img class="thumb" src="${escapeHtml(sourceNode.thumbnail)}" alt="Source">` : "<p>No image</p>";
     const targetImage = targetNode?.thumbnail ? `<img class="thumb" src="${escapeHtml(targetNode.thumbnail)}" alt="Target">` : "<p>No image</p>";
     const selectedMetricLabel = metricLabel(panel.dataMode, panel.metricId);
-    const selectedMetricValue = metricValue(link, panel.metricId);
+    const selectedMetricValue = metricValue(link, panel, panel.metricId);
     const sourceImageFile = sourceNode?.thumbnail ? imageFilename(sourceNode.thumbnail) : "N/A";
     const targetImageFile = targetNode?.thumbnail ? imageFilename(targetNode.thumbnail) : "N/A";
     const sourceRsi = link.source_rsi_file || sourceNode?.rsi_file || "";
@@ -1318,7 +1541,7 @@ d3.json("data.json").then(data => {
     const sourceRsijson = link.source_rsijson_file || sourceNode?.rsijson_file || "";
     const targetRsijson = link.target_rsijson_file || targetNode?.rsijson_file || "";
     const metricRows = metricsForMode(panel.dataMode)
-      .map(metric => `<div>${escapeHtml(metric.label)}</div><div>${escapeHtml(formatScore(metricValue(link, metric.id)))}</div>`)
+      .map(metric => `<div>${escapeHtml(metric.label)}</div><div>${escapeHtml(formatScore(metricValue(link, panel, metric.id)))}</div>`)
       .join("");
     const rawTable = scalarMetadataTable({
       mode: panel.dataMode,
@@ -1404,10 +1627,10 @@ d3.json("data.json").then(data => {
 
   function gatherVisibleMatchEdges(panel, thresholdPercent) {
     const edges = [];
-    const pairs = pairsForMode(panel.dataMode);
+    const pairs = pairsForMode(panel.dataMode, panel);
     const ranges = normalizedRanges();
     const threshold = clamp(Number(thresholdPercent) || 0, 0, 100) / 100;
-    const metricMax = metricMaxima[panel.metricId] || 1;
+    const metricMax = metricMaxForPanel(panel, panel.metricId);
     const visible = new Set();
     for (const range of ranges.length ? ranges : [{ start: 0, end: timestepMax }]) {
       for (let t = range.start; t <= range.end; t += 1) visible.add(t);
@@ -1416,7 +1639,7 @@ d3.json("data.json").then(data => {
     for (const pair of pairs) {
       if (!visible.has(pair.source_timestep_index) || !visible.has(pair.target_timestep_index)) continue;
       for (const match of pair.matches) {
-        const score = metricValue(match, panel.metricId);
+        const score = metricValue(match, panel, panel.metricId);
         const normalized = metricMax > 0 ? score / metricMax : 0;
         if (normalized < threshold) continue;
         edges.push({
@@ -1433,8 +1656,8 @@ d3.json("data.json").then(data => {
           target_rsi_file: pair.target_rsi_file || match.target_rsi_file || "",
           global_bounds: pair.global_bounds || [],
           score,
-          width: linkWidth(match, panel.metricId),
-          opacity: scoreOpacity(match, panel.metricId)
+          width: linkWidth(score, metricMax),
+          opacity: scoreOpacity(score, metricMax)
         });
       }
     }
@@ -1772,17 +1995,17 @@ d3.json("data.json").then(data => {
       const panel = getPanelById(panelId);
       if (!panel || !view.linkSelection) return;
       const threshold = clamp(Number(panel.threshold) || 0, 0, 100) / 100;
-      const metricMax = metricMaxima[panel.metricId] || 1;
+      const metricMax = metricMaxForPanel(panel, panel.metricId);
       const hideIsolated = Boolean(state.layoutControls.hideIsolated);
       if (!hideIsolated) {
         if (view.nodeSelection) view.nodeSelection.style("display", null);
         view.linkSelection
           .style("display", d => {
-            const normalized = metricMax > 0 ? metricValue(d, panel.metricId) / metricMax : 0;
+            const normalized = metricMax > 0 ? metricValue(d, panel, panel.metricId) / metricMax : 0;
             return normalized >= threshold ? null : "none";
           })
           .style("pointer-events", d => {
-            const normalized = metricMax > 0 ? metricValue(d, panel.metricId) / metricMax : 0;
+            const normalized = metricMax > 0 ? metricValue(d, panel, panel.metricId) / metricMax : 0;
             return normalized >= threshold ? "all" : "none";
           });
         return;
@@ -1790,7 +2013,7 @@ d3.json("data.json").then(data => {
 
       const incidentNodes = new Set();
       view.linkSelection.each(function(d) {
-        const normalized = metricMax > 0 ? metricValue(d, panel.metricId) / metricMax : 0;
+        const normalized = metricMax > 0 ? metricValue(d, panel, panel.metricId) / metricMax : 0;
         const visible = normalized >= threshold;
         this.style.display = visible ? "" : "none";
         this.style.pointerEvents = visible ? "all" : "none";
@@ -2118,6 +2341,86 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       renderAll();
     });
 
+    if (panel.dataMode === "hybrid") {
+      ensurePanelShapeWeights(panel);
+      ensurePanelHybridConfig(panel);
+      const hybridControls = controls.append("div").attr("class", "hybrid-controls");
+
+      const overlapMetricItem = hybridControls.append("label").attr("class", "hybrid-item");
+      overlapMetricItem.append("span").text("Vertex metric");
+      const overlapMetricSelect = overlapMetricItem.append("select");
+      overlapMetricIds.forEach(metricId => {
+        overlapMetricSelect.append("option")
+          .attr("value", metricId)
+          .property("selected", metricId === panel.hybridVertexMetric)
+          .text(metricLabel("overlap", metricId));
+      });
+      overlapMetricSelect.on("change", event => {
+        panel.hybridVertexMetric = sanitizeHybridVertexMetric(event.target.value);
+        renderAll();
+      });
+
+      const vertexWeightItem = hybridControls.append("label").attr("class", "hybrid-item");
+      vertexWeightItem.append("span").text("Vertex w");
+      const vertexWeightInput = vertexWeightItem.append("input")
+        .attr("type", "number")
+        .attr("min", 0)
+        .attr("step", 0.01)
+        .property("value", formatWeight(panel.hybridWeights.vertex_overlap));
+      window.ReebViewerCommon.bindCommittedNumberInput(vertexWeightInput.node(), raw => {
+        const value = Number(raw);
+        if (!Number.isFinite(value) || value < 0) {
+          vertexWeightInput.property("value", formatWeight(panel.hybridWeights.vertex_overlap));
+          return;
+        }
+        panel.hybridWeights.vertex_overlap = value;
+        panel.hybridWeights = sanitizeHybridWeights(panel.hybridWeights);
+        renderAll();
+      });
+
+      const shapeWeightItem = hybridControls.append("label").attr("class", "hybrid-item");
+      shapeWeightItem.append("span").text("Shape w");
+      const shapeWeightInput = shapeWeightItem.append("input")
+        .attr("type", "number")
+        .attr("min", 0)
+        .attr("step", 0.01)
+        .property("value", formatWeight(panel.hybridWeights.shape_combined));
+      window.ReebViewerCommon.bindCommittedNumberInput(shapeWeightInput.node(), raw => {
+        const value = Number(raw);
+        if (!Number.isFinite(value) || value < 0) {
+          shapeWeightInput.property("value", formatWeight(panel.hybridWeights.shape_combined));
+          return;
+        }
+        panel.hybridWeights.shape_combined = value;
+        panel.hybridWeights = sanitizeHybridWeights(panel.hybridWeights);
+        renderAll();
+      });
+    }
+
+    if (panel.dataMode === "shape" || panel.dataMode === "hybrid") {
+      ensurePanelShapeWeights(panel);
+      const weightControls = controls.append("div").attr("class", "shape-weight-controls");
+      shapeScoreComponentIds.forEach(metricId => {
+        const item = weightControls.append("label").attr("class", "shape-weight-item");
+        item.append("span").text(shapeWeightLabel(metricId));
+        const input = item.append("input")
+          .attr("type", "number")
+          .attr("min", 0)
+          .attr("step", 0.01)
+          .property("value", formatWeight(panel.shapeWeights[metricId]));
+        window.ReebViewerCommon.bindCommittedNumberInput(input.node(), raw => {
+          const value = Number(raw);
+          if (!Number.isFinite(value) || value < 0) {
+            input.property("value", formatWeight(panel.shapeWeights[metricId]));
+            return;
+          }
+          panel.shapeWeights[metricId] = value;
+          panel.shapeWeights = sanitizeShapeWeights(panel.shapeWeights);
+          renderAll();
+        });
+      });
+    }
+
     const canvas = container.append("div").attr("class", "panel-canvas");
     const svg = canvas.append("svg").attr("class", "summary-chart");
 
@@ -2373,7 +2676,13 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
   }
 
   function addPanel() {
-    state.panels.push({ id: state.nextPanelId++, dataMode: "shape", metricId: "combined", threshold: 0 });
+    state.panels.push({
+      id: state.nextPanelId++,
+      dataMode: "shape",
+      metricId: "combined",
+      threshold: 0,
+      shapeWeights: cloneDefaultShapeWeights()
+    });
     renderAll();
   }
 

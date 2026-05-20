@@ -59,6 +59,7 @@ from common import (
     RESERVE_CORES,
     RSI_DIR,
     RS_DIR,
+    SHAPE_SCORE_DEFAULT_WEIGHTS,
     TOP_N_SHEETS,
     TTK_BUILD_LIB_DIR,
     TTK_INSTALL_LIB_DIR,
@@ -714,11 +715,11 @@ def shape_score(source: SheetDescriptor, target: SheetDescriptor, source_mask: n
     centroid = centroid_similarity(source.centroid, target.centroid, global_bounds)
 
     final = (
-        0.40 * geom
-        + 0.30 * support
-        + 0.15 * area_ratio
-        + 0.10 * bb_iou
-        + 0.05 * centroid
+        SHAPE_SCORE_DEFAULT_WEIGHTS["shape_iou"] * geom
+        + SHAPE_SCORE_DEFAULT_WEIGHTS["support_jaccard"] * support
+        + SHAPE_SCORE_DEFAULT_WEIGHTS["area_ratio"] * area_ratio
+        + SHAPE_SCORE_DEFAULT_WEIGHTS["bbox_iou"] * bb_iou
+        + SHAPE_SCORE_DEFAULT_WEIGHTS["centroid_similarity"] * centroid
     )
 
     return {
@@ -846,6 +847,7 @@ def compare_all_pairs(
         "num_timesteps": len(timesteps),
         "grid_size": GRID_SIZE,
         "top_n_sheets": TOP_N_SHEETS,
+        "combined_score_weights": SHAPE_SCORE_DEFAULT_WEIGHTS,
         "global_bounds": list(global_bounds),
         "pairwise_matches": results,
     }
@@ -855,6 +857,7 @@ def compare_all_pairs(
         "num_pairs": len(results),
         "max_pair_count": max((item["pair_count"] for item in results), default=0),
         "avg_pair_count": float(np.mean([item["pair_count"] for item in results])) if results else 0.0,
+        "combined_score_weights": SHAPE_SCORE_DEFAULT_WEIGHTS,
         "top_pairs_by_match_count": sorted(
             (
                 {
