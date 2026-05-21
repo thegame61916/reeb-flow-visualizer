@@ -15,7 +15,7 @@ from unified_sankey_viewer.stage_07_unified_sankey_viewer import (
 
 # ================= USER SETTINGS =================
 
-RUN_STAGE_1_FV99 = False
+RUN_STAGE_1_FV99 = True
 RUN_STAGE_2_RSI_JSON = True
 RUN_STAGE_2B_SHAPE_MATCHING = True
 RUN_STAGE_3_OVERLAPS = True

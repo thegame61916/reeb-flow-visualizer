@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Batch render Reeb-space images with sheet colors from VTU orbital scalars.
+Batch render Reeb-space images with a uniform sheet color.
 
-Edit the global variables below, then run:
+Uses project paths from common.py, then run:
 
     python3 scripts/render_rs_directory_orbital_colours.py
 
@@ -11,16 +11,7 @@ For every .rs file in RS_DIRECTORY, this script looks for matching .rsi and
 the existing C++ executable, and writes only PNG files:
 
     OUTPUT_DIRECTORY/<rs-stem>/<rs-stem>.png
-    OUTPUT_DIRECTORY/<rs-stem>/<sheet-id>_<hex-color>.png
-
-Sheet color logic:
-
-    score(sheet) = sum over vertices in rsi sheet vertex list of
-                   orb00(vertex)^2 - orb01(vertex)^2
-
-Positive scores are green, negative scores are red. Saturation is normalized by
-the largest absolute score among the rendered sheets for that .rs file.
-The full Reeb-space image keeps the original area-rank color palette.
+    OUTPUT_DIRECTORY/<rs-stem>/sheet_<sheet-id>.png
 """
 
 from __future__ import annotations
@@ -42,18 +33,26 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
 
-try:
-    import vtk
-    from vtk.util.numpy_support import vtk_to_numpy
-except ImportError as exc:
-    raise SystemExit("This script requires VTK Python bindings: import vtk failed.") from exc
-
 SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from common import (  # noqa: E402
+    FV99,
+    RSI_DIR,
+    RS_DIR,
+    SHEET_IMAGE_DIR,
+    SHEET_RENDERER_TEMP_DIR,
+    SHEET_RENDERER_UNIFORM_SHEET_COLOR,
+    TTK_BUILD_LIB_DIR,
+    TTK_INSTALL_LIB_DIR,
+    VTK_LIB_DIR,
+    VTU_DIR,
+)
 from render_rs_sheets import (  # noqa: E402
-    color_for_rank,
     export_sheet_vtp,
     read_sheet_vtp,
     sheet_areas,
@@ -64,19 +63,10 @@ from render_rs_sheets import (  # noqa: E402
 # Global configuration
 # ---------------------------------------------------------------------------
 
-RS_DIRECTORY = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene/reebSpaces")
-RSI_DIRECTORY = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene/sheetInfo")
-VTU_DIRECTORY = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene/downsampledGrids")
-OUTPUT_DIRECTORY = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene/sheetREndering")
-
-FV99 = Path("/home/mohit/Desktop/postdoc/petars_fiber_flexing/petarsCode/arrange-and-traverse-algorithm/build/fv99")
-
-# Runtime library paths
-FV99_ROOT = FV99.parent.parent
-
-VTK_LIB_DIR = FV99_ROOT / "libraries/vtk/install/lib"
-TTK_BUILD_LIB_DIR = FV99_ROOT / "libraries/ttk/build/lib"
-TTK_INSTALL_LIB_DIR = FV99_ROOT / "libraries/ttk/install/lib"
+RS_DIRECTORY = RS_DIR
+RSI_DIRECTORY = RSI_DIR
+VTU_DIRECTORY = VTU_DIR
+OUTPUT_DIRECTORY = SHEET_IMAGE_DIR
 
 LD_LIBRARY_PATH = os.pathsep.join(
     str(path)
@@ -84,24 +74,21 @@ LD_LIBRARY_PATH = os.pathsep.join(
     if path.exists()
 )
 
-TOP_N_SHEETS = 10
+TOP_N_SHEETS = 20
 MAX_WORKERS = 2
 
-# The exported sheet geometry can be hundreds of MB per time step. Keep it off
-# /tmp because /tmp is often tmpfs and can consume RAM-backed storage, and keep
-# it off the data drive because that drive is already close to full.
-TEMP_DIRECTORY = Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/sheet_renderer_tmp")
+# The exported sheet geometry can be hundreds of MB per time step. Keep a
+# dedicated temp directory under the configured output root.
+TEMP_DIRECTORY = SHEET_RENDERER_TEMP_DIR
 TEMP_PREFIX = "rs-render-"
 STALE_TEMP_MAX_AGE_HOURS = 6
 MIN_TEMP_FREE_GB = 50
 MIN_OUTPUT_FREE_GB = 5
 
-ORB00_ARRAY_NAME = "orb00"
-ORB01_ARRAY_NAME = "orb01"
-
 FIGURE_WIDTH = 8.0
 FIGURE_HEIGHT = 8.0
 DPI = 200
+UNIFORM_SHEET_COLOR = SHEET_RENDERER_UNIFORM_SHEET_COLOR
 
 
 @dataclass(frozen=True)
@@ -161,68 +148,6 @@ def read_rsi(path: Path) -> RsiData:
         sheet_area=sheet_area,
         sheet_vertices=sheet_vertices,
     )
-
-
-def read_vtu_point_arrays(path: Path, array_0: str, array_1: str):
-    reader = vtk.vtkXMLUnstructuredGridReader()
-    reader.SetFileName(str(path))
-    reader.Update()
-    mesh = reader.GetOutput()
-    point_data = mesh.GetPointData()
-
-    arr0 = point_data.GetArray(array_0)
-    arr1 = point_data.GetArray(array_1)
-    if arr0 is None or arr1 is None:
-        names = [point_data.GetArrayName(i) for i in range(point_data.GetNumberOfArrays())]
-        raise ValueError(
-            f"{path} is missing {array_0!r} or {array_1!r}. Available point arrays: {names}"
-        )
-
-    return vtk_to_numpy(arr0), vtk_to_numpy(arr1)
-
-
-def compute_sheet_scores(rsi: RsiData, orb00, orb01) -> dict[int, float]:
-    scores: dict[int, float] = {}
-    n = min(len(orb00), len(orb01))
-
-    def scalar_value(array, index: int) -> float:
-        value = array[index]
-        if hasattr(value, "__len__"):
-            return float(value[0])
-        return float(value)
-
-    for sheet_id, vertices in rsi.sheet_vertices.items():
-        score = 0.0
-        for vertex_id in vertices:
-            if 0 <= vertex_id < n:
-                a = scalar_value(orb00, vertex_id)
-                b = scalar_value(orb01, vertex_id)
-                score += a * a - b * b
-        scores[sheet_id] = score
-
-    return scores
-
-
-def color_from_score(score: float, max_abs_score: float) -> tuple[float, float, float]:
-    if max_abs_score <= 0.0:
-        saturation = 0.0
-    else:
-        saturation = min(1.0, abs(score) / max_abs_score)
-
-    # Keep near-zero sheets visible instead of pure white.
-    saturation = 0.15 + 0.85 * saturation if saturation > 0.0 else 0.0
-
-    if score >= 0.0:
-        # Green, with saturation mixed against white.
-        return (1.0 - saturation, 1.0, 1.0 - saturation)
-
-    # Red, with saturation mixed against white.
-    return (1.0, 1.0 - saturation, 1.0 - saturation)
-
-
-def rgb_to_hex(rgb: tuple[float, float, float]) -> str:
-    r, g, b = (max(0, min(255, round(c * 255))) for c in rgb)
-    return f"{r:02x}{g:02x}{b:02x}"
 
 
 def free_gb(path: Path) -> float:
@@ -289,17 +214,11 @@ def render_colored(
     plt.close(fig)
 
 
-def render_original_full_reeb_space(sheet_polygons, output_path: Path) -> None:
-    areas = sheet_areas(sheet_polygons)
-    sheets_by_area = [sheet for sheet, _area in sorted(areas.items(), key=lambda item: item[1], reverse=True)]
-    rank_by_sheet = {sheet: rank for rank, sheet in enumerate(sheets_by_area)}
-
-    colors_by_sheet = {
-        sheet_id: color_for_rank(rank_by_sheet[sheet_id])
+def uniform_sheet_colors(sheet_polygons) -> dict[int, tuple[float, float, float]]:
+    return {
+        sheet_id: UNIFORM_SHEET_COLOR
         for sheet_id in set(sheet_polygons.sheet_ids)
     }
-
-    render_colored(sheet_polygons, output_path, colors_by_sheet)
 
 
 def matching_file(directory: Path, stem: str, suffix: str) -> Path:
@@ -338,8 +257,6 @@ def render_one(rs_path: Path, library_path: str) -> str:
     require_free_space(OUTPUT_DIRECTORY, MIN_OUTPUT_FREE_GB, "Output filesystem")
 
     rsi = read_rsi(rsi_path)
-    orb00, orb01 = read_vtu_point_arrays(vtu_path, ORB00_ARRAY_NAME, ORB01_ARRAY_NAME)
-    scores = compute_sheet_scores(rsi, orb00, orb01)
 
     with tempfile.TemporaryDirectory(prefix=f"{TEMP_PREFIX}{stem}-", dir=TEMP_DIRECTORY) as tmp:
         sheet_vtp = Path(tmp) / f"{stem}.sheets.vtp"
@@ -347,19 +264,14 @@ def render_one(rs_path: Path, library_path: str) -> str:
         sheet_polygons = read_sheet_vtp(sheet_vtp)
 
     sheets = sheets_to_render(rsi, sheet_polygons)
-    max_abs_score = max((abs(scores.get(sheet_id, 0.0)) for sheet_id in sheets), default=0.0)
-    colors_by_sheet = {
-        sheet_id: color_from_score(scores.get(sheet_id, 0.0), max_abs_score)
-        for sheet_id in set(sheet_polygons.sheet_ids)
-    }
+    colors_by_sheet = uniform_sheet_colors(sheet_polygons)
 
-    render_original_full_reeb_space(sheet_polygons, output_dir / f"{stem}.png")
+    render_colored(sheet_polygons, output_dir / f"{stem}.png", colors_by_sheet)
 
     for sheet_id in sheets:
-        color_hex = rgb_to_hex(colors_by_sheet[sheet_id])
         render_colored(
             sheet_polygons,
-            output_dir / f"{sheet_id}_{color_hex}.png",
+            output_dir / f"sheet_{sheet_id}.png",
             colors_by_sheet,
             selected_sheet=sheet_id,
         )

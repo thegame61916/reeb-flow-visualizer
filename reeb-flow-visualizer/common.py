@@ -3,7 +3,7 @@ from pathlib import Path
 
 # ================= USER SETTINGS =================
 
-BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene")
+BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/MVK_s1")
 
 FV99 = Path(
     "/home/mohit/Desktop/postdoc/petars_fiber_flexing/"
@@ -54,6 +54,8 @@ RSI_JSON_DIR = OUTPUT_DIR / "rsi_json"
 UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
 VIEWER_DIR = UNIFIED_VIEWER_DIR
 SHEET_IMAGE_DIR = BASE_DIR / "sheetRendering"
+SHEET_RENDERER_TEMP_DIR = SHEET_IMAGE_DIR / "_tmp"
+SHEET_RENDERER_UNIFORM_SHEET_COLOR = (0.20, 0.60, 0.90)
 
 
 # Output files

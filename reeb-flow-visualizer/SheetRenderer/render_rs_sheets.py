@@ -27,8 +27,22 @@ from typing import Iterable
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
+
+from common import (
+    FV99,
+    SHEET_IMAGE_DIR,
+    SHEET_RENDERER_TEMP_DIR,
+    TTK_BUILD_LIB_DIR,
+    TTK_INSTALL_LIB_DIR,
+    VTK_LIB_DIR,
+)
 
 
 @dataclass(frozen=True)
@@ -278,11 +292,13 @@ def render(
     plt.close(fig)
 
 
-def default_library_path(repo_root: Path) -> str:
+def default_library_path() -> str:
+    fv99_root = FV99.parent.parent
     candidates = [
-        repo_root / "libraries" / "ttk" / "install" / "lib",
-        repo_root / "libraries" / "vtk" / "install" / "lib",
-        repo_root / "libraries" / "cgal" / "install" / "lib",
+        TTK_INSTALL_LIB_DIR,
+        TTK_BUILD_LIB_DIR,
+        VTK_LIB_DIR,
+        fv99_root / "libraries" / "cgal" / "install" / "lib",
     ]
     return os.pathsep.join(str(path.resolve()) for path in candidates if path.exists())
 
@@ -325,12 +341,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rs", required=True, type=Path, help="Input .rs file.")
     parser.add_argument("--mesh", type=Path, help="Original .vtu/.txt dataset. Required if --sheets-vtp is omitted.")
     parser.add_argument("--sheets-vtp", type=Path, help="Optional existing sheet .vtp from --outputSheetPolygons.")
-    parser.add_argument("--exe", type=Path, default=Path("build/fv99"), help="Project executable used to export VTP.")
+    parser.add_argument("--exe", type=Path, default=FV99, help="Project executable used to export VTP.")
     parser.add_argument(
         "--ld-library-path",
-        help="Library path prepended when running --exe. Defaults to local libraries/*/install/lib if present.",
+        help="Library path prepended when running --exe. Defaults to common.py FV99-linked library directories.",
     )
-    parser.add_argument("--out-dir", type=Path, default=Path("output/rs_renderings"), help="Output image directory.")
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=SHEET_IMAGE_DIR / "rs_renderings",
+        help="Output image directory.",
+    )
     parser.add_argument("--prefix", help="Output filename prefix. Defaults to the .rs stem.")
     parser.add_argument("--sheets", help="Comma-separated sheet IDs to render. Defaults to every sheet in the VTP.")
     parser.add_argument("--top", type=int, help="Render only the top N sheets by polygon area.")
@@ -358,12 +379,15 @@ def main(argv: list[str] | None = None) -> int:
     if sheets_vtp is None:
         if args.mesh is None:
             raise SystemExit("Provide --mesh so the Reeb-space geometry can be reconstructed for rendering.")
-        temporary_directory = tempfile.TemporaryDirectory(prefix="rs-render-")
+        SHEET_RENDERER_TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        temporary_directory = tempfile.TemporaryDirectory(
+            prefix="rs-render-",
+            dir=SHEET_RENDERER_TEMP_DIR,
+        )
         sheets_vtp = Path(temporary_directory.name) / f"{prefix}.sheets.vtp"
-        repo_root = Path(__file__).resolve().parents[1]
         library_path = args.ld_library_path
         if library_path is None:
-            library_path = default_library_path(repo_root)
+            library_path = default_library_path()
         export_sheet_vtp(args.exe, args.mesh, rs_path, sheets_vtp, library_path)
 
     sheet_polygons = read_sheet_vtp(sheets_vtp.resolve())
