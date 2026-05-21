@@ -29,7 +29,6 @@ TIMESTEP_CACHE_DIR = STORAGE_ROOT / "cache" / "timesteps"
 MATCHES_FILE = STORAGE_ROOT / "results" / "sheet_shape_matches.json"
 
 UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
-ROOT_INDEX_FILE = OUTPUT_DIR / "index.html"
 
 SHAPE_METRICS = [
     {"id": "combined", "label": "combined", "field": "final_score"},
@@ -953,31 +952,6 @@ svg.summary-chart {
 """ + shared_viewer_css()
     )
     return path
-
-
-def write_root_index_html() -> Path:
-    ROOT_INDEX_FILE.parent.mkdir(parents=True, exist_ok=True)
-    ROOT_INDEX_FILE.write_text(
-        """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Unified Reeb Sankey Viewer</title>
-  <meta http-equiv="refresh" content="0; url=unified_sankey_viewer/index.html">
-</head>
-<body>
-  <script>
-    window.location.replace("unified_sankey_viewer/index.html");
-  </script>
-  <noscript>
-    <a href="unified_sankey_viewer/index.html">Open unified viewer</a>
-  </noscript>
-</body>
-</html>
-"""
-    )
-    return ROOT_INDEX_FILE
 
 
 def write_viewer_js() -> Path:
@@ -2921,14 +2895,12 @@ def build_unified_sankey_viewer_stage() -> None:
     js_path = write_viewer_js()
     css_path = write_style_css()
     common_js_path = write_viewer_common_js(UNIFIED_VIEWER_DIR)
-    root_index_path = write_root_index_html()
 
     print(f"Wrote unified sankey viewer: {UNIFIED_VIEWER_DIR}")
     for artifact in (data_path, index_path, js_path, css_path, common_js_path):
       print(f"  {artifact.name}")
-    print(f"Wrote root entry: {root_index_path}")
     print("\nOpen with:")
-    print(f"  cd {OUTPUT_DIR}")
+    print(f"  cd {UNIFIED_VIEWER_DIR}")
     print("  python3 -m http.server 8000")
     print("  http://localhost:8000")
 

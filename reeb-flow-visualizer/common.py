@@ -15,8 +15,6 @@ RESERVE_CORES = 20
 TOP_N_SHEETS = 20
 VIEWER_DEFAULT_TOP_SHEETS = 10
 
-SANKEY_TITLE = "Time-Varying Reeb Sheet Overlap"
-
 # Default weights for combined shape score.
 # These are used by compareSheetShapes, overlap attachment metadata,
 # and unified viewer defaults.
@@ -60,7 +58,6 @@ SHEET_IMAGE_DIR = BASE_DIR / "sheetRendering"
 
 # Output files
 OVERLAP_FILE = OUTPUT_DIR / "sheet_overlaps.json"
-HTML_FILE = OUTPUT_DIR / "sankey.html"
 
 
 # Log files

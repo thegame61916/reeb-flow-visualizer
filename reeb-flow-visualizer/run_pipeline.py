@@ -3,7 +3,6 @@
 import stage_01_run_fv99 as s1
 import stage_02_build_sankey_data as s2
 import stage_03_compute_sheet_overlaps as s3
-import stage_04_plot_sankey as s4
 
 from compareSheetShapes.compare_sheet_shapes import (
     main as run_shape_matching_main,
@@ -22,8 +21,6 @@ RUN_STAGE_2B_SHAPE_MATCHING = True
 RUN_STAGE_3_OVERLAPS = True
 
 RUN_UNIFIED_SANKEY_VIEWER = True
-
-RUN_LEGACY_PLOTLY_SANKEY = False
 
 # Shape matching can be expensive.
 # Use a small number for testing, or None to use the default from shape_matching.py.
@@ -72,14 +69,6 @@ def enabled_stages():
             (
                 "Stage 4: build unified Sankey viewer",
                 build_unified_sankey_viewer_stage,
-            )
-        )
-
-    if RUN_LEGACY_PLOTLY_SANKEY:
-        stages.append(
-            (
-                "Stage 4b: plot legacy Plotly Sankey HTML",
-                s4.plot_sankey_stage,
             )
         )
 
