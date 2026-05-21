@@ -3,7 +3,7 @@ from pathlib import Path
 
 # ================= USER SETTINGS =================
 
-BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/MVK_s1")
+BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene")
 
 FV99 = Path(
     "/home/mohit/Desktop/postdoc/petars_fiber_flexing/"
@@ -14,6 +14,7 @@ EPSILON = "0.00000000"
 RESERVE_CORES = 20
 TOP_N_SHEETS = 20
 VIEWER_DEFAULT_TOP_SHEETS = 10
+SHEET_RENDERER_WORKERS = 10
 
 # Default weights for combined shape score.
 # These are used by compareSheetShapes, overlap attachment metadata,
@@ -41,6 +42,18 @@ HYBRID_SCORE_DEFAULT_WEIGHTS = {
 # Default overlap metric used as vertex component in hybrid mode.
 HYBRID_VERTEX_METRIC_DEFAULT = "overlap_max_percent"
 
+# Pipeline stage flags
+RUN_STAGE_1_FV99 = False
+RUN_STAGE_2_RSI_JSON = False
+RUN_STAGE_2B_SHAPE_MATCHING = False
+RUN_STAGE_3_OVERLAPS = False
+RUN_UNIFIED_SANKEY_VIEWER = True
+
+# Shape matching can be expensive.
+# Use a small number for testing, or None to use the default from
+# compareSheetShapes/compare_sheet_shapes.py.
+SHAPE_MATCHING_WORKERS = None
+
 # ==================================================
 
 
@@ -54,7 +67,10 @@ RSI_JSON_DIR = OUTPUT_DIR / "rsi_json"
 UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
 VIEWER_DIR = UNIFIED_VIEWER_DIR
 SHEET_IMAGE_DIR = BASE_DIR / "sheetRendering"
-SHEET_RENDERER_TEMP_DIR = SHEET_IMAGE_DIR / "_tmp"
+SHEET_RENDERER_TEMP_DIR = (
+    Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/sheet_renderer_tmp")
+    / BASE_DIR.name
+)
 SHEET_RENDERER_UNIFORM_SHEET_COLOR = (0.20, 0.60, 0.90)
 
 

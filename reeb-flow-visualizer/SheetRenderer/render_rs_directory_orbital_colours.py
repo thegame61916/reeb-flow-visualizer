@@ -12,10 +12,16 @@ the existing C++ executable, and writes only PNG files:
 
     OUTPUT_DIRECTORY/<rs-stem>/<rs-stem>.png
     OUTPUT_DIRECTORY/<rs-stem>/sheet_<sheet-id>.png
+
+Cached VTP behavior:
+  - default: reuse cached VTPs and build only missing ones
+  - --rebuild-cache: force rebuilding all VTP cache entries
+  - --clean-cache: clear VTP cache before rendering
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import shutil
 import struct
@@ -47,6 +53,7 @@ from common import (  # noqa: E402
     SHEET_IMAGE_DIR,
     SHEET_RENDERER_TEMP_DIR,
     SHEET_RENDERER_UNIFORM_SHEET_COLOR,
+    SHEET_RENDERER_WORKERS,
     TTK_BUILD_LIB_DIR,
     TTK_INSTALL_LIB_DIR,
     VTK_LIB_DIR,
@@ -75,7 +82,6 @@ LD_LIBRARY_PATH = os.pathsep.join(
 )
 
 TOP_N_SHEETS = 20
-MAX_WORKERS = 2
 
 # The exported sheet geometry can be hundreds of MB per time step. Keep a
 # dedicated temp directory under the configured output root.
@@ -84,6 +90,7 @@ TEMP_PREFIX = "rs-render-"
 STALE_TEMP_MAX_AGE_HOURS = 6
 MIN_TEMP_FREE_GB = 50
 MIN_OUTPUT_FREE_GB = 5
+VTP_CACHE_DIR = TEMP_DIRECTORY / "vtp_cache"
 
 FIGURE_WIDTH = 8.0
 FIGURE_HEIGHT = 8.0
@@ -246,7 +253,36 @@ def sheets_to_render(rsi: RsiData, sheet_polygons) -> list[int]:
     return sheets
 
 
-def render_one(rs_path: Path, library_path: str) -> str:
+def load_or_build_sheet_vtp(
+    stem: str,
+    vtu_path: Path,
+    rs_path: Path,
+    library_path: str,
+    rebuild_cache: bool,
+):
+    cached_vtp = VTP_CACHE_DIR / f"{stem}.sheets.vtp"
+    cache_status = "reused"
+
+    if cached_vtp.exists() and not rebuild_cache:
+        try:
+            return read_sheet_vtp(cached_vtp), cache_status
+        except Exception as exc:
+            raise RuntimeError(
+                f"Cached VTP is unreadable: {cached_vtp}. "
+                f"Run with --rebuild-cache or --clean-cache. Error: {exc}"
+            ) from exc
+
+    cache_status = "rebuilt" if cached_vtp.exists() else "built"
+    with tempfile.TemporaryDirectory(prefix=f"{TEMP_PREFIX}{stem}-", dir=TEMP_DIRECTORY) as tmp:
+        tmp_vtp = Path(tmp) / f"{stem}.sheets.vtp"
+        export_sheet_vtp(FV99, vtu_path, rs_path, tmp_vtp, library_path)
+        cached_vtp.parent.mkdir(parents=True, exist_ok=True)
+        tmp_vtp.replace(cached_vtp)
+
+    return read_sheet_vtp(cached_vtp), cache_status
+
+
+def render_one(rs_path: Path, library_path: str, rebuild_cache: bool) -> str:
     stem = rs_path.stem
     rsi_path = matching_file(RSI_DIRECTORY, stem, ".rsi")
     vtu_path = matching_file(VTU_DIRECTORY, stem, ".vtu")
@@ -257,11 +293,13 @@ def render_one(rs_path: Path, library_path: str) -> str:
     require_free_space(OUTPUT_DIRECTORY, MIN_OUTPUT_FREE_GB, "Output filesystem")
 
     rsi = read_rsi(rsi_path)
-
-    with tempfile.TemporaryDirectory(prefix=f"{TEMP_PREFIX}{stem}-", dir=TEMP_DIRECTORY) as tmp:
-        sheet_vtp = Path(tmp) / f"{stem}.sheets.vtp"
-        export_sheet_vtp(FV99, vtu_path, rs_path, sheet_vtp, library_path)
-        sheet_polygons = read_sheet_vtp(sheet_vtp)
+    sheet_polygons, cache_status = load_or_build_sheet_vtp(
+        stem=stem,
+        vtu_path=vtu_path,
+        rs_path=rs_path,
+        library_path=library_path,
+        rebuild_cache=rebuild_cache,
+    )
 
     sheets = sheets_to_render(rsi, sheet_polygons)
     colors_by_sheet = uniform_sheet_colors(sheet_polygons)
@@ -276,13 +314,36 @@ def render_one(rs_path: Path, library_path: str) -> str:
             selected_sheet=sheet_id,
         )
 
-    return f"{stem}: wrote {1 + len(sheets)} image(s) to {output_dir}"
+    return f"{stem}: {cache_status} VTP, wrote {1 + len(sheets)} image(s) to {output_dir}"
 
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--rebuild-cache",
+        action="store_true",
+        help="Force rebuilding cached VTP files before rendering.",
+    )
+    parser.add_argument(
+        "--clean-cache",
+        action="store_true",
+        help="Delete cached VTP files before rendering.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     library_path = LD_LIBRARY_PATH
     TEMP_DIRECTORY.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    VTP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    if args.clean_cache and VTP_CACHE_DIR.exists():
+        shutil.rmtree(VTP_CACHE_DIR)
+        VTP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        print(f"Cleared VTP cache: {VTP_CACHE_DIR}")
+
     cleanup_stale_temp_dirs(TEMP_DIRECTORY)
     require_free_space(TEMP_DIRECTORY, MIN_TEMP_FREE_GB, "Temporary filesystem")
     require_free_space(OUTPUT_DIRECTORY, MIN_OUTPUT_FREE_GB, "Output filesystem")
@@ -291,15 +352,16 @@ def main() -> int:
     if not rs_files:
         raise SystemExit(f"No .rs files found in {RS_DIRECTORY}")
 
-    workers = min(MAX_WORKERS, len(rs_files))
+    workers = min(max(1, int(SHEET_RENDERER_WORKERS)), len(rs_files))
     print(f"Rendering {len(rs_files)} time step(s) with {workers} worker process(es)")
     print(f"Temporary VTP directory: {TEMP_DIRECTORY}")
+    print(f"Persistent VTP cache: {VTP_CACHE_DIR}")
     print(f"Temporary free space: {free_gb(TEMP_DIRECTORY):.1f} GiB")
     print(f"Output free space: {free_gb(OUTPUT_DIRECTORY):.1f} GiB")
 
     with ProcessPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(render_one, rs_path, library_path): rs_path
+            executor.submit(render_one, rs_path, library_path, args.rebuild_cache): rs_path
             for rs_path in rs_files
         }
 

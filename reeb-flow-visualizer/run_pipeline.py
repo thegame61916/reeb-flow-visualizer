@@ -8,25 +8,18 @@ from compareSheetShapes.compare_sheet_shapes import (
     main as run_shape_matching_main,
 )
 
+from common import (
+    RUN_STAGE_1_FV99,
+    RUN_STAGE_2_RSI_JSON,
+    RUN_STAGE_2B_SHAPE_MATCHING,
+    RUN_STAGE_3_OVERLAPS,
+    RUN_UNIFIED_SANKEY_VIEWER,
+    SHAPE_MATCHING_WORKERS,
+)
+
 from unified_sankey_viewer.stage_07_unified_sankey_viewer import (
     build_unified_sankey_viewer_stage,
 )
-
-
-# ================= USER SETTINGS =================
-
-RUN_STAGE_1_FV99 = True
-RUN_STAGE_2_RSI_JSON = True
-RUN_STAGE_2B_SHAPE_MATCHING = True
-RUN_STAGE_3_OVERLAPS = True
-
-RUN_UNIFIED_SANKEY_VIEWER = True
-
-# Shape matching can be expensive.
-# Use a small number for testing, or None to use the default from shape_matching.py.
-SHAPE_MATCHING_WORKERS = None
-
-# ==================================================
 
 
 def enabled_stages():

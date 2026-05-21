@@ -113,7 +113,14 @@ def find_sheet_image(stem: str, sheet_id: int, viewer_dir: Path) -> str | None:
     if not folder.exists():
         return None
 
-    matches = sorted(folder.glob(f"{sheet_id}_*.png"))
+    # Prefer the new uniform-color filename, then fall back to the legacy
+    # "<sheet_id>_<hex>.png" format for backward compatibility.
+    matches = []
+    preferred = folder / f"sheet_{sheet_id}.png"
+    if preferred.exists():
+        matches.append(preferred)
+    else:
+        matches = sorted(folder.glob(f"{sheet_id}_*.png"))
     if not matches:
         return None
 
