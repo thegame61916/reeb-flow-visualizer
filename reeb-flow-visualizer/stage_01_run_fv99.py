@@ -9,6 +9,8 @@ from common import (
     EPSILON,
     FV99,
     FV99_FAILED_LOG_FILE,
+    FV99_OMP_THREADS,
+    FV99_PARTIAL_LOG_FILE,
     RESERVE_CORES,
     RSI_DIR,
     RS_DIR,
@@ -32,6 +34,7 @@ def make_fv99_environment():
         library_paths.append(env["LD_LIBRARY_PATH"])
 
     env["LD_LIBRARY_PATH"] = ":".join(library_paths)
+    env["OMP_NUM_THREADS"] = str(FV99_OMP_THREADS)
     return env
 
 
@@ -73,13 +76,11 @@ def run_fv99(vtu_file: Path):
             env=FV99_ENV,
         )
 
-    success = (
-        result.returncode == 0
-        and rs_file.exists()
-        and rsi_file.exists()
-    )
+    has_outputs = rs_file.exists() and rsi_file.exists()
+    success = result.returncode == 0 and has_outputs
+    partial = result.returncode != 0 and has_outputs
 
-    return vtu_file, success, result.returncode, log_file
+    return vtu_file, success, partial, result.returncode, log_file
 
 
 def run_fv99_stage():
@@ -95,6 +96,7 @@ def run_fv99_stage():
     print(f"Running fv99 on {len(vtu_files)} files using {num_workers} parallel jobs")
 
     failed_files = []
+    partial_files = []
 
     with ThreadPoolExecutor(max_workers=num_workers) as pool:
         futures = [
@@ -103,15 +105,25 @@ def run_fv99_stage():
         ]
 
         for count, future in enumerate(as_completed(futures), start=1):
-            vtu_file, success, returncode, log_file = future.result()
+            vtu_file, success, partial, returncode, log_file = future.result()
 
-            status = "done" if success else f"failed returncode={returncode}"
+            if success:
+                status = "done"
+            elif partial:
+                status = f"partial returncode={returncode}"
+            else:
+                status = f"failed returncode={returncode}"
             print(f"[{count}/{len(vtu_files)}] {status}: {vtu_file.name}", flush=True)
 
-            if not success:
+            if partial:
+                partial_files.append(f"{vtu_file}\treturncode={returncode}\tlog={log_file}")
+            elif not success:
                 failed_files.append(f"{vtu_file}\treturncode={returncode}\tlog={log_file}")
 
     FV99_FAILED_LOG_FILE.write_text("\n".join(failed_files))
+    FV99_PARTIAL_LOG_FILE.write_text("\n".join(partial_files))
 
     print(f"Failed files: {len(failed_files)}")
+    print(f"Partial files: {len(partial_files)}")
     print(f"Failure log: {FV99_FAILED_LOG_FILE}")
+    print(f"Partial log: {FV99_PARTIAL_LOG_FILE}")
