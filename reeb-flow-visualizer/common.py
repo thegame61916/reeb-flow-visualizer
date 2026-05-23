@@ -5,6 +5,20 @@ from pathlib import Path
 
 BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene")
 
+# Pipeline stage flags
+RUN_STAGE_1_FV99 = True
+RUN_STAGE_2_RSI_JSON = False
+RUN_STAGE_2B_SHAPE_MATCHING = False
+RUN_STAGE_3_OVERLAPS = False
+RUN_UNIFIED_SANKEY_VIEWER = False
+
+# Shape matching can be expensive.
+# Use a small number for testing, or None to use the default from
+# compareSheetShapes/compare_sheet_shapes.py.
+SHAPE_MATCHING_WORKERS = None
+
+# ==================================================
+
 FV99 = Path(
     "/home/mohit/Desktop/postdoc/petars_fiber_flexing/"
     "petarsCode/arrange-and-traverse-algorithm/build/fv99"
@@ -13,6 +27,15 @@ FV99 = Path(
 EPSILON = "0.00000000"
 RESERVE_CORES = 20
 FV99_OMP_THREADS = 1
+FV99_RETRY_EPSILONS = (
+    "0.000000001",
+    "0.00000001",
+    "0.0000001",
+    "0.000001",
+    "0.00001",
+    "0.0001",
+    "0.001",
+)
 TOP_N_SHEETS = 20
 VIEWER_DEFAULT_TOP_SHEETS = 10
 SHEET_RENDERER_WORKERS = 10
@@ -43,20 +66,6 @@ HYBRID_SCORE_DEFAULT_WEIGHTS = {
 # Default overlap metric used as vertex component in hybrid mode.
 HYBRID_VERTEX_METRIC_DEFAULT = "overlap_max_percent"
 
-# Pipeline stage flags
-RUN_STAGE_1_FV99 = True
-RUN_STAGE_2_RSI_JSON = True
-RUN_STAGE_2B_SHAPE_MATCHING = True
-RUN_STAGE_3_OVERLAPS = True
-RUN_UNIFIED_SANKEY_VIEWER = True
-
-# Shape matching can be expensive.
-# Use a small number for testing, or None to use the default from
-# compareSheetShapes/compare_sheet_shapes.py.
-SHAPE_MATCHING_WORKERS = None
-
-# ==================================================
-
 
 # Input/output directories
 VTU_DIR = BASE_DIR / "downsampledGrids"
@@ -67,6 +76,8 @@ OUTPUT_DIR = BASE_DIR / "sankey"
 RSI_JSON_DIR = OUTPUT_DIR / "rsi_json"
 UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
 VIEWER_DIR = UNIFIED_VIEWER_DIR
+FV99_PERTURBED_VTU_DIR = OUTPUT_DIR / "fv99_perturbed_vtu"
+FV99_ATTEMPT_DETAILS_DIR = OUTPUT_DIR / "fv99_attempt_details"
 SHEET_IMAGE_DIR = BASE_DIR / "sheetRendering"
 SHEET_RENDERER_TEMP_DIR = (
     Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/sheet_renderer_tmp")
