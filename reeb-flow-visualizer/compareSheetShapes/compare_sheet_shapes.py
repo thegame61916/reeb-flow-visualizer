@@ -56,6 +56,8 @@ from render_rs_sheets import (  # noqa: E402
 from common import (
     BASE_DIR,
     FV99,
+    FV99_ATTEMPT_DETAILS_DIR,
+    FV99_FAILED_LOG_FILE,
     RESERVE_CORES,
     RSI_DIR,
     RS_DIR,
@@ -222,10 +224,81 @@ def timestep_sort_key(path: Path):
     return (0, number) if number is not None else (1, path.stem)
 
 
+def existing_path(value: str | None) -> Path | None:
+    if not value or value == "-":
+        return None
+    path = Path(value)
+    return path if path.exists() else None
+
+
+def load_vtu_overrides_from_attempt_details() -> dict[str, Path]:
+    overrides: dict[str, Path] = {}
+    if not FV99_ATTEMPT_DETAILS_DIR.exists():
+        return overrides
+
+    for path in sorted(FV99_ATTEMPT_DETAILS_DIR.glob("*.attempts.tsv")):
+        if not path.name.endswith(".attempts.tsv"):
+            continue
+        stem = path.name[: -len(".attempts.tsv")]
+        lines = [line for line in path.read_text().splitlines() if line.strip()]
+        if len(lines) < 2:
+            continue
+
+        headers = lines[0].split("\t")
+        for line in lines[1:]:
+            values = line.split("\t")
+            if len(values) != len(headers):
+                continue
+            row = dict(zip(headers, values))
+            if row.get("has_outputs") != "True":
+                continue
+            perturbed_vtu = existing_path(row.get("perturbed_vtu"))
+            if perturbed_vtu is not None:
+                overrides[stem] = perturbed_vtu
+            break
+
+    return overrides
+
+
+def load_vtu_overrides_from_failed_log() -> dict[str, Path]:
+    overrides: dict[str, Path] = {}
+    if not FV99_FAILED_LOG_FILE.exists():
+        return overrides
+
+    for line in FV99_FAILED_LOG_FILE.read_text().splitlines():
+        if not line.strip():
+            continue
+
+        parts = line.split("\t")
+        stem = Path(parts[0]).stem
+        fields: dict[str, str] = {}
+        for item in parts[1:]:
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            fields[key] = value
+
+        if fields.get("status") != "recovered_with_perturbation":
+            continue
+
+        perturbed_vtu = existing_path(fields.get("perturbed_vtu"))
+        if perturbed_vtu is not None:
+            overrides[stem] = perturbed_vtu
+
+    return overrides
+
+
+def load_vtu_overrides() -> dict[str, Path]:
+    overrides = load_vtu_overrides_from_failed_log()
+    overrides.update(load_vtu_overrides_from_attempt_details())
+    return overrides
+
+
 def discover_timesteps() -> list[TimestepInput]:
     rs_files = {path.stem: path for path in RS_DIR.glob("*.rs")}
     rsi_files = {path.stem: path for path in RSI_DIR.glob("*.rsi")}
     vtu_files = {path.stem: path for path in VTU_DIR.glob("*.vtu")}
+    vtu_overrides = load_vtu_overrides()
 
     common = sorted(
         rs_files.keys() & rsi_files.keys() & vtu_files.keys(),
@@ -241,7 +314,7 @@ def discover_timesteps() -> list[TimestepInput]:
                 stem=stem,
                 rs=rs_files[stem],
                 rsi=rsi_files[stem],
-                vtu=vtu_files[stem],
+                vtu=vtu_overrides.get(stem, vtu_files[stem]),
             )
         )
     return timesteps
@@ -254,10 +327,25 @@ def make_library_path(extra: str | None = None) -> str:
 
 def export_geometry_if_needed(timestep: TimestepInput, library_path: str) -> Path:
     out_vtp = VTP_CACHE_DIR / f"{timestep.stem}.sheets.vtp"
+    meta_path = VTP_CACHE_DIR / f"{timestep.stem}.source.json"
+    expected_meta = {
+        "vtu_source": str(timestep.vtu),
+        "rs_source": str(timestep.rs),
+    }
+
     if out_vtp.exists():
-        return out_vtp
+        cached_meta = None
+        if meta_path.exists():
+            try:
+                cached_meta = json.loads(meta_path.read_text())
+            except Exception:
+                cached_meta = None
+        if cached_meta == expected_meta:
+            return out_vtp
+        out_vtp.unlink()
 
     export_sheet_vtp(FV99, timestep.vtu, timestep.rs, out_vtp, library_path)
+    write_text_atomic(meta_path, json.dumps(expected_meta, indent=2))
     return out_vtp
 
 
@@ -426,6 +514,8 @@ def save_timestep_cache(
         "timestep_index": descriptors.timestep_index,
         "label": descriptors.label,
         "stem": descriptors.stem,
+        "vtu_source": str(timestep.vtu),
+        "rs_source": str(timestep.rs),
         "global_bounds": list(descriptors.global_bounds),
         "grid_size": descriptors.grid_size,
         "top_n_sheets": TOP_N_SHEETS,
@@ -491,7 +581,8 @@ def load_timestep_cache(stem: str) -> tuple[TimestepDescriptors, dict[int, np.nd
     return descriptors, mask_map
 
 
-def timestep_cache_is_valid(stem: str) -> bool:
+def timestep_cache_is_valid(timestep: TimestepInput) -> bool:
+    stem = timestep.stem
     cache_json = TIMESTEP_CACHE_DIR / f"{stem}.json"
     cache_npz = TIMESTEP_CACHE_DIR / f"{stem}.npz"
     if not cache_json.exists() or not cache_npz.exists():
@@ -504,6 +595,8 @@ def timestep_cache_is_valid(stem: str) -> bool:
         data.get("grid_size") == GRID_SIZE
         and data.get("top_n_sheets") == TOP_N_SHEETS
         and data.get("stem") == stem
+        and data.get("vtu_source") == str(timestep.vtu)
+        and data.get("rs_source") == str(timestep.rs)
     )
 
 
@@ -630,7 +723,7 @@ def build_cache(timesteps: list[TimestepInput], workers: int, library_path: str)
     missing_timesteps: list[TimestepInput] = []
 
     for timestep in timesteps:
-        if timestep_cache_is_valid(timestep.stem):
+        if timestep_cache_is_valid(timestep):
             descriptors, _masks = load_timestep_cache(timestep.stem)
             results.append(descriptors)
             print(f"[cache existing] {descriptors.stem}", flush=True)
@@ -655,6 +748,7 @@ def build_cache(timesteps: list[TimestepInput], workers: int, library_path: str)
         "top_n_sheets": TOP_N_SHEETS,
         "global_bounds": list(bounds),
         "timesteps": [item.stem for item in results],
+        "vtu_sources": {timestep.stem: str(timestep.vtu) for timestep in timesteps},
     }
     write_text_atomic(MANIFEST_FILE, json.dumps(manifest, indent=2))
     write_text_atomic(TIMESTEP_INDEX_FILE, json.dumps({item.stem: item.timestep_index for item in results}, indent=2))
@@ -795,11 +889,15 @@ def compare_all_pairs(
 
     ensure_dirs()
 
+    expected_vtu_sources = {timestep.stem: str(timestep.vtu) for timestep in timesteps}
     manifest_ok = False
     if MANIFEST_FILE.exists():
         try:
             manifest = json.loads(MANIFEST_FILE.read_text())
-            manifest_ok = manifest.get("top_n_sheets") == TOP_N_SHEETS
+            manifest_ok = (
+                manifest.get("top_n_sheets") == TOP_N_SHEETS
+                and manifest.get("vtu_sources") == expected_vtu_sources
+            )
         except Exception:
             manifest_ok = False
 
@@ -808,9 +906,14 @@ def compare_all_pairs(
         or not TIMESTEP_CACHE_DIR.exists()
         or not list(TIMESTEP_CACHE_DIR.glob("*.json"))
         or not list(TIMESTEP_CACHE_DIR.glob("*.npz"))
+        or any(not timestep_cache_is_valid(timestep) for timestep in timesteps)
     ):
+        if MATCH_CACHE_DIR.exists():
+            shutil.rmtree(MATCH_CACHE_DIR)
+        MATCH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        GLOBAL_BOUNDS_FILE.unlink(missing_ok=True)
         print("Building cache...", flush=True)
-        build_cache(timesteps, workers, library_path)
+        global_bounds, _descriptors = build_cache(timesteps, workers, library_path)
 
     stems = [t.stem for t in timesteps]
     adjacent_pairs = list(zip(stems, stems[1:]))
