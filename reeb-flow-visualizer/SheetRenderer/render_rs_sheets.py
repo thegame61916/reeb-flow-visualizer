@@ -37,6 +37,7 @@ from matplotlib.collections import PolyCollection
 
 from common import (
     FV99,
+    FV99_OMP_THREADS,
     SHEET_IMAGE_DIR,
     SHEET_RENDERER_TEMP_DIR,
     TTK_BUILD_LIB_DIR,
@@ -321,6 +322,7 @@ def export_sheet_vtp(exe: Path, mesh: Path, rs: Path, out_vtp: Path, library_pat
         env["LD_LIBRARY_PATH"] = (
             library_path if not old_library_path else library_path + os.pathsep + old_library_path
         )
+    env["OMP_NUM_THREADS"] = str(FV99_OMP_THREADS)
     subprocess.run(command, check=True, env=env)
 
 
