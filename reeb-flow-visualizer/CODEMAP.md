@@ -46,6 +46,7 @@ active code path.
 - `OVERLAP_FILE`
 - `FV99`
 - `EPSILON`
+- `FV99_OMP_THREADS`
 - `RESERVE_CORES`
 - `TOP_N_SHEETS`
 - `VIEWER_DEFAULT_TOP_SHEETS`
@@ -64,6 +65,15 @@ Runtime library paths are also derived here for VTK/TTK/FV99.
 
 - `.rs` files to `RS_DIR`
 - `.rsi` files to `RSI_DIR`
+
+`fv99` is run with `OMP_NUM_THREADS` set from `FV99_OMP_THREADS` in
+`common.py`. The default is `1` to avoid OpenMP races in the arrangement code.
+
+On `main`, stage 1 does not retry failed files with perturbation. If `fv99`
+returns a non-zero code and does not produce both `.rs` and `.rsi`, that
+timestep is logged and downstream stages will not include it because they only
+discover timesteps with matching `.rs`/`.rsi` inputs. The perturbation-retry
+workflow is kept on the `perturbation-degenerate-cases` branch.
 
 This stage is disabled by default because the Reeb-space outputs are usually
 already computed.
@@ -100,6 +110,12 @@ Important outputs:
 - `cache/timesteps/*.npz`
 - `cache/matches/*.json`
 - `cache/vtp/*.sheets.vtp`
+
+Shape matching exports sheet geometry by running `fv99 --headless` through
+`SheetRenderer/render_rs_sheets.py`. That export also sets `OMP_NUM_THREADS`
+from `FV99_OMP_THREADS`, matching stage 1. If a timestep cannot export a VTP,
+the cache build fails for that timestep; `main` does not synthesize fallback
+shape metrics from `.rsi` alone.
 
 Per-link shape metrics include:
 
