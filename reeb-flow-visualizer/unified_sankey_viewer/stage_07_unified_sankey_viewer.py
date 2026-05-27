@@ -5,11 +5,13 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 from pathlib import Path
 
 from common import (
     BASE_DIR,
+    CENTROID_COLOR_CORNERS,
     HYBRID_SCORE_DEFAULT_WEIGHTS,
     HYBRID_VERTEX_METRIC_DEFAULT,
     OUTPUT_DIR,
@@ -91,6 +93,93 @@ def safe_float(value, default=0.0):
         return default
 
 
+def clamp(value: float, low: float, high: float) -> float:
+    return min(high, max(low, value))
+
+
+def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    value = str(hex_color or "").strip().lstrip("#")
+    if len(value) != 6:
+        return (111, 158, 212)
+    try:
+        return tuple(int(value[i : i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+    except ValueError:
+        return (111, 158, 212)
+
+
+def rgb_to_hex(rgb: tuple[float, float, float]) -> str:
+    channels = [round(clamp(channel, 0.0, 255.0)) for channel in rgb]
+    return "#" + "".join(f"{channel:02x}" for channel in channels)
+
+
+def lerp_rgb(
+    a: tuple[int, int, int] | tuple[float, float, float],
+    b: tuple[int, int, int] | tuple[float, float, float],
+    t: float,
+) -> tuple[float, float, float]:
+    return tuple(a[i] + (b[i] - a[i]) * t for i in range(3))  # type: ignore[return-value]
+
+
+def safe_bounds(value) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    bounds = tuple(safe_float(item) for item in value)
+    xmin, ymin, xmax, ymax = bounds
+    if not all(math.isfinite(item) for item in bounds):
+        return None
+    if xmax == xmin:
+        xmin -= 0.5
+        xmax += 0.5
+    if ymax == ymin:
+        ymin -= 0.5
+        ymax += 0.5
+    return xmin, ymin, xmax, ymax
+
+
+def merge_bounds(
+    current: tuple[float, float, float, float] | None,
+    incoming: tuple[float, float, float, float] | None,
+) -> tuple[float, float, float, float] | None:
+    if incoming is None:
+        return current
+    if current is None:
+        return incoming
+    return (
+        min(current[0], incoming[0]),
+        min(current[1], incoming[1]),
+        max(current[2], incoming[2]),
+        max(current[3], incoming[3]),
+    )
+
+
+def bounds_from_centroids(cache_items: list[dict]) -> tuple[float, float, float, float]:
+    bounds: tuple[float, float, float, float] | None = None
+    for data in cache_items:
+        for sheet in data.get("sheets", []):
+            centroid = sheet.get("centroid", [])
+            if not isinstance(centroid, (list, tuple)) or len(centroid) < 2:
+                continue
+            x = safe_float(centroid[0])
+            y = safe_float(centroid[1])
+            if math.isfinite(x) and math.isfinite(y):
+                bounds = merge_bounds(bounds, (x, y, x, y))
+    return safe_bounds(bounds or (0.0, 0.0, 1.0, 1.0)) or (0.0, 0.0, 1.0, 1.0)
+
+
+def centroid_color(centroid, bounds: tuple[float, float, float, float]) -> tuple[str, list[float]]:
+    if not isinstance(centroid, (list, tuple)) or len(centroid) < 2:
+        return "#6f9ed4", [0.0, 0.0]
+    xmin, ymin, xmax, ymax = bounds
+    x = safe_float(centroid[0])
+    y = safe_float(centroid[1])
+    tx = clamp((x - xmin) / (xmax - xmin), 0.0, 1.0) if xmax > xmin else 0.0
+    ty = clamp((y - ymin) / (ymax - ymin), 0.0, 1.0) if ymax > ymin else 0.0
+    corners = {key: hex_to_rgb(value) for key, value in CENTROID_COLOR_CORNERS.items()}
+    bottom = lerp_rgb(corners["bottom_left"], corners["bottom_right"], tx)
+    top = lerp_rgb(corners["top_left"], corners["top_right"], tx)
+    return rgb_to_hex(lerp_rgb(bottom, top, ty)), [tx, ty]
+
+
 def link_sheet_images(viewer_dir: Path) -> None:
     if not SHEET_IMAGE_DIR.exists():
         return
@@ -128,22 +217,30 @@ def find_sheet_image(stem: str, sheet_id: int, viewer_dir: Path) -> str | None:
     return linked.relative_to(viewer_dir).as_posix()
 
 
-def load_timestep_cache(viewer_dir: Path) -> tuple[list[dict], float, int]:
+def load_timestep_cache(viewer_dir: Path) -> tuple[list[dict], float, int, tuple[float, float, float, float]]:
     if not TIMESTEP_CACHE_DIR.exists():
         raise FileNotFoundError(f"Timestep cache directory missing: {TIMESTEP_CACHE_DIR}")
+
+    cache_items = [json.loads(path.read_text()) for path in sorted(TIMESTEP_CACHE_DIR.glob("*.json"))]
+    centroid_color_bounds: tuple[float, float, float, float] | None = None
+    for data in cache_items:
+        centroid_color_bounds = merge_bounds(centroid_color_bounds, safe_bounds(data.get("global_bounds")))
+    if centroid_color_bounds is None:
+        centroid_color_bounds = bounds_from_centroids(cache_items)
 
     timesteps: list[dict] = []
     max_area = 0.0
     max_vertices = 0
 
-    for path in sorted(TIMESTEP_CACHE_DIR.glob("*.json")):
-        data = json.loads(path.read_text())
+    for data in cache_items:
         sheets = []
+        stem = str(data.get("stem", ""))
         for sheet in data.get("sheets", []):
             area = safe_float(sheet.get("area"))
             vertices = safe_int(sheet.get("num_vertices"))
             max_area = max(max_area, area)
             max_vertices = max(max_vertices, vertices)
+            color, color_position = centroid_color(sheet.get("centroid", []), centroid_color_bounds)
             sheets.append(
                 {
                     "sheet_id": safe_int(sheet.get("sheet_id")),
@@ -152,7 +249,9 @@ def load_timestep_cache(viewer_dir: Path) -> tuple[list[dict], float, int]:
                     "num_vertices": vertices,
                     "bbox": sheet.get("bbox", []),
                     "centroid": sheet.get("centroid", []),
-                    "thumbnail": find_sheet_image(data.get("stem", ""), safe_int(sheet.get("sheet_id")), viewer_dir),
+                    "centroid_color": color,
+                    "centroid_color_position": color_position,
+                    "thumbnail": find_sheet_image(stem, safe_int(sheet.get("sheet_id")), viewer_dir),
                 }
             )
 
@@ -160,14 +259,13 @@ def load_timestep_cache(viewer_dir: Path) -> tuple[list[dict], float, int]:
             {
                 "timestep_index": safe_int(data.get("timestep_index")),
                 "label": str(data.get("label", "")),
-                "stem": str(data.get("stem", "")),
+                "stem": stem,
                 "sheets": sheets,
             }
         )
 
     timesteps.sort(key=lambda item: item["timestep_index"])
-    return timesteps, max_area, max_vertices
-
+    return timesteps, max_area, max_vertices, centroid_color_bounds
 
 def load_match_data() -> dict:
     if not MATCHES_FILE.exists():
@@ -182,7 +280,7 @@ def load_overlap_data() -> dict:
 
 
 def prepare_data(viewer_dir: Path) -> dict:
-    timesteps, max_area, max_vertices = load_timestep_cache(viewer_dir)
+    timesteps, max_area, max_vertices, centroid_color_bounds = load_timestep_cache(viewer_dir)
     match_data = load_match_data()
     overlap_data = load_overlap_data()
 
@@ -375,6 +473,8 @@ def prepare_data(viewer_dir: Path) -> dict:
             "hybrid_vertex_metric_default": HYBRID_VERTEX_METRIC_DEFAULT,
             "global_area_max": max_area,
             "global_vertex_max": max_vertices,
+            "centroid_color_bounds": list(centroid_color_bounds),
+            "centroid_color_corners": CENTROID_COLOR_CORNERS,
             "default_ranges": DEFAULT_RANGES,
             "viewer_default_top_sheets": max(1, safe_int(VIEWER_DEFAULT_TOP_SHEETS, 10)),
             "node_height_fixed": 18,
@@ -467,8 +567,19 @@ def write_index_html() -> Path:
             <option value="solid" selected>solid</option>
             <option value="area">sheet area</option>
             <option value="vertices">vertex count</option>
+            <option value="centroid_position">centroid position</option>
           </select>
         </label>
+        <div id="centroidColorLegend" class="centroid-color-legend" hidden>
+          <div class="centroid-color-title">2D centroid color</div>
+          <div id="centroidYMax" class="centroid-axis-label"></div>
+          <div class="centroid-color-row">
+            <div id="centroidXMin" class="centroid-axis-label"></div>
+            <canvas id="centroidColorCanvas" width="112" height="112" aria-label="Centroid color space"></canvas>
+            <div id="centroidXMax" class="centroid-axis-label"></div>
+          </div>
+          <div id="centroidYMin" class="centroid-axis-label"></div>
+        </div>
         <label>
           Link Darkness
           <input id="linkDarkness" type="range" min="0" max="100" step="1" value="55">
@@ -828,6 +939,55 @@ label.inline input[type="checkbox"] {
   margin: 0;
   width: auto;
 }
+.centroid-color-legend {
+  border: 1px solid #d9dee5;
+  border-radius: 6px;
+  padding: 8px;
+  margin: -2px 0 10px;
+  background: #fafbfc;
+}
+.centroid-color-legend[hidden] {
+  display: none;
+}
+.centroid-color-title {
+  color: #3f4d5a;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.centroid-color-row {
+  display: grid;
+  grid-template-columns: 48px 112px 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.centroid-axis-label {
+  min-height: 14px;
+  overflow: hidden;
+  text-align: center;
+  color: #5f6d7b;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+#centroidColorCanvas {
+  width: 112px;
+  height: 112px;
+  display: block;
+  border: 1px solid #aeb8c4;
+  border-radius: 4px;
+  background: #eef2f6;
+}
+.color-swatch {
+  width: 12px;
+  height: 12px;
+  display: inline-block;
+  border: 1px solid rgba(20, 30, 40, 0.35);
+  border-radius: 3px;
+  vertical-align: -2px;
+  margin-right: 5px;
+}
 .panel-canvas {
   border: 1px solid #d9dee5;
   border-radius: 6px;
@@ -1025,6 +1185,15 @@ d3.json("data.json").then(data => {
     : (overlapMetricIds.includes("overlap_max_percent") ? "overlap_max_percent" : (overlapMetricIds[0] || "overlap_max_percent"));
   const areaMax = data.meta.global_area_max || 1;
   const vertexMax = data.meta.global_vertex_max || 1;
+  const centroidColorBounds = Array.isArray(data.meta.centroid_color_bounds) && data.meta.centroid_color_bounds.length === 4
+    ? data.meta.centroid_color_bounds.map(Number)
+    : [0, 0, 1, 1];
+  const centroidCornerColors = {
+    bottom_left: data.meta.centroid_color_corners?.bottom_left || "#2563eb",
+    bottom_right: data.meta.centroid_color_corners?.bottom_right || "#dc2626",
+    top_left: data.meta.centroid_color_corners?.top_left || "#16a34a",
+    top_right: data.meta.centroid_color_corners?.top_right || "#f59e0b"
+  };
   const linkMin = data.meta.link_thickness_min || 1.4;
   const linkMax = data.meta.link_thickness_max || 16;
   const timestepMax = timestepLookup.maxIndex;
@@ -1059,6 +1228,84 @@ d3.json("data.json").then(data => {
 
   function formatScore(value) {
     return numberFormat.format(Number(value || 0));
+  }
+
+  function parseHexColor(hexColor) {
+    const value = String(hexColor || "").replace("#", "").trim();
+    if (!/^[0-9a-fA-F]{6}$/.test(value)) return [111, 158, 212];
+    return [0, 2, 4].map(offset => parseInt(value.slice(offset, offset + 2), 16));
+  }
+
+  function rgbToHex(rgb) {
+    return "#" + rgb
+      .map(channel => Math.round(clamp(channel, 0, 255)).toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  function lerpRgb(a, b, t) {
+    return a.map((channel, index) => channel + (b[index] - channel) * t);
+  }
+
+  function centroidRgbFromUnit(tx, ty) {
+    const x = clamp(Number(tx) || 0, 0, 1);
+    const y = clamp(Number(ty) || 0, 0, 1);
+    const bottom = lerpRgb(parseHexColor(centroidCornerColors.bottom_left), parseHexColor(centroidCornerColors.bottom_right), x);
+    const top = lerpRgb(parseHexColor(centroidCornerColors.top_left), parseHexColor(centroidCornerColors.top_right), x);
+    return lerpRgb(bottom, top, y);
+  }
+
+  function centroidColorFromCentroid(centroid) {
+    if (!Array.isArray(centroid) || centroid.length < 2) return "#6f9ed4";
+    const [xmin, ymin, xmax, ymax] = centroidColorBounds;
+    const x = Number(centroid[0]);
+    const y = Number(centroid[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !(xmax > xmin) || !(ymax > ymin)) return "#6f9ed4";
+    const tx = clamp((x - xmin) / (xmax - xmin), 0, 1);
+    const ty = clamp((y - ymin) / (ymax - ymin), 0, 1);
+    return rgbToHex(centroidRgbFromUnit(tx, ty));
+  }
+
+  function formatBound(value, axis) {
+    return `${axis} ${formatScore(value)}`;
+  }
+
+  function drawCentroidColorLegend() {
+    const canvas = document.getElementById("centroidColorCanvas");
+    if (!canvas || !canvas.getContext) return;
+    const context = canvas.getContext("2d");
+    const width = canvas.width;
+    const height = canvas.height;
+    const image = context.createImageData(width, height);
+    for (let py = 0; py < height; py += 1) {
+      const ty = height > 1 ? 1 - py / (height - 1) : 0;
+      for (let px = 0; px < width; px += 1) {
+        const tx = width > 1 ? px / (width - 1) : 0;
+        const rgb = centroidRgbFromUnit(tx, ty);
+        const offset = (py * width + px) * 4;
+        image.data[offset] = Math.round(rgb[0]);
+        image.data[offset + 1] = Math.round(rgb[1]);
+        image.data[offset + 2] = Math.round(rgb[2]);
+        image.data[offset + 3] = 255;
+      }
+    }
+    context.putImageData(image, 0, 0);
+    const [xmin, ymin, xmax, ymax] = centroidColorBounds;
+    const labels = {
+      centroidXMin: formatBound(xmin, "x"),
+      centroidXMax: formatBound(xmax, "x"),
+      centroidYMin: formatBound(ymin, "y"),
+      centroidYMax: formatBound(ymax, "y")
+    };
+    for (const [id, label] of Object.entries(labels)) {
+      const node = document.getElementById(id);
+      if (node) node.textContent = label;
+    }
+  }
+
+  function updateCentroidColorLegendVisibility() {
+    const legend = document.getElementById("centroidColorLegend");
+    if (!legend) return;
+    legend.hidden = state.layoutControls.nodeColorMode !== "centroid_position";
   }
 
   function sanitizeShapeWeights(weights) {
@@ -1306,6 +1553,9 @@ d3.json("data.json").then(data => {
     if (mode === "solid") {
       return "#6f9ed4";
     }
+    if (mode === "centroid_position") {
+      return node.centroid_color || centroidColorFromCentroid(node.centroid);
+    }
     const value = nodeMetricValue(node, mode);
     const maxValue = nodeMetricMax(mode);
     if (!(value > 0) || !(maxValue > 0)) {
@@ -1461,6 +1711,7 @@ d3.json("data.json").then(data => {
         <div>Rank</div><div>${escapeHtml(node.rank)}</div>
         <div>Area</div><div>${escapeHtml(formatScore(node.area))}</div>
         <div>Vertices</div><div>${escapeHtml(node.num_vertices)}</div>
+        <div>Centroid color</div><div>${colorSwatch(node.centroid_color)}</div>
         <div>RSI</div><div>${escapeHtml(rsiFile)}</div>
         <div>RSI JSON</div><div>${escapeHtml(rsijsonFile)}</div>
         <div>Image</div><div>${escapeHtml(imageFile || "N/A")}</div>
@@ -1516,6 +1767,11 @@ d3.json("data.json").then(data => {
     }[token]));
   }
 
+  function colorSwatch(color) {
+    const safe = /^#[0-9a-fA-F]{6}$/.test(String(color || "")) ? String(color) : "#6f9ed4";
+    return `<span class="color-swatch" style="background:${safe}"></span>${escapeHtml(safe)}`;
+  }
+
   function showNodeDetails(node) {
     if (!detailsContent) return;
     const image = node.thumbnail ? `<img class="thumb" src="${escapeHtml(node.thumbnail)}" alt="Sheet ${escapeHtml(node.sheet_id)}">` : "";
@@ -1533,7 +1789,9 @@ d3.json("data.json").then(data => {
       rsijson_file: node.rsijson_file || "",
       thumbnail: node.thumbnail || "",
       bbox: formatArrayValue(node.bbox),
-      centroid: formatArrayValue(node.centroid)
+      centroid: formatArrayValue(node.centroid),
+      centroid_color: node.centroid_color || "",
+      centroid_color_position: formatArrayValue(node.centroid_color_position)
     });
     detailsContent.innerHTML = `
       <h3>Sheet ${escapeHtml(node.sheet_id)}</h3>
@@ -1545,6 +1803,7 @@ d3.json("data.json").then(data => {
         <div>Rank</div><div>${escapeHtml(node.rank)}</div>
         <div>Area</div><div>${escapeHtml(formatScore(node.area))}</div>
         <div>Vertices</div><div>${escapeHtml(node.num_vertices)}</div>
+        <div>Centroid color</div><div>${colorSwatch(node.centroid_color)}</div>
         <div>RSI file</div><div>${escapeHtml(node.rsi_file || "N/A")}</div>
         <div>RSI JSON file</div><div>${escapeHtml(node.rsijson_file || "N/A")}</div>
         <div>Image file</div><div>${escapeHtml(imageFile)}</div>
@@ -2775,10 +3034,14 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       });
     }
 
+    drawCentroidColorLegend();
+    updateCentroidColorLegendVisibility();
+
     if (nodeColorNode) {
       nodeColorNode.value = state.layoutControls.nodeColorMode;
       nodeColorNode.addEventListener("change", event => {
         state.layoutControls.nodeColorMode = event.target.value;
+        updateCentroidColorLegendVisibility();
         scheduleRenderAll();
       });
     }

@@ -3,6 +3,7 @@
 import stage_01_run_fv99 as s1
 import stage_02_build_sankey_data as s2
 import stage_03_compute_sheet_overlaps as s3
+import stage_04_compute_sheet_fiber_surfaces as s4
 
 from compareSheetShapes.compare_sheet_shapes import (
     main as run_shape_matching_main,
@@ -13,6 +14,7 @@ from common import (
     RUN_STAGE_2_RSI_JSON,
     RUN_STAGE_2B_SHAPE_MATCHING,
     RUN_STAGE_3_OVERLAPS,
+    RUN_STAGE_4_SHEET_FIBER_SURFACES,
     RUN_UNIFIED_SANKEY_VIEWER,
     SHAPE_MATCHING_WORKERS,
 )
@@ -57,10 +59,18 @@ def enabled_stages():
             )
         )
 
+    if RUN_STAGE_4_SHEET_FIBER_SURFACES:
+        stages.append(
+            (
+                "Stage 4: compute sheet fiber surfaces",
+                s4.compute_sheet_fiber_surfaces_stage,
+            )
+        )
+
     if RUN_UNIFIED_SANKEY_VIEWER:
         stages.append(
             (
-                "Stage 4: build unified Sankey viewer",
+                "Stage 5: build unified Sankey viewer",
                 build_unified_sankey_viewer_stage,
             )
         )

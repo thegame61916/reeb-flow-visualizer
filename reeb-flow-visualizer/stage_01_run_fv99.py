@@ -12,6 +12,8 @@ from common import (
     FV99_OMP_THREADS,
     FV99_PARTIAL_LOG_FILE,
     RESERVE_CORES,
+    FV99_FNAME,
+    FV99_GNAME,
     RSI_DIR,
     RS_DIR,
     TTK_BUILD_LIB_DIR,
@@ -66,6 +68,9 @@ def run_fv99(vtu_file: Path):
         "-e", EPSILON,
         "-s", str(rs_file),
         "-i", str(rsi_file),
+        "--fName", FV99_FNAME,
+        "--gName", FV99_GNAME,
+        "--headless",
     ]
 
     with log_file.open("w") as log:

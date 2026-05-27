@@ -37,6 +37,8 @@ from matplotlib.collections import PolyCollection
 
 from common import (
     FV99,
+    FV99_FNAME,
+    FV99_GNAME,
     FV99_OMP_THREADS,
     SHEET_IMAGE_DIR,
     SHEET_RENDERER_TEMP_DIR,
@@ -315,6 +317,8 @@ def export_sheet_vtp(exe: Path, mesh: Path, rs: Path, out_vtp: Path, library_pat
         "-o",
         str(out_vtp),
         "--headless",
+        "--fName", FV99_FNAME,
+        "--gName", FV99_GNAME,
     ]
     env = os.environ.copy()
     if library_path:
