@@ -12,6 +12,7 @@ from pathlib import Path
 from common import (
     BASE_DIR,
     CENTROID_COLOR_CORNERS,
+    FIBER_SURFACE_IMAGE_DIR,
     HYBRID_SCORE_DEFAULT_WEIGHTS,
     HYBRID_VERTEX_METRIC_DEFAULT,
     OUTPUT_DIR,
@@ -197,6 +198,23 @@ def link_sheet_images(viewer_dir: Path) -> None:
         shutil.copytree(SHEET_IMAGE_DIR, target)
 
 
+def link_fiber_surface_images(viewer_dir: Path) -> None:
+    if not FIBER_SURFACE_IMAGE_DIR.exists():
+        return
+
+    target = viewer_dir / "fiber_surface_images"
+    if target.exists() or target.is_symlink():
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        else:
+            shutil.rmtree(target)
+
+    try:
+        target.symlink_to(FIBER_SURFACE_IMAGE_DIR.resolve(), target_is_directory=True)
+    except OSError:
+        shutil.copytree(FIBER_SURFACE_IMAGE_DIR, target)
+
+
 def find_sheet_image(stem: str, sheet_id: int, viewer_dir: Path) -> str | None:
     folder = SHEET_IMAGE_DIR / stem
     if not folder.exists():
@@ -214,6 +232,19 @@ def find_sheet_image(stem: str, sheet_id: int, viewer_dir: Path) -> str | None:
         return None
 
     linked = viewer_dir / "sheet_images" / stem / matches[0].name
+    return linked.relative_to(viewer_dir).as_posix()
+
+
+def find_fiber_surface_image(stem: str, sheet_id: int, viewer_dir: Path) -> str | None:
+    folder = FIBER_SURFACE_IMAGE_DIR / stem
+    if not folder.exists():
+        return None
+
+    image = folder / f"sheet_{sheet_id}.png"
+    if not image.exists():
+        return None
+
+    linked = viewer_dir / "fiber_surface_images" / stem / image.name
     return linked.relative_to(viewer_dir).as_posix()
 
 
@@ -252,6 +283,7 @@ def load_timestep_cache(viewer_dir: Path) -> tuple[list[dict], float, int, tuple
                     "centroid_color": color,
                     "centroid_color_position": color_position,
                     "thumbnail": find_sheet_image(stem, safe_int(sheet.get("sheet_id")), viewer_dir),
+                    "fiber_surface_image": find_fiber_surface_image(stem, safe_int(sheet.get("sheet_id")), viewer_dir),
                 }
             )
 
@@ -490,6 +522,7 @@ def prepare_data(viewer_dir: Path) -> dict:
                 "overlap": str(OVERLAP_FILE),
             },
             "sheet_image_dir": str(SHEET_IMAGE_DIR),
+            "fiber_surface_image_dir": str(FIBER_SURFACE_IMAGE_DIR),
         },
     }
 
@@ -697,6 +730,14 @@ aside {
   display: block;
   background: #fff;
   margin: 8px 0;
+}
+#detailsContent .media-stack {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0;
+}
+#detailsContent .media-stack .thumb {
+  margin: 0;
 }
 #detailsContent .thumb-row {
   display: grid;
@@ -1102,6 +1143,10 @@ svg.summary-chart {
   border-radius: 6px;
   display: block;
   background: #fff;
+}
+.media-stack {
+  display: grid;
+  gap: 7px;
 }
 .meta-list {
   display: grid;
@@ -1697,9 +1742,23 @@ d3.json("data.json").then(data => {
     return rows ? `<table class="meta">${rows}</table>` : "";
   }
 
+  function nodeMediaStack(node, thumbClass = "") {
+    if (!node) return "";
+    const classAttr = thumbClass ? ` class="${thumbClass}"` : "";
+    const sheetImage = node.thumbnail
+      ? `<img${classAttr} src="${escapeHtml(node.thumbnail)}" alt="Sheet ${escapeHtml(node.sheet_id)} image">`
+      : "";
+    const fiberImage = node.fiber_surface_image
+      ? `<img${classAttr} src="${escapeHtml(node.fiber_surface_image)}" alt="Fiber surface image for sheet ${escapeHtml(node.sheet_id)}">`
+      : "";
+    if (!sheetImage && !fiberImage) return "";
+    return `<div class="media-stack">${sheetImage}${fiberImage}</div>`;
+  }
+
   function nodeTooltip(node) {
-    const image = node.thumbnail ? `<img src="${escapeHtml(node.thumbnail)}" alt="Sheet ${escapeHtml(node.sheet_id)} image">` : "";
+    const image = nodeMediaStack(node);
     const imageFile = node.thumbnail ? imageFilename(node.thumbnail) : "N/A";
+    const fiberImageFile = node.fiber_surface_image ? imageFilename(node.fiber_surface_image) : "N/A";
     const rsiFile = pathFilename(node.rsi_file) || "N/A";
     const rsijsonFile = pathFilename(node.rsijson_file) || "N/A";
     return `
@@ -1715,6 +1774,7 @@ d3.json("data.json").then(data => {
         <div>RSI</div><div>${escapeHtml(rsiFile)}</div>
         <div>RSI JSON</div><div>${escapeHtml(rsijsonFile)}</div>
         <div>Image</div><div>${escapeHtml(imageFile || "N/A")}</div>
+        <div>Fiber image</div><div>${escapeHtml(fiberImageFile || "N/A")}</div>
       </div>
       ${image}
     `;
@@ -1723,8 +1783,8 @@ d3.json("data.json").then(data => {
   function linkTooltip(link, panel) {
     const sourceNode = sheetByTimestepAndId(link.source_timestep_index, link.source_sheet_id);
     const targetNode = sheetByTimestepAndId(link.target_timestep_index, link.target_sheet_id);
-    const sourceImage = sourceNode?.thumbnail ? `<img src="${escapeHtml(sourceNode.thumbnail)}" alt="Source sheet image">` : "";
-    const targetImage = targetNode?.thumbnail ? `<img src="${escapeHtml(targetNode.thumbnail)}" alt="Target sheet image">` : "";
+    const sourceImage = nodeMediaStack(sourceNode);
+    const targetImage = nodeMediaStack(targetNode);
     const sourceRsi = pathFilename(link.source_rsi_file || sourceNode?.rsi_file) || "N/A";
     const targetRsi = pathFilename(link.target_rsi_file || targetNode?.rsi_file) || "N/A";
     const sourceRsijson = pathFilename(link.source_rsijson_file || sourceNode?.rsijson_file) || "N/A";
@@ -1774,8 +1834,9 @@ d3.json("data.json").then(data => {
 
   function showNodeDetails(node) {
     if (!detailsContent) return;
-    const image = node.thumbnail ? `<img class="thumb" src="${escapeHtml(node.thumbnail)}" alt="Sheet ${escapeHtml(node.sheet_id)}">` : "";
+    const image = nodeMediaStack(node, "thumb");
     const imageFile = node.thumbnail ? imageFilename(node.thumbnail) : "N/A";
+    const fiberImageFile = node.fiber_surface_image ? imageFilename(node.fiber_surface_image) : "N/A";
     const rawTable = scalarMetadataTable({
       node_id: node.node_id || "",
       sheet_id: node.sheet_id,
@@ -1788,6 +1849,7 @@ d3.json("data.json").then(data => {
       rsi_file: node.rsi_file || "",
       rsijson_file: node.rsijson_file || "",
       thumbnail: node.thumbnail || "",
+      fiber_surface_image: node.fiber_surface_image || "",
       bbox: formatArrayValue(node.bbox),
       centroid: formatArrayValue(node.centroid),
       centroid_color: node.centroid_color || "",
@@ -1807,6 +1869,7 @@ d3.json("data.json").then(data => {
         <div>RSI file</div><div>${escapeHtml(node.rsi_file || "N/A")}</div>
         <div>RSI JSON file</div><div>${escapeHtml(node.rsijson_file || "N/A")}</div>
         <div>Image file</div><div>${escapeHtml(imageFile)}</div>
+        <div>Fiber image file</div><div>${escapeHtml(fiberImageFile)}</div>
       </div>
       ${rawTable}
     `;
@@ -1816,12 +1879,14 @@ d3.json("data.json").then(data => {
     if (!detailsContent) return;
     const sourceNode = sheetByTimestepAndId(link.source_timestep_index, link.source_sheet_id);
     const targetNode = sheetByTimestepAndId(link.target_timestep_index, link.target_sheet_id);
-    const sourceImage = sourceNode?.thumbnail ? `<img class="thumb" src="${escapeHtml(sourceNode.thumbnail)}" alt="Source">` : "<p>No image</p>";
-    const targetImage = targetNode?.thumbnail ? `<img class="thumb" src="${escapeHtml(targetNode.thumbnail)}" alt="Target">` : "<p>No image</p>";
+    const sourceImage = nodeMediaStack(sourceNode, "thumb") || "<p>No image</p>";
+    const targetImage = nodeMediaStack(targetNode, "thumb") || "<p>No image</p>";
     const selectedMetricLabel = metricLabel(panel.dataMode, panel.metricId);
     const selectedMetricValue = metricValue(link, panel, panel.metricId);
     const sourceImageFile = sourceNode?.thumbnail ? imageFilename(sourceNode.thumbnail) : "N/A";
     const targetImageFile = targetNode?.thumbnail ? imageFilename(targetNode.thumbnail) : "N/A";
+    const sourceFiberImageFile = sourceNode?.fiber_surface_image ? imageFilename(sourceNode.fiber_surface_image) : "N/A";
+    const targetFiberImageFile = targetNode?.fiber_surface_image ? imageFilename(targetNode.fiber_surface_image) : "N/A";
     const sourceRsi = link.source_rsi_file || sourceNode?.rsi_file || "";
     const targetRsi = link.target_rsi_file || targetNode?.rsi_file || "";
     const sourceRsijson = link.source_rsijson_file || sourceNode?.rsijson_file || "";
@@ -1857,6 +1922,8 @@ d3.json("data.json").then(data => {
       target_rsi_file: targetRsi,
       source_rsijson_file: sourceRsijson,
       target_rsijson_file: targetRsijson,
+      source_fiber_surface_image: sourceNode?.fiber_surface_image || "",
+      target_fiber_surface_image: targetNode?.fiber_surface_image || "",
       selected_metric: selectedMetricLabel,
       selected_metric_value: selectedMetricValue,
       width: link.width,
@@ -1873,6 +1940,8 @@ d3.json("data.json").then(data => {
         <div>Target stem</div><div>${escapeHtml(link.target_stem || targetNode?.stem || "N/A")}</div>
         <div>Source image file</div><div>${escapeHtml(sourceImageFile)}</div>
         <div>Target image file</div><div>${escapeHtml(targetImageFile)}</div>
+        <div>Source fiber image file</div><div>${escapeHtml(sourceFiberImageFile)}</div>
+        <div>Target fiber image file</div><div>${escapeHtml(targetFiberImageFile)}</div>
         <div>${escapeHtml(selectedMetricLabel)}</div><div>${escapeHtml(formatScore(selectedMetricValue))}</div>
       </div>
       <div class="thumb-row">
@@ -3158,6 +3227,7 @@ def build_unified_sankey_viewer_stage() -> None:
         shutil.rmtree(UNIFIED_VIEWER_DIR)
     UNIFIED_VIEWER_DIR.mkdir(parents=True, exist_ok=True)
     link_sheet_images(UNIFIED_VIEWER_DIR)
+    link_fiber_surface_images(UNIFIED_VIEWER_DIR)
 
     data = prepare_data(UNIFIED_VIEWER_DIR)
     data_path = write_data_json(data)

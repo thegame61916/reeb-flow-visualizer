@@ -12,11 +12,14 @@ from compareSheetShapes.compare_sheet_shapes import (
 from common import (
     RUN_STAGE_1_FV99,
     RUN_STAGE_2_RSI_JSON,
-    RUN_STAGE_2B_SHAPE_MATCHING,
-    RUN_STAGE_3_OVERLAPS,
-    RUN_STAGE_4_SHEET_FIBER_SURFACES,
-    RUN_UNIFIED_SANKEY_VIEWER,
+    RUN_STAGE_3A_SHAPE_MATCHING,
+    RUN_STAGE_3B_OVERLAPS,
+    RUN_STAGE_4A_SHEET_RENDERING,
+    RUN_STAGE_4B_SHEET_FIBER_SURFACES,
+    RUN_STAGE_5_UNIFIED_SANKEY_VIEWER,
     SHAPE_MATCHING_WORKERS,
+    SHEET_RENDERER_CLEAN_CACHE,
+    SHEET_RENDERER_REBUILD_CACHE,
 )
 
 from unified_sankey_viewer.stage_07_unified_sankey_viewer import (
@@ -43,31 +46,39 @@ def enabled_stages():
             )
         )
 
-    if RUN_STAGE_2B_SHAPE_MATCHING:
+    if RUN_STAGE_3A_SHAPE_MATCHING:
         stages.append(
             (
-                "Stage 2b: compare sheet shapes",
+                "Stage 3A: compare sheet shapes",
                 run_shape_matching_stage,
             )
         )
 
-    if RUN_STAGE_3_OVERLAPS:
+    if RUN_STAGE_3B_OVERLAPS:
         stages.append(
             (
-                "Stage 3: compute sheet overlaps",
+                "Stage 3B: compute sheet overlaps",
                 s3.compute_sheet_overlaps_stage,
             )
         )
 
-    if RUN_STAGE_4_SHEET_FIBER_SURFACES:
+    if RUN_STAGE_4A_SHEET_RENDERING:
         stages.append(
             (
-                "Stage 4: compute sheet fiber surfaces",
+                "Stage 4A: render sheet images",
+                run_sheet_rendering_stage,
+            )
+        )
+
+    if RUN_STAGE_4B_SHEET_FIBER_SURFACES:
+        stages.append(
+            (
+                "Stage 4B: compute sheet fiber surfaces",
                 s4.compute_sheet_fiber_surfaces_stage,
             )
         )
 
-    if RUN_UNIFIED_SANKEY_VIEWER:
+    if RUN_STAGE_5_UNIFIED_SANKEY_VIEWER:
         stages.append(
             (
                 "Stage 5: build unified Sankey viewer",
@@ -76,6 +87,20 @@ def enabled_stages():
         )
 
     return stages
+
+
+def run_sheet_rendering_stage():
+    from SheetRenderer.render_rs_directory_orbital_colours import main as run_sheet_renderer_main
+
+    args = []
+    if SHEET_RENDERER_REBUILD_CACHE:
+        args.append("--rebuild-cache")
+    if SHEET_RENDERER_CLEAN_CACHE:
+        args.append("--clean-cache")
+
+    exit_code = run_sheet_renderer_main(args)
+    if exit_code:
+        raise RuntimeError(f"sheet rendering stage failed with exit code {exit_code}")
 
 
 def run_shape_matching_stage():

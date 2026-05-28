@@ -662,12 +662,10 @@ def build_cache(timesteps: list[TimestepInput], workers: int, library_path: str)
 
 
 def jaccard(a: set[int], b: set[int]) -> float:
-    if not a and not b:
-        return 1.0
-    union = a | b
-    if not union:
+    if not a or not b:
         return 0.0
-    return len(a & b) / len(union)
+    union = a | b
+    return len(a & b) / len(union) if union else 0.0
 
 
 def bbox_iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:

@@ -54,6 +54,7 @@ from common import (  # noqa: E402
     SHEET_RENDERER_TEMP_DIR,
     SHEET_RENDERER_UNIFORM_SHEET_COLOR,
     SHEET_RENDERER_WORKERS,
+    TOP_N_SHEETS,
     TTK_BUILD_LIB_DIR,
     TTK_INSTALL_LIB_DIR,
     VTK_LIB_DIR,
@@ -80,8 +81,6 @@ LD_LIBRARY_PATH = os.pathsep.join(
     for path in (VTK_LIB_DIR, TTK_BUILD_LIB_DIR, TTK_INSTALL_LIB_DIR)
     if path.exists()
 )
-
-TOP_N_SHEETS = 20
 
 # The exported sheet geometry can be hundreds of MB per time step. Keep a
 # dedicated temp directory under the configured output root.
@@ -242,7 +241,7 @@ def matching_file(directory: Path, stem: str, suffix: str) -> Path:
 
 def sheets_to_render(rsi: RsiData, sheet_polygons) -> list[int]:
     drawable_areas = sheet_areas(sheet_polygons)
-    available = set(drawable_areas) & set(rsi.sheet_vertices)
+    available = set(drawable_areas) & set(rsi.sheet_area)
 
     def area(sheet_id: int) -> float:
         return rsi.sheet_area.get(sheet_id, drawable_areas.get(sheet_id, 0.0))

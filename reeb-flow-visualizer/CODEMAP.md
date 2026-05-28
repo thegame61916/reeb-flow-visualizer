@@ -21,10 +21,13 @@ Then open `http://localhost:8000`.
 1. `stage_01_run_fv99.py` optionally generates `.rs` and `.rsi` from `.vtu`.
 2. `stage_02_build_sankey_data.py` converts `.rsi` files into per-timestep
    `.rsijson` files containing top sheets and their domain vertices.
-3. `compareSheetShapes/compare_sheet_shapes.py` computes cached sheet-shape
-   descriptors and adjacent-timestep shape-match scores.
-4. `stage_03_compute_sheet_overlaps.py` computes adjacent-timestep domain
-   vertex overlaps and attaches available shape/range metrics to overlap links.
+3A. `compareSheetShapes/compare_sheet_shapes.py` computes cached sheet-shape
+    descriptors and adjacent-timestep shape-match scores.
+3B. `stage_03_compute_sheet_overlaps.py` computes adjacent-timestep domain
+    vertex overlaps and attaches available shape/range metrics to overlap links.
+4A. `SheetRenderer/render_rs_directory_orbital_colours.py` renders sheet PNGs.
+4B. `stage_04_compute_sheet_fiber_surfaces.py` renders top-sheet fiber-surface
+    images.
 5. `unified_sankey_viewer/stage_07_unified_sankey_viewer.py` writes the
    self-contained browser viewer.
 
@@ -93,7 +96,7 @@ Each top sheet stores:
 
 `TOP_N_SHEETS` controls how many sheets are preprocessed per timestep.
 
-### Stage 2b: Shape Matching
+### Stage 3A: Shape Matching
 
 `compareSheetShapes/compare_sheet_shapes.py` computes sheet correspondence
 scores without using PNGs.
@@ -126,7 +129,7 @@ Per-link shape metrics include:
 - `bbox_iou`
 - `centroid_similarity`
 
-### Stage 3: Domain Overlaps
+### Stage 3B: Domain Overlaps
 
 `stage_03_compute_sheet_overlaps.py` reads all `.rsijson` files and computes
 adjacent-timestep sheet overlaps.
@@ -142,7 +145,24 @@ The output is:
 This file also stores range/shape metrics from the shape-match cache when a
 matching sheet pair exists.
 
-### Stage 4: Unified Viewer
+### Stage 4A: Sheet Rendering
+
+`SheetRenderer/render_rs_directory_orbital_colours.py` renders the full sheet
+view and top-sheet PNGs into `SHEET_IMAGE_DIR`.
+
+The stage reuses cached VTP geometry by default. `SHEET_RENDERER_REBUILD_CACHE`
+and `SHEET_RENDERER_CLEAN_CACHE` in `common.py` control explicit cache rebuilds
+or cache cleanup.
+
+### Stage 4B: Sheet Fiber Surfaces
+
+`stage_04_compute_sheet_fiber_surfaces.py` renders top-sheet fiber-surface
+images into `FIBER_SURFACE_IMAGE_DIR`.
+
+The stage uses the fiber-surface isovalues, ParaView state file, and render
+retry settings from `common.py`.
+
+### Stage 5: Unified Viewer
 
 `unified_sankey_viewer/stage_07_unified_sankey_viewer.py` writes:
 
@@ -152,6 +172,7 @@ matching sheet pair exists.
 - `viewer_common.js`
 - `data.json`
 - `sheet_images` link/copy
+- `fiber_surface_images` link/copy
 
 All of these are generated inside:
 
