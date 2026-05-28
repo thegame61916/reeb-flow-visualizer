@@ -739,6 +739,13 @@ aside {
 #detailsContent .media-stack .thumb {
   margin: 0;
 }
+#detailsContent .zoomable-image {
+  cursor: zoom-in;
+}
+#detailsContent .zoomable-image:hover {
+  outline: 2px solid #2f80c9;
+  outline-offset: 2px;
+}
 #detailsContent .thumb-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -756,6 +763,98 @@ aside {
   padding: 4px 6px;
   vertical-align: top;
   word-break: break-word;
+}
+#imageZoomOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: none;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: rgba(10, 15, 23, 0.94);
+  color: #fff;
+}
+#imageZoomOverlay.open {
+  display: grid;
+}
+.image-zoom-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.24);
+}
+.image-zoom-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: #edf2f7;
+}
+.image-zoom-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.image-zoom-actions button {
+  min-width: 34px;
+  border-color: rgba(255, 255, 255, 0.36);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+.image-zoom-actions button:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+.image-zoom-stage {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+}
+.image-zoom-stage.dragging {
+  cursor: grabbing;
+}
+.image-zoom-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.image-zoom-pane {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+}
+.image-zoom-pane:first-child {
+  border-left: 0;
+}
+.image-zoom-pane-title {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 1;
+  max-width: calc(100% - 20px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 5px;
+  padding: 4px 7px;
+  background: rgba(0, 0, 0, 0.46);
+  color: #fff;
+  font-size: 12px;
+}
+.image-zoom-pane img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  user-select: none;
+  pointer-events: none;
+  transform-origin: 0 0;
 }
 section {
   margin-bottom: 18px;
@@ -1249,6 +1348,8 @@ d3.json("data.json").then(data => {
   const PAN_DRAG_THRESHOLD = 4;
   const PANEL_HEIGHT_MIN = 360;
   const PANEL_HEIGHT_MAX = 1400;
+  const IMAGE_ZOOM_MIN = 0.03;
+  const IMAGE_ZOOM_MAX = 20;
 
   const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 });
   const shapeMatchLookup = new Map();
@@ -1263,6 +1364,236 @@ d3.json("data.json").then(data => {
 
   function clamp(n, low, high) {
     return Math.min(high, Math.max(low, n));
+  }
+
+  const imageZoom = {
+    overlay: null,
+    stage: null,
+    grid: null,
+    title: null,
+    panes: [],
+    images: [],
+    scale: 1,
+    x: 0,
+    y: 0,
+    drag: null
+  };
+
+  function bindImageZoomViewer() {
+    if (!detailsContent) return;
+
+    const overlay = document.createElement("div");
+    overlay.id = "imageZoomOverlay";
+    overlay.innerHTML = `
+      <div class="image-zoom-toolbar">
+        <div class="image-zoom-title"></div>
+        <div class="image-zoom-actions">
+          <button type="button" data-action="zoom-out" title="Zoom out">-</button>
+          <button type="button" data-action="zoom-in" title="Zoom in">+</button>
+          <button type="button" data-action="reset" title="Reset view">Reset</button>
+          <button type="button" data-action="close" title="Close">Close</button>
+        </div>
+      </div>
+      <div class="image-zoom-stage"><div class="image-zoom-grid"></div></div>
+    `;
+    document.body.appendChild(overlay);
+
+    imageZoom.overlay = overlay;
+    imageZoom.stage = overlay.querySelector(".image-zoom-stage");
+    imageZoom.grid = overlay.querySelector(".image-zoom-grid");
+    imageZoom.title = overlay.querySelector(".image-zoom-title");
+
+    detailsContent.addEventListener("click", event => {
+      const target = event.target;
+      if (!(target instanceof HTMLImageElement) || !target.classList.contains("zoomable-image")) return;
+      const linkImages = zoomImagesFromLinkRow(target);
+      if (linkImages.images.length) {
+        openImageZoom(linkImages.images, linkImages.title);
+        return;
+      }
+      const images = zoomImagesFromTarget(target);
+      if (images.length) openImageZoom(images, target.dataset.zoomTitle || "");
+    });
+
+    overlay.addEventListener("click", event => {
+      const action = event.target?.dataset?.action;
+      if (action === "close") closeImageZoom();
+      if (action === "reset") fitImageZoom();
+      if (action === "zoom-in") zoomImageAt(1.25);
+      if (action === "zoom-out") zoomImageAt(0.8);
+    });
+
+    imageZoom.stage.addEventListener("wheel", event => {
+      event.preventDefault();
+      zoomImageAt(event.deltaY < 0 ? 1.12 : 1 / 1.12, event.clientX, event.clientY);
+    }, { passive: false });
+
+    imageZoom.stage.addEventListener("pointerdown", event => {
+      imageZoom.drag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: imageZoom.x, y: imageZoom.y };
+      imageZoom.stage.classList.add("dragging");
+      imageZoom.stage.setPointerCapture(event.pointerId);
+    });
+
+    imageZoom.stage.addEventListener("pointermove", event => {
+      if (!imageZoom.drag || imageZoom.drag.pointerId !== event.pointerId) return;
+      imageZoom.x = imageZoom.drag.x + event.clientX - imageZoom.drag.startX;
+      imageZoom.y = imageZoom.drag.y + event.clientY - imageZoom.drag.startY;
+      applyImageZoomTransform();
+    });
+
+    imageZoom.stage.addEventListener("pointerup", endImageZoomDrag);
+    imageZoom.stage.addEventListener("pointercancel", endImageZoomDrag);
+
+    document.addEventListener("keydown", event => {
+      if (!imageZoom.overlay?.classList.contains("open")) return;
+      if (event.key === "Escape") closeImageZoom();
+      if (event.key === "0") fitImageZoom();
+      if (event.key === "+" || event.key === "=") zoomImageAt(1.25);
+      if (event.key === "-") zoomImageAt(0.8);
+    });
+
+    window.addEventListener("resize", () => {
+      if (imageZoom.overlay?.classList.contains("open")) fitImageZoom();
+    });
+  }
+
+  function zoomImagesFromLinkRow(target) {
+    const row = target.closest(".link-media-row");
+    const stack = target.closest(".media-stack");
+    if (!row || !stack) return { images: [], title: "" };
+
+    const clickedStackImages = Array.from(stack.querySelectorAll("img.zoomable-image"));
+    const mediaIndex = clickedStackImages.indexOf(target);
+    if (mediaIndex < 0) return { images: [], title: "" };
+
+    const title = mediaIndex === 0 ? "Sheet images" : "Fiber surface images";
+    const images = Array.from(row.querySelectorAll(".media-stack")).map((item, index) => {
+      const img = item.querySelectorAll("img.zoomable-image")[mediaIndex];
+      if (!img) return null;
+      return {
+        src: img.currentSrc || img.src,
+        label: img.dataset.zoomLabel || img.alt || (index === 0 ? "Source" : "Target")
+      };
+    }).filter(Boolean);
+
+    return { images: images.length > 1 ? images : [], title };
+  }
+
+  function zoomImagesFromTarget(target) {
+    const paired = target.dataset.zoomLeftSrc || target.dataset.zoomRightSrc;
+    if (paired) {
+      return [
+        { src: target.dataset.zoomLeftSrc || "", label: target.dataset.zoomLeftLabel || "Source" },
+        { src: target.dataset.zoomRightSrc || "", label: target.dataset.zoomRightLabel || "Target" }
+      ].filter(item => item.src);
+    }
+    const src = target.dataset.zoomSrc || target.currentSrc || target.src;
+    const label = target.dataset.zoomLabel || target.alt || imageFilename(src || "");
+    return src ? [{ src, label }] : [];
+  }
+
+  function openImageZoom(images, title = "") {
+    if (!imageZoom.overlay || !imageZoom.grid) return;
+    imageZoom.grid.innerHTML = "";
+    imageZoom.panes = [];
+    imageZoom.images = [];
+    imageZoom.title.textContent = title || images.map(item => item.label).join(" | ");
+
+    let pending = images.length;
+    const markLoaded = () => {
+      pending -= 1;
+      if (pending <= 0) fitImageZoom();
+    };
+
+    for (const item of images) {
+      const pane = document.createElement("div");
+      pane.className = "image-zoom-pane";
+      const label = document.createElement("div");
+      label.className = "image-zoom-pane-title";
+      label.textContent = item.label || imageFilename(item.src);
+      const img = document.createElement("img");
+      img.alt = item.label || "Zoomed image";
+      img.onload = markLoaded;
+      img.onerror = markLoaded;
+      img.src = item.src;
+      pane.appendChild(label);
+      pane.appendChild(img);
+      imageZoom.grid.appendChild(pane);
+      imageZoom.panes.push(pane);
+      imageZoom.images.push(img);
+      if (img.complete) markLoaded();
+    }
+
+    imageZoom.overlay.classList.add("open");
+    document.body.style.overflow = "hidden";
+    if (!images.length) fitImageZoom();
+  }
+
+  function closeImageZoom() {
+    if (!imageZoom.overlay) return;
+    imageZoom.overlay.classList.remove("open");
+    document.body.style.overflow = "";
+    imageZoom.drag = null;
+    imageZoom.stage?.classList.remove("dragging");
+  }
+
+  function fitImageZoom() {
+    if (!imageZoom.images.length || !imageZoom.panes.length) return;
+    const fitScales = imageZoom.images.map((img, index) => {
+      const rect = imageZoom.panes[index].getBoundingClientRect();
+      const width = img.naturalWidth || img.width || 1;
+      const height = img.naturalHeight || img.height || 1;
+      return Math.min(rect.width / width, rect.height / height) * 0.94;
+    }).filter(value => Number.isFinite(value) && value > 0);
+
+    const firstRect = imageZoom.panes[0].getBoundingClientRect();
+    const firstImage = imageZoom.images[0];
+    const width = firstImage.naturalWidth || firstImage.width || 1;
+    const height = firstImage.naturalHeight || firstImage.height || 1;
+    imageZoom.scale = clamp(Math.min(...fitScales, 1) || 1, IMAGE_ZOOM_MIN, IMAGE_ZOOM_MAX);
+    imageZoom.x = (firstRect.width - width * imageZoom.scale) * 0.5;
+    imageZoom.y = (firstRect.height - height * imageZoom.scale) * 0.5;
+    applyImageZoomTransform();
+  }
+
+  function zoomImageAt(factor, clientX = null, clientY = null) {
+    if (!imageZoom.images.length || !imageZoom.panes.length) return;
+    const point = imageZoomPoint(clientX, clientY);
+    const oldScale = imageZoom.scale || 1;
+    const nextScale = clamp(oldScale * factor, IMAGE_ZOOM_MIN, IMAGE_ZOOM_MAX);
+    const imageX = (point.x - imageZoom.x) / oldScale;
+    const imageY = (point.y - imageZoom.y) / oldScale;
+    imageZoom.scale = nextScale;
+    imageZoom.x = point.x - imageX * nextScale;
+    imageZoom.y = point.y - imageY * nextScale;
+    applyImageZoomTransform();
+  }
+
+  function imageZoomPoint(clientX, clientY) {
+    const fallbackRect = imageZoom.panes[0].getBoundingClientRect();
+    if (clientX === null || clientY === null) {
+      return { x: fallbackRect.width * 0.5, y: fallbackRect.height * 0.5 };
+    }
+    for (const pane of imageZoom.panes) {
+      const rect = pane.getBoundingClientRect();
+      if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+        return { x: clientX - rect.left, y: clientY - rect.top };
+      }
+    }
+    return { x: clientX - fallbackRect.left, y: clientY - fallbackRect.top };
+  }
+
+  function applyImageZoomTransform() {
+    const transform = `matrix(${imageZoom.scale}, 0, 0, ${imageZoom.scale}, ${imageZoom.x}, ${imageZoom.y})`;
+    for (const img of imageZoom.images) {
+      img.style.transform = transform;
+    }
+  }
+
+  function endImageZoomDrag(event) {
+    if (!imageZoom.drag || imageZoom.drag.pointerId !== event.pointerId) return;
+    imageZoom.drag = null;
+    imageZoom.stage?.classList.remove("dragging");
   }
 
   function clampPanelHeight(value) {
@@ -1742,14 +2073,45 @@ d3.json("data.json").then(data => {
     return rows ? `<table class="meta">${rows}</table>` : "";
   }
 
-  function nodeMediaStack(node, thumbClass = "") {
+  function nodeImageLabel(node, kind, role = "") {
+    const prefix = role ? `${role} ` : "";
+    const timestep = node?.timestep_label || node?.stem || "timestep";
+    return `${prefix}${kind} sheet ${node?.sheet_id ?? ""} (${timestep})`;
+  }
+
+  function zoomDataAttributes(src, label, pair = null) {
+    if (!src) return "";
+    if (pair) {
+      return ` data-zoom-title="${escapeHtml(pair.title || label)}" data-zoom-left-src="${escapeHtml(pair.leftSrc || "")}" data-zoom-left-label="${escapeHtml(pair.leftLabel || "Source")}" data-zoom-right-src="${escapeHtml(pair.rightSrc || "")}" data-zoom-right-label="${escapeHtml(pair.rightLabel || "Target")}"`;
+    }
+    return ` data-zoom-src="${escapeHtml(src)}" data-zoom-label="${escapeHtml(label)}" data-zoom-title="${escapeHtml(label)}"`;
+  }
+
+  function nodeMediaStack(node, thumbClass = "", linkedPair = null) {
     if (!node) return "";
-    const classAttr = thumbClass ? ` class="${thumbClass}"` : "";
+    const imageClass = thumbClass ? `${thumbClass} zoomable-image` : "";
+    const classAttr = imageClass ? ` class="${imageClass}"` : "";
+    const sheetLabel = nodeImageLabel(node, "Sheet image", linkedPair?.role || "");
+    const fiberLabel = nodeImageLabel(node, "Fiber surface", linkedPair?.role || "");
+    const sheetPair = linkedPair ? {
+      title: "Sheet images",
+      leftSrc: linkedPair.left?.thumbnail || "",
+      leftLabel: nodeImageLabel(linkedPair.left, "Sheet image", "Source"),
+      rightSrc: linkedPair.right?.thumbnail || "",
+      rightLabel: nodeImageLabel(linkedPair.right, "Sheet image", "Target")
+    } : null;
+    const fiberPair = linkedPair ? {
+      title: "Fiber surface images",
+      leftSrc: linkedPair.left?.fiber_surface_image || "",
+      leftLabel: nodeImageLabel(linkedPair.left, "Fiber surface", "Source"),
+      rightSrc: linkedPair.right?.fiber_surface_image || "",
+      rightLabel: nodeImageLabel(linkedPair.right, "Fiber surface", "Target")
+    } : null;
     const sheetImage = node.thumbnail
-      ? `<img${classAttr} src="${escapeHtml(node.thumbnail)}" alt="Sheet ${escapeHtml(node.sheet_id)} image">`
+      ? `<img${classAttr}${zoomDataAttributes(node.thumbnail, sheetLabel, sheetPair)} src="${escapeHtml(node.thumbnail)}" alt="${escapeHtml(sheetLabel)}">`
       : "";
     const fiberImage = node.fiber_surface_image
-      ? `<img${classAttr} src="${escapeHtml(node.fiber_surface_image)}" alt="Fiber surface image for sheet ${escapeHtml(node.sheet_id)}">`
+      ? `<img${classAttr}${zoomDataAttributes(node.fiber_surface_image, fiberLabel, fiberPair)} src="${escapeHtml(node.fiber_surface_image)}" alt="${escapeHtml(fiberLabel)}">`
       : "";
     if (!sheetImage && !fiberImage) return "";
     return `<div class="media-stack">${sheetImage}${fiberImage}</div>`;
@@ -1879,8 +2241,9 @@ d3.json("data.json").then(data => {
     if (!detailsContent) return;
     const sourceNode = sheetByTimestepAndId(link.source_timestep_index, link.source_sheet_id);
     const targetNode = sheetByTimestepAndId(link.target_timestep_index, link.target_sheet_id);
-    const sourceImage = nodeMediaStack(sourceNode, "thumb") || "<p>No image</p>";
-    const targetImage = nodeMediaStack(targetNode, "thumb") || "<p>No image</p>";
+    const linkedPair = { left: sourceNode, right: targetNode };
+    const sourceImage = nodeMediaStack(sourceNode, "thumb", { ...linkedPair, role: "Source" }) || "<p>No image</p>";
+    const targetImage = nodeMediaStack(targetNode, "thumb", { ...linkedPair, role: "Target" }) || "<p>No image</p>";
     const selectedMetricLabel = metricLabel(panel.dataMode, panel.metricId);
     const selectedMetricValue = metricValue(link, panel, panel.metricId);
     const sourceImageFile = sourceNode?.thumbnail ? imageFilename(sourceNode.thumbnail) : "N/A";
@@ -1944,7 +2307,7 @@ d3.json("data.json").then(data => {
         <div>Target fiber image file</div><div>${escapeHtml(targetFiberImageFile)}</div>
         <div>${escapeHtml(selectedMetricLabel)}</div><div>${escapeHtml(formatScore(selectedMetricValue))}</div>
       </div>
-      <div class="thumb-row">
+      <div class="thumb-row link-media-row">
         <div>${sourceImage}</div>
         <div>${targetImage}</div>
       </div>
@@ -3207,6 +3570,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
   });
   camera.setZoomScale(1);
   camera.clearViewFocus();
+  bindImageZoomViewer();
   bindLayoutControls();
   initRangeDispatcher();
   renderAll();
