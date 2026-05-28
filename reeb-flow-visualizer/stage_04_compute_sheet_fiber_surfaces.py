@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+
+import vtk
 
 from common import (
     FIBER_SURFACE_DIR,
@@ -26,28 +28,38 @@ from common import (
     FV99_FNAME,
     FV99_GNAME,
     FV99_OMP_THREADS,
+    RSI_DIR,
     RS_DIR,
     TTK_BUILD_LIB_DIR,
     TTK_INSTALL_LIB_DIR,
     VTU_DIR,
     VTK_LIB_DIR,
 )
+from stage_02_build_sankey_data import read_rsi
 
 
 @dataclass(frozen=True)
-class SurfaceRecord:
-    source: Path
-    destination_name: str
+class LabeledSurfaceOutput:
     field: str
     sign: str
-    sheet_id: str
+    value: float
+    path: Path
+
+
+@dataclass(frozen=True)
+class ThresholdedSurface:
+    filename: str
+    field: str
+    sign: str
+    sheet_id: int
+    cell_count: int
 
 
 @dataclass(frozen=True)
 class TimestepResult:
     vtu: Path
     status: str
-    moved_count: int = 0
+    output_count: int = 0
     message: str = ""
 
 
@@ -96,11 +108,14 @@ def expected_manifest_payload(vtu_file: Path) -> dict:
         "timestep": vtu_file.stem,
         "vtu": str(vtu_file),
         "rs": str(RS_DIR / f"{vtu_file.stem}.rs"),
+        "rsi": str(RSI_DIR / f"{vtu_file.stem}.rsi"),
         "f_name": FV99_FNAME,
         "g_name": FV99_GNAME,
         "f_isovalue": float(FIBER_SURFACE_FIELD_F_ISOVALUE),
         "g_isovalue": float(FIBER_SURFACE_FIELD_G_ISOVALUE),
         "top_n_sheets": int(FIBER_SURFACE_TOP_N_SHEETS),
+        "surface_mode": "thresholded_from_full_labeled_fiber_surface",
+        "threshold_cell_array": "sheetId",
     }
 
 
@@ -124,7 +139,7 @@ def existing_outputs_complete(vtu_file: Path) -> bool:
     if not isinstance(outputs, list) or not outputs:
         return False
 
-    return all((step_dir / str(name)).exists() for name in outputs)
+    return all((step_dir / str(item.get("filename", ""))).exists() for item in outputs)
 
 
 def check_inputs() -> None:
@@ -140,6 +155,9 @@ def check_inputs() -> None:
     if not RS_DIR.exists():
         raise FileNotFoundError(f"Reeb-space directory not found: {RS_DIR}")
 
+    if not RSI_DIR.exists():
+        raise FileNotFoundError(f"RSI directory not found: {RSI_DIR}")
+
 
 def discover_timesteps(selected_stems: set[str] | None = None) -> list[Path]:
     vtu_files = sorted(VTU_DIR.glob("*.vtu"))
@@ -153,6 +171,20 @@ def discover_timesteps(selected_stems: set[str] | None = None) -> list[Path]:
     ]
 
 
+def read_top_sheet_ids(rsi_file: Path) -> list[int]:
+    rsi_data = read_rsi(rsi_file)
+    finite_areas = [
+        (sheet_id, area)
+        for sheet_id, area in rsi_data["sheet_area"].items()
+        if math.isfinite(area)
+    ]
+    finite_areas.sort(key=lambda item: item[1], reverse=True)
+    return [
+        int(sheet_id)
+        for sheet_id, _area in finite_areas[: int(FIBER_SURFACE_TOP_N_SHEETS)]
+    ]
+
+
 def run_fv99_for_sign(
     vtu_file: Path,
     rs_file: Path,
@@ -161,7 +193,7 @@ def run_fv99_for_sign(
     g_value: float,
     work_dir: Path,
     log_file: Path,
-) -> tuple[int, list[SurfaceRecord]]:
+) -> tuple[int, list[LabeledSurfaceOutput]]:
     output_dir = work_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -175,8 +207,6 @@ def run_fv99_for_sign(
         value_text(f_value),
         "--fieldGValueFS",
         value_text(g_value),
-        "--sheetsToProcess",
-        str(int(FIBER_SURFACE_TOP_N_SHEETS)),
         "--fName",
         FV99_FNAME,
         "--gName",
@@ -193,53 +223,142 @@ def run_fv99_for_sign(
             env=FV99_ENV,
         )
 
-    records: list[SurfaceRecord] = []
-    tokens = {
-        "f": value_token(f_value),
-        "g": value_token(g_value),
-    }
+    outputs = [
+        LabeledSurfaceOutput(
+            field="f",
+            sign=sign,
+            value=f_value,
+            path=output_dir / "labeled.fs.f.vtp",
+        ),
+        LabeledSurfaceOutput(
+            field="g",
+            sign=sign,
+            value=g_value,
+            path=output_dir / "labeled.fs.g.vtp",
+        ),
+    ]
 
-    for field in ("f", "g"):
-        for source in sorted(output_dir.glob(f"fs.{field}.*.vtp")):
-            parts = source.name.split(".")
-            if len(parts) < 4:
-                continue
-            sheet_id = parts[2]
+    return result.returncode, outputs
+
+
+def cell_data_array_name(poly_data: vtk.vtkPolyData) -> str:
+    cell_data = poly_data.GetCellData()
+    for name in ("sheetId", "SheetId", "SheetID"):
+        if cell_data.GetArray(name) is not None:
+            return name
+
+    names = [
+        cell_data.GetArrayName(index)
+        for index in range(cell_data.GetNumberOfArrays())
+    ]
+    raise ValueError(f"fiber surface VTP has no sheetId cell-data array; arrays={names}")
+
+
+def read_poly_data(path: Path) -> vtk.vtkPolyData:
+    reader = vtk.vtkXMLPolyDataReader()
+    reader.SetFileName(str(path))
+    reader.Update()
+
+    poly_data = reader.GetOutput()
+    if poly_data is None:
+        raise ValueError(f"failed to read fiber surface VTP: {path}")
+    return poly_data
+
+
+def threshold_sheet_surface(
+    source: Path,
+    destination: Path,
+    sheet_id: int,
+) -> int:
+    poly_data = read_poly_data(source)
+    array_name = cell_data_array_name(poly_data)
+
+    threshold = vtk.vtkThreshold()
+    threshold.SetInputData(poly_data)
+    threshold.SetInputArrayToProcess(
+        0,
+        0,
+        0,
+        vtk.vtkDataObject.FIELD_ASSOCIATION_CELLS,
+        array_name,
+    )
+    threshold.SetLowerThreshold(float(sheet_id) - 0.5)
+    threshold.SetUpperThreshold(float(sheet_id) + 0.5)
+    threshold.SetThresholdFunction(vtk.vtkThreshold.THRESHOLD_BETWEEN)
+    threshold.Update()
+
+    geometry = vtk.vtkGeometryFilter()
+    geometry.SetInputConnection(threshold.GetOutputPort())
+    geometry.Update()
+
+    output = vtk.vtkPolyData()
+    output.DeepCopy(geometry.GetOutput())
+
+    writer = vtk.vtkXMLPolyDataWriter()
+    writer.SetFileName(str(destination))
+    writer.SetInputData(output)
+    writer.SetDataModeToBinary()
+    if writer.Write() != 1:
+        raise RuntimeError(f"failed to write thresholded fiber surface: {destination}")
+
+    return int(output.GetNumberOfCells())
+
+
+def threshold_labeled_surfaces(
+    labeled_surfaces: list[LabeledSurfaceOutput],
+    top_sheet_ids: list[int],
+    step_dir: Path,
+) -> list[ThresholdedSurface]:
+    step_dir.mkdir(parents=True, exist_ok=True)
+    records: list[ThresholdedSurface] = []
+
+    for labeled_surface in labeled_surfaces:
+        if not labeled_surface.path.exists():
+            raise FileNotFoundError(f"missing labeled fiber surface: {labeled_surface.path}")
+
+        token = value_token(labeled_surface.value)
+        for sheet_id in top_sheet_ids:
+            filename = (
+                f"sheet_{sheet_id}_{labeled_surface.field}_"
+                f"{labeled_surface.sign}_{token}.vtp"
+            )
+            destination = step_dir / filename
+            cell_count = threshold_sheet_surface(
+                labeled_surface.path,
+                destination,
+                sheet_id,
+            )
             records.append(
-                SurfaceRecord(
-                    source=source,
-                    destination_name=f"sheet_{sheet_id}_{field}_{sign}_{tokens[field]}.vtp",
-                    field=field,
-                    sign=sign,
+                ThresholdedSurface(
+                    filename=filename,
+                    field=labeled_surface.field,
+                    sign=labeled_surface.sign,
                     sheet_id=sheet_id,
+                    cell_count=cell_count,
                 )
             )
 
-    return result.returncode, records
+    return records
 
 
-def move_records(records: list[SurfaceRecord], step_dir: Path, rebuild: bool) -> list[str]:
-    moved: list[str] = []
-    step_dir.mkdir(parents=True, exist_ok=True)
-
-    for record in records:
-        destination = step_dir / record.destination_name
-        if destination.exists():
-            if not rebuild:
-                moved.append(record.destination_name)
-                continue
-            destination.unlink()
-
-        shutil.move(str(record.source), str(destination))
-        moved.append(record.destination_name)
-
-    return moved
-
-
-def write_manifest(vtu_file: Path, output_names: list[str]) -> None:
+def write_manifest(
+    vtu_file: Path,
+    top_sheet_ids: list[int],
+    outputs: list[ThresholdedSurface],
+) -> None:
     step_dir = FIBER_SURFACE_DIR / vtu_file.stem
     payload = expected_manifest_payload(vtu_file)
-    payload["outputs"] = sorted(output_names)
+    payload["top_sheet_ids"] = top_sheet_ids
+    payload["outputs"] = [
+        {
+            "filename": output.filename,
+            "field": output.field,
+            "sign": output.sign,
+            "sheet_id": output.sheet_id,
+            "cell_count": output.cell_count,
+        }
+        for output in outputs
+    ]
     manifest_path(step_dir).write_text(json.dumps(payload, indent=2) + "\n")
 
 
@@ -252,15 +371,39 @@ def compute_timestep(vtu_file: Path, rebuild: bool) -> TimestepResult:
             message=f"missing rs file: {rs_file}",
         )
 
+    rsi_file = RSI_DIR / f"{vtu_file.stem}.rsi"
+    if not rsi_file.exists():
+        return TimestepResult(
+            vtu=vtu_file,
+            status="failed",
+            message=f"missing rsi file: {rsi_file}",
+        )
+
     if not rebuild and existing_outputs_complete(vtu_file):
         return TimestepResult(vtu=vtu_file, status="skipped_existing")
+
+    try:
+        top_sheet_ids = read_top_sheet_ids(rsi_file)
+    except Exception as exc:
+        return TimestepResult(
+            vtu=vtu_file,
+            status="failed",
+            message=f"failed to read top sheets from {rsi_file}: {exc}",
+        )
+
+    if not top_sheet_ids:
+        return TimestepResult(
+            vtu=vtu_file,
+            status="failed",
+            message=f"no finite top sheets in {rsi_file}",
+        )
 
     step_dir = FIBER_SURFACE_DIR / vtu_file.stem
     log_dir = FIBER_SURFACE_DIR / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     FIBER_SURFACE_TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-    all_records: list[SurfaceRecord] = []
+    all_labeled_surfaces: list[LabeledSurfaceOutput] = []
 
     with tempfile.TemporaryDirectory(
         prefix=f"{vtu_file.stem}_",
@@ -284,7 +427,7 @@ def compute_timestep(vtu_file: Path, rebuild: bool) -> TimestepResult:
             run_dir = tmp_dir / sign
             run_dir.mkdir(parents=True, exist_ok=True)
             log_file = log_dir / f"{vtu_file.stem}_{sign}.log"
-            returncode, records = run_fv99_for_sign(
+            returncode, labeled_surfaces = run_fv99_for_sign(
                 vtu_file,
                 rs_file,
                 sign,
@@ -301,24 +444,38 @@ def compute_timestep(vtu_file: Path, rebuild: bool) -> TimestepResult:
                     message=f"{sign} returncode={returncode} log={log_file}",
                 )
 
-            fields_with_output = {(record.field, record.sign) for record in records}
-            expected_outputs = {("f", sign), ("g", sign)}
-            if fields_with_output != expected_outputs:
+            missing_outputs = [
+                str(surface.path)
+                for surface in labeled_surfaces
+                if not surface.path.exists()
+            ]
+            if missing_outputs:
                 return TimestepResult(
                     vtu=vtu_file,
                     status="failed",
-                    message=f"{sign} missing outputs log={log_file}",
+                    message=f"{sign} missing labeled outputs: {', '.join(missing_outputs)} log={log_file}",
                 )
 
-            all_records.extend(records)
+            all_labeled_surfaces.extend(labeled_surfaces)
 
-        output_names = move_records(all_records, step_dir, rebuild)
+        try:
+            outputs = threshold_labeled_surfaces(
+                all_labeled_surfaces,
+                top_sheet_ids,
+                step_dir,
+            )
+        except Exception as exc:
+            return TimestepResult(
+                vtu=vtu_file,
+                status="failed",
+                message=f"threshold failed: {exc}",
+            )
 
-    write_manifest(vtu_file, output_names)
+    write_manifest(vtu_file, top_sheet_ids, outputs)
     return TimestepResult(
         vtu=vtu_file,
         status="done",
-        moved_count=len(output_names),
+        output_count=len(outputs),
     )
 
 
@@ -346,6 +503,7 @@ def compute_sheet_fiber_surfaces_stage(
         f"{FV99_FNAME}=+/-{value_text(FIBER_SURFACE_FIELD_F_ISOVALUE)}, "
         f"{FV99_GNAME}=+/-{value_text(FIBER_SURFACE_FIELD_G_ISOVALUE)}"
     )
+    print(f"Sheet filter: top {FIBER_SURFACE_TOP_N_SHEETS} sheets by RSI area")
 
     failed_lines: list[str] = []
 
@@ -358,7 +516,7 @@ def compute_sheet_fiber_surfaces_stage(
         for count, future in enumerate(as_completed(futures), start=1):
             result = future.result()
             if result.status == "done":
-                status = f"done moved={result.moved_count}"
+                status = f"done outputs={result.output_count}"
             elif result.status == "skipped_existing":
                 status = "skipped existing"
             else:
