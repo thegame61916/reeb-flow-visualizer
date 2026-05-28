@@ -88,7 +88,14 @@ FIBER_SURFACE_TOP_N_SHEETS = TOP_N_SHEETS
 FIBER_SURFACE_WORKERS = 1
 FIBER_SURFACE_REBUILD = False
 FIBER_SURFACE_DIR = BASE_DIR / "sheetFiberSurfaces"
+FIBER_SURFACE_IMAGE_DIR = BASE_DIR / "sheetFiberSurfaceImages"
 FIBER_SURFACE_TEMP_DIR = SHEET_RENDERER_TEMP_DIR / "fiber_surfaces"
+FIBER_SURFACE_MOLECULAR_STRUCTURE_DIR = VTU_DIR / "molecularStructure"
+FIBER_SURFACE_RENDER_STATE_FILE = Path(__file__).resolve().parent / "smapleFSImage.pvsm"
+FIBER_SURFACE_RENDER_IMAGE_RESOLUTION = (1600, 1200)
+FIBER_SURFACE_RENDER_TIMEOUT_SECONDS = 300
+FIBER_SURFACE_RENDER_RETRIES = 2
+PVPYTHON = Path("/home/mohit/Desktop/ParaView-6.0.0-MPI-Linux-Python3.12-x86_64/bin/pvpython")
 
 # Corner colors for centroid-position node coloring in the unified viewer.
 # Coordinates use the global 2D sheet-space extent: x=min/max is left/right,
