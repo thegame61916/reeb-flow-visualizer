@@ -6,6 +6,11 @@ Each output timestep contains point-data arrays:
   - orb00: implicit torus function
   - orb01: height function, using the global z coordinate
 
+The base fields are kept unchanged unless a sampled mesh face maps to a
+line in range space. In that case a tiny deterministic perturbation is
+applied to the scalar values and rechecked at the same precision written
+to the VTU.
+
 The script creates:
   DATASET_ROOT/torusGrowing/downsampledGrids/step_XXXXX.vtu
   DATASET_ROOT/torusMoving/downsampledGrids/step_XXXXX.vtu
@@ -54,6 +59,21 @@ MOVING_CENTER_AMPLITUDE = (0.55, 0.40, 0.22)
 
 OVERWRITE_EXISTING = True
 
+# Range-space degeneracy guard. The perturbation is only applied if the raw
+# torus/height fields contain triangle faces with zero or near-zero area in
+# (orb00, orb01). Values are intentionally small relative to the field ranges.
+RANGE_DEGENERACY_TOLERANCE = 1.0e-12
+VTK_FLOAT_SIGNIFICANT_DIGITS = 17
+FIELD_PERTURBATION_EPSILONS = (
+    1.0e-6,
+    1.0e-5,
+    1.0e-4,
+    3.0e-4,
+    1.0e-3,
+    3.0e-3,
+    1.0e-2,
+)
+
 # ==================================================
 
 
@@ -67,6 +87,14 @@ class GridTopology:
     connectivity: list[int]
     offsets: list[int]
     cell_types: list[int]
+    range_faces: list[tuple[int, int, int]]
+
+
+@dataclass(frozen=True)
+class FieldWriteSummary:
+    degenerate_faces_before: int
+    degenerate_faces_after: int
+    perturbation_epsilon: float | None
 
 
 TETRA_VTK_CELL_TYPE = 10
@@ -124,6 +152,7 @@ def make_grid_topology() -> GridTopology:
     connectivity: list[int] = []
     offsets: list[int] = []
     cell_types: list[int] = []
+    face_set: set[tuple[int, int, int]] = set()
 
     for i in range(nx - 1):
         for j in range(ny - 1):
@@ -139,15 +168,21 @@ def make_grid_topology() -> GridTopology:
                     point_id(i + 1, j + 1, k + 1, ny, nz),
                 )
                 for tet in local_tets:
-                    connectivity.extend(cube[idx] for idx in tet)
+                    tetra = tuple(cube[idx] for idx in tet)
+                    connectivity.extend(tetra)
                     offsets.append(len(connectivity))
                     cell_types.append(TETRA_VTK_CELL_TYPE)
+
+                    a, b, c, d = tetra
+                    for face in ((a, b, c), (a, b, d), (a, c, d), (b, c, d)):
+                        face_set.add(tuple(sorted(face)))
 
     return GridTopology(
         points=points,
         connectivity=connectivity,
         offsets=offsets,
         cell_types=cell_types,
+        range_faces=sorted(face_set),
     )
 
 
@@ -180,6 +215,112 @@ def moving_fields(point: Point, time_fraction: float) -> tuple[float, float]:
     return torus_implicit(point, center, MOVING_MAJOR_RADIUS, MOVING_MINOR_RADIUS), point[2]
 
 
+def serialized_float(value: float) -> float:
+    return float(f"{float(value):.{VTK_FLOAT_SIGNIFICANT_DIGITS}g}")
+
+
+def serialized_range_values(values: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    return [
+        (serialized_float(f_value), serialized_float(g_value))
+        for f_value, g_value in values
+    ]
+
+
+def range_area_twice(values: list[tuple[float, float]], face: tuple[int, int, int]) -> float:
+    first, second, third = face
+    f0, g0 = values[first]
+    f1, g1 = values[second]
+    f2, g2 = values[third]
+    return abs((f1 - f0) * (g2 - g0) - (f2 - f0) * (g1 - g0))
+
+
+def count_degenerate_range_faces(
+    values: list[tuple[float, float]],
+    range_faces: list[tuple[int, int, int]],
+) -> int:
+    return sum(
+        1
+        for face in range_faces
+        if range_area_twice(values, face) <= RANGE_DEGENERACY_TOLERANCE
+    )
+
+
+def orb00_perturbation(point: Point, time_fraction: float) -> float:
+    x, y, z = point
+    return (
+        0.29 * x
+        - 0.17 * y
+        + 0.23 * z
+        + 0.031 * x * y * z
+        + 0.019 * time_fraction * (x + y - z)
+    )
+
+
+def orb01_perturbation(point: Point, time_fraction: float) -> float:
+    x, y, z = point
+    return (
+        0.73 * x
+        - 0.41 * y
+        + 0.19 * z
+        + 0.07 * x * y
+        - 0.05 * y * z
+        + 0.03 * z * x
+        + 0.011 * time_fraction * (2.0 * x - y + z)
+    )
+
+
+def perturb_values(
+    topology: GridTopology,
+    values: list[tuple[float, float]],
+    time_fraction: float,
+    epsilon: float,
+) -> list[tuple[float, float]]:
+    return [
+        (
+            f_value + epsilon * orb00_perturbation(point, time_fraction),
+            g_value + epsilon * orb01_perturbation(point, time_fraction),
+        )
+        for point, (f_value, g_value) in zip(topology.points, values)
+    ]
+
+
+def make_non_degenerate_range_values(
+    topology: GridTopology,
+    values: list[tuple[float, float]],
+    time_fraction: float,
+) -> tuple[list[tuple[float, float]], FieldWriteSummary]:
+    serialized_values = serialized_range_values(values)
+    degenerate_before = count_degenerate_range_faces(serialized_values, topology.range_faces)
+    if degenerate_before == 0:
+        return values, FieldWriteSummary(
+            degenerate_faces_before=0,
+            degenerate_faces_after=0,
+            perturbation_epsilon=None,
+        )
+
+    for epsilon in FIELD_PERTURBATION_EPSILONS:
+        candidate = perturb_values(topology, values, time_fraction, epsilon)
+        serialized_candidate = serialized_range_values(candidate)
+        degenerate_after = count_degenerate_range_faces(serialized_candidate, topology.range_faces)
+        if degenerate_after == 0:
+            return candidate, FieldWriteSummary(
+                degenerate_faces_before=degenerate_before,
+                degenerate_faces_after=0,
+                perturbation_epsilon=epsilon,
+            )
+
+    final_values = perturb_values(topology, values, time_fraction, FIELD_PERTURBATION_EPSILONS[-1])
+    final_degenerate = count_degenerate_range_faces(
+        serialized_range_values(final_values),
+        topology.range_faces,
+    )
+    raise RuntimeError(
+        "failed to remove range-space degeneracies: "
+        f"before={degenerate_before}, after={final_degenerate}, "
+        f"max_epsilon={FIELD_PERTURBATION_EPSILONS[-1]}"
+    )
+
+
 def format_values(values: Iterable[object], items_per_line: int = 8) -> str:
     lines: list[str] = []
     current: list[str] = []
@@ -197,16 +338,30 @@ def format_values(values: Iterable[object], items_per_line: int = 8) -> str:
 
 
 def format_float(value: float) -> str:
-    return f"{value:.12g}"
+    return f"{value:.{VTK_FLOAT_SIGNIFICANT_DIGITS}g}"
 
 
-def write_vtu(path: Path, topology: GridTopology, scalar_function: ScalarFunction, time_fraction: float) -> None:
+def write_vtu(
+    path: Path,
+    topology: GridTopology,
+    scalar_function: ScalarFunction,
+    time_fraction: float,
+) -> FieldWriteSummary:
+    raw_values = [
+        scalar_function(point, time_fraction)
+        for point in topology.points
+    ]
+    scalar_values, summary = make_non_degenerate_range_values(
+        topology,
+        raw_values,
+        time_fraction,
+    )
+
     orb00: list[str] = []
     orb01: list[str] = []
     point_values: list[str] = []
 
-    for point in topology.points:
-        f_value, g_value = scalar_function(point, time_fraction)
+    for point, (f_value, g_value) in zip(topology.points, scalar_values):
         orb00.append(format_float(f_value))
         orb01.append(format_float(g_value))
         point_values.extend(format_float(coord) for coord in point)
@@ -250,6 +405,7 @@ def write_vtu(path: Path, topology: GridTopology, scalar_function: ScalarFunctio
 """
 
     path.write_text(text)
+    return summary
 
 
 def generate_dataset(dataset_name: str, scalar_function: ScalarFunction, topology: GridTopology, overwrite: bool) -> None:
@@ -264,8 +420,16 @@ def generate_dataset(dataset_name: str, scalar_function: ScalarFunction, topolog
             continue
 
         fraction = timestep_fraction(index, NUM_TIMESTEPS)
-        write_vtu(path, topology, scalar_function, fraction)
-        print(f"[{index + 1}/{NUM_TIMESTEPS}] wrote {path.name}")
+        summary = write_vtu(path, topology, scalar_function, fraction)
+        if summary.perturbation_epsilon is None:
+            suffix = ""
+        else:
+            suffix = (
+                " "
+                f"perturbed_epsilon={summary.perturbation_epsilon:g} "
+                f"degenerate_faces={summary.degenerate_faces_before}"
+            )
+        print(f"[{index + 1}/{NUM_TIMESTEPS}] wrote {path.name}{suffix}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -300,6 +464,7 @@ def main() -> int:
     topology = make_grid_topology()
     print(f"Grid points: {len(topology.points)}")
     print(f"Tetrahedra: {len(topology.cell_types)}")
+    print(f"Unique triangle faces checked for range degeneracy: {len(topology.range_faces)}")
 
     if args.dataset in ("both", "growing"):
         generate_dataset(GROWING_DATASET_NAME, growing_fields, topology, overwrite)
