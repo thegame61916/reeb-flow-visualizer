@@ -11,6 +11,7 @@ from pathlib import Path
 
 from common import (
     BASE_DIR,
+    CENTROID_AXIS_DIAGONAL_COLORS,
     CENTROID_COLOR_CORNERS,
     FIBER_SURFACE_IMAGE_DIR,
     HYBRID_SCORE_DEFAULT_WEIGHTS,
@@ -153,6 +154,21 @@ def merge_bounds(
     )
 
 
+def origin_symmetric_bounds(
+    bounds: tuple[float, float, float, float] | None,
+) -> tuple[float, float, float, float] | None:
+    if bounds is None:
+        return None
+    xmin, ymin, xmax, ymax = bounds
+    x_extent = max(abs(xmin), abs(xmax))
+    y_extent = max(abs(ymin), abs(ymax))
+    if x_extent == 0.0:
+        x_extent = 0.5
+    if y_extent == 0.0:
+        y_extent = 0.5
+    return (-x_extent, -y_extent, x_extent, y_extent)
+
+
 def bounds_from_centroids(cache_items: list[dict]) -> tuple[float, float, float, float]:
     bounds: tuple[float, float, float, float] | None = None
     for data in cache_items:
@@ -258,6 +274,7 @@ def load_timestep_cache(viewer_dir: Path) -> tuple[list[dict], float, int, tuple
         centroid_color_bounds = merge_bounds(centroid_color_bounds, safe_bounds(data.get("global_bounds")))
     if centroid_color_bounds is None:
         centroid_color_bounds = bounds_from_centroids(cache_items)
+    centroid_color_bounds = origin_symmetric_bounds(centroid_color_bounds) or (-0.5, -0.5, 0.5, 0.5)
 
     timesteps: list[dict] = []
     max_area = 0.0
@@ -507,6 +524,7 @@ def prepare_data(viewer_dir: Path) -> dict:
             "global_vertex_max": max_vertices,
             "centroid_color_bounds": list(centroid_color_bounds),
             "centroid_color_corners": CENTROID_COLOR_CORNERS,
+            "centroid_axis_diagonal_colors": CENTROID_AXIS_DIAGONAL_COLORS,
             "default_ranges": DEFAULT_RANGES,
             "viewer_default_top_sheets": max(1, safe_int(VIEWER_DEFAULT_TOP_SHEETS, 10)),
             "node_height_fixed": 18,
@@ -600,7 +618,8 @@ def write_index_html() -> Path:
             <option value="solid" selected>solid</option>
             <option value="area">sheet area</option>
             <option value="vertices">vertex count</option>
-            <option value="centroid_position">centroid position</option>
+            <option value="centroid_position">centroid corners</option>
+            <option value="centroid_axis_diagonal">centroid red/blue axes</option>
           </select>
         </label>
         <div id="centroidColorLegend" class="centroid-color-legend" hidden>
@@ -1338,6 +1357,11 @@ d3.json("data.json").then(data => {
     top_left: data.meta.centroid_color_corners?.top_left || "#16a34a",
     top_right: data.meta.centroid_color_corners?.top_right || "#f59e0b"
   };
+  const centroidAxisDiagonalColors = {
+    origin: data.meta.centroid_axis_diagonal_colors?.origin || "#808080",
+    x_axis: data.meta.centroid_axis_diagonal_colors?.x_axis || "#0000ff",
+    y_axis: data.meta.centroid_axis_diagonal_colors?.y_axis || "#ff0000"
+  };
   const linkMin = data.meta.link_thickness_min || 1.4;
   const linkMax = data.meta.link_thickness_max || 16;
   const timestepMax = timestepLookup.maxIndex;
@@ -1630,15 +1654,45 @@ d3.json("data.json").then(data => {
     return lerpRgb(bottom, top, y);
   }
 
-  function centroidColorFromCentroid(centroid) {
-    if (!Array.isArray(centroid) || centroid.length < 2) return "#6f9ed4";
+  function centroidAxisDiagonalRgbFromUnit(tx, ty) {
+    const nx = clamp((Number(tx) || 0) * 2 - 1, -1, 1);
+    const ny = clamp((Number(ty) || 0) * 2 - 1, -1, 1);
+    const ax = Math.abs(nx);
+    const ay = Math.abs(ny);
+    const radius = clamp(Math.hypot(nx, ny), 0, 1);
+    if (!(radius > 0)) return parseHexColor(centroidAxisDiagonalColors.origin);
+
+    const angleT = clamp(Math.atan2(ay, ax) / (Math.PI / 2), 0, 1);
+    const target = lerpRgb(
+      parseHexColor(centroidAxisDiagonalColors.x_axis),
+      parseHexColor(centroidAxisDiagonalColors.y_axis),
+      angleT
+    );
+    return lerpRgb(parseHexColor(centroidAxisDiagonalColors.origin), target, radius);
+  }
+
+  function centroidAxisDiagonalColorFromCentroid(centroid) {
+    const position = centroidPositionFromCentroid(centroid);
+    if (!position) return "#6f9ed4";
+    return rgbToHex(centroidAxisDiagonalRgbFromUnit(position[0], position[1]));
+  }
+
+  function centroidPositionFromCentroid(centroid) {
+    if (!Array.isArray(centroid) || centroid.length < 2) return null;
     const [xmin, ymin, xmax, ymax] = centroidColorBounds;
     const x = Number(centroid[0]);
     const y = Number(centroid[1]);
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !(xmax > xmin) || !(ymax > ymin)) return "#6f9ed4";
-    const tx = clamp((x - xmin) / (xmax - xmin), 0, 1);
-    const ty = clamp((y - ymin) / (ymax - ymin), 0, 1);
-    return rgbToHex(centroidRgbFromUnit(tx, ty));
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !(xmax > xmin) || !(ymax > ymin)) return null;
+    return [
+      clamp((x - xmin) / (xmax - xmin), 0, 1),
+      clamp((y - ymin) / (ymax - ymin), 0, 1)
+    ];
+  }
+
+  function centroidColorFromCentroid(centroid) {
+    const position = centroidPositionFromCentroid(centroid);
+    if (!position) return "#6f9ed4";
+    return rgbToHex(centroidRgbFromUnit(position[0], position[1]));
   }
 
   function formatBound(value, axis) {
@@ -1656,7 +1710,9 @@ d3.json("data.json").then(data => {
       const ty = height > 1 ? 1 - py / (height - 1) : 0;
       for (let px = 0; px < width; px += 1) {
         const tx = width > 1 ? px / (width - 1) : 0;
-        const rgb = centroidRgbFromUnit(tx, ty);
+        const rgb = state.layoutControls.nodeColorMode === "centroid_axis_diagonal"
+          ? centroidAxisDiagonalRgbFromUnit(tx, ty)
+          : centroidRgbFromUnit(tx, ty);
         const offset = (py * width + px) * 4;
         image.data[offset] = Math.round(rgb[0]);
         image.data[offset + 1] = Math.round(rgb[1]);
@@ -1665,6 +1721,12 @@ d3.json("data.json").then(data => {
       }
     }
     context.putImageData(image, 0, 0);
+    const title = document.querySelector(".centroid-color-title");
+    if (title) {
+      title.textContent = state.layoutControls.nodeColorMode === "centroid_axis_diagonal"
+        ? "2D red/blue axis color"
+        : "2D centroid color";
+    }
     const [xmin, ymin, xmax, ymax] = centroidColorBounds;
     const labels = {
       centroidXMin: formatBound(xmin, "x"),
@@ -1681,7 +1743,7 @@ d3.json("data.json").then(data => {
   function updateCentroidColorLegendVisibility() {
     const legend = document.getElementById("centroidColorLegend");
     if (!legend) return;
-    legend.hidden = state.layoutControls.nodeColorMode !== "centroid_position";
+    legend.hidden = !["centroid_position", "centroid_axis_diagonal"].includes(state.layoutControls.nodeColorMode);
   }
 
   function sanitizeShapeWeights(weights) {
@@ -1931,6 +1993,9 @@ d3.json("data.json").then(data => {
     }
     if (mode === "centroid_position") {
       return node.centroid_color || centroidColorFromCentroid(node.centroid);
+    }
+    if (mode === "centroid_axis_diagonal") {
+      return centroidAxisDiagonalColorFromCentroid(node.centroid);
     }
     const value = nodeMetricValue(node, mode);
     const maxValue = nodeMetricMax(mode);
@@ -3473,6 +3538,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       nodeColorNode.value = state.layoutControls.nodeColorMode;
       nodeColorNode.addEventListener("change", event => {
         state.layoutControls.nodeColorMode = event.target.value;
+        drawCentroidColorLegend();
         updateCentroidColorLegendVisibility();
         scheduleRenderAll();
       });

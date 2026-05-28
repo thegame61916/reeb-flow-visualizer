@@ -120,6 +120,15 @@ CENTROID_COLOR_CORNERS = {
     "top_right": "#f59e0b",
 }
 
+# Axis centroid node coloring in the unified viewer. The origin color is a
+# neutral low-saturation color at (0, 0). Distance from the origin controls
+# saturation, and angle controls the red-to-blue interpolation.
+CENTROID_AXIS_DIAGONAL_COLORS = {
+    "origin": "#808080",
+    "x_axis": "#0000ff",
+    "y_axis": "#ff0000",
+}
+
 
 # Output files
 OVERLAP_FILE = OUTPUT_DIR / "sheet_overlaps.json"
