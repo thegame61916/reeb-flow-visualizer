@@ -17,11 +17,15 @@ Cached VTP behavior:
   - default: reuse cached VTPs and build only missing ones
   - --rebuild-cache: force rebuilding all VTP cache entries
   - --clean-cache: clear VTP cache before rendering
+
+When SHEET_RENDERER_USE_GLOBAL_BOUNDS is enabled in common.py, all output PNGs
+use the same global 2D sheet-space frame and fixed canvas size.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import shutil
 import struct
@@ -51,8 +55,11 @@ from common import (  # noqa: E402
     RSI_DIR,
     RS_DIR,
     SHEET_IMAGE_DIR,
+    SHEET_RENDERER_GLOBAL_PADDING,
+    SHEET_RENDERER_IMAGE_SIZE,
     SHEET_RENDERER_TEMP_DIR,
     SHEET_RENDERER_UNIFORM_SHEET_COLOR,
+    SHEET_RENDERER_USE_GLOBAL_BOUNDS,
     SHEET_RENDERER_WORKERS,
     TOP_N_SHEETS,
     TTK_BUILD_LIB_DIR,
@@ -91,9 +98,9 @@ MIN_TEMP_FREE_GB = 50
 MIN_OUTPUT_FREE_GB = 5
 VTP_CACHE_DIR = TEMP_DIRECTORY / "vtp_cache"
 
-FIGURE_WIDTH = 8.0
-FIGURE_HEIGHT = 8.0
 DPI = 200
+FIGURE_WIDTH = SHEET_RENDERER_IMAGE_SIZE[0] / DPI
+FIGURE_HEIGHT = SHEET_RENDERER_IMAGE_SIZE[1] / DPI
 UNIFORM_SHEET_COLOR = SHEET_RENDERER_UNIFORM_SHEET_COLOR
 
 
@@ -186,13 +193,89 @@ def cleanup_stale_temp_dirs(path: Path) -> None:
             continue
 
 
+def sheet_polygons_bounds(sheet_polygons) -> tuple[float, float, float, float] | None:
+    finite_points = [
+        (x, y)
+        for x, y in sheet_polygons.points
+        if math.isfinite(x) and math.isfinite(y)
+    ]
+    if not finite_points:
+        return None
+
+    xs = [point[0] for point in finite_points]
+    ys = [point[1] for point in finite_points]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def merge_bounds(
+    current: tuple[float, float, float, float] | None,
+    incoming: tuple[float, float, float, float] | None,
+) -> tuple[float, float, float, float] | None:
+    if incoming is None:
+        return current
+    if current is None:
+        return incoming
+    return (
+        min(current[0], incoming[0]),
+        min(current[1], incoming[1]),
+        max(current[2], incoming[2]),
+        max(current[3], incoming[3]),
+    )
+
+
+def expand_bounds_to_canvas(
+    bounds: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    xmin, ymin, xmax, ymax = bounds
+    width = xmax - xmin
+    height = ymax - ymin
+
+    if width <= 0.0:
+        xmin -= 0.5
+        xmax += 0.5
+        width = xmax - xmin
+    if height <= 0.0:
+        ymin -= 0.5
+        ymax += 0.5
+        height = ymax - ymin
+
+    pad = max(0.0, float(SHEET_RENDERER_GLOBAL_PADDING))
+    xmin -= width * pad
+    xmax += width * pad
+    ymin -= height * pad
+    ymax += height * pad
+    width = xmax - xmin
+    height = ymax - ymin
+
+    pixel_width, pixel_height = SHEET_RENDERER_IMAGE_SIZE
+    target_aspect = float(pixel_width) / float(pixel_height) if pixel_height else 1.0
+    current_aspect = width / height if height else target_aspect
+    cx = (xmin + xmax) * 0.5
+    cy = (ymin + ymax) * 0.5
+
+    if current_aspect > target_aspect:
+        height = width / target_aspect
+    else:
+        width = height * target_aspect
+
+    return (
+        cx - width * 0.5,
+        cy - height * 0.5,
+        cx + width * 0.5,
+        cy + height * 0.5,
+    )
+
+
 def render_colored(
     sheet_polygons,
     output_path: Path,
     colors_by_sheet: dict[int, tuple[float, float, float]],
     selected_sheet: int | None = None,
+    render_bounds: tuple[float, float, float, float] | None = None,
 ) -> None:
     fig, ax = plt.subplots(figsize=(FIGURE_WIDTH, FIGURE_HEIGHT), dpi=DPI)
+    fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+    ax.set_position([0, 0, 1, 1])
     ax.set_aspect("equal", adjustable="box")
     ax.axis("off")
 
@@ -212,11 +295,20 @@ def render_colored(
 
     collection = PolyCollection(polygons, facecolors=colors, edgecolors="none", antialiased=True)
     ax.add_collection(collection)
-    ax.autoscale_view()
-    ax.margins(0.03)
+    if render_bounds is not None:
+        xmin, ymin, xmax, ymax = render_bounds
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+        ax.margins(0)
+    else:
+        ax.autoscale_view()
+        ax.margins(0.03)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, bbox_inches="tight", pad_inches=0.03)
+    if render_bounds is not None:
+        fig.savefig(output_path, dpi=DPI)
+    else:
+        fig.savefig(output_path, bbox_inches="tight", pad_inches=0.03)
     plt.close(fig)
 
 
@@ -281,7 +373,61 @@ def load_or_build_sheet_vtp(
     return read_sheet_vtp(cached_vtp), cache_status
 
 
-def render_one(rs_path: Path, library_path: str, rebuild_cache: bool) -> str:
+def collect_bounds_one(
+    rs_path: Path,
+    library_path: str,
+    rebuild_cache: bool,
+) -> tuple[float, float, float, float] | None:
+    stem = rs_path.stem
+    vtu_path = matching_file(VTU_DIRECTORY, stem, ".vtu")
+    sheet_polygons, _cache_status = load_or_build_sheet_vtp(
+        stem=stem,
+        vtu_path=vtu_path,
+        rs_path=rs_path,
+        library_path=library_path,
+        rebuild_cache=rebuild_cache,
+    )
+    return sheet_polygons_bounds(sheet_polygons)
+
+
+def collect_global_render_bounds(
+    rs_files: list[Path],
+    library_path: str,
+    rebuild_cache: bool,
+    workers: int,
+) -> tuple[float, float, float, float]:
+    print("Computing global sheet image bounds")
+    bounds: tuple[float, float, float, float] | None = None
+
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(collect_bounds_one, rs_path, library_path, rebuild_cache): rs_path
+            for rs_path in rs_files
+        }
+
+        for i, future in enumerate(as_completed(futures), start=1):
+            rs_path = futures[future]
+            try:
+                local = future.result()
+            except Exception as exc:
+                print(f"Failed to collect bounds for {rs_path}: {exc}", file=sys.stderr)
+                continue
+
+            bounds = merge_bounds(bounds, local)
+            print(f"[bounds {i}/{len(futures)}] {rs_path.stem}", flush=True)
+
+    if bounds is None:
+        raise RuntimeError("Could not compute global sheet image bounds from any timestep.")
+
+    return expand_bounds_to_canvas(bounds)
+
+
+def render_one(
+    rs_path: Path,
+    library_path: str,
+    rebuild_cache: bool,
+    render_bounds: tuple[float, float, float, float] | None = None,
+) -> str:
     stem = rs_path.stem
     rsi_path = matching_file(RSI_DIRECTORY, stem, ".rsi")
     vtu_path = matching_file(VTU_DIRECTORY, stem, ".vtu")
@@ -303,7 +449,12 @@ def render_one(rs_path: Path, library_path: str, rebuild_cache: bool) -> str:
     sheets = sheets_to_render(rsi, sheet_polygons)
     colors_by_sheet = uniform_sheet_colors(sheet_polygons)
 
-    render_colored(sheet_polygons, output_dir / f"{stem}.png", colors_by_sheet)
+    render_colored(
+        sheet_polygons,
+        output_dir / f"{stem}.png",
+        colors_by_sheet,
+        render_bounds=render_bounds,
+    )
 
     for sheet_id in sheets:
         render_colored(
@@ -311,6 +462,7 @@ def render_one(rs_path: Path, library_path: str, rebuild_cache: bool) -> str:
             output_dir / f"sheet_{sheet_id}.png",
             colors_by_sheet,
             selected_sheet=sheet_id,
+            render_bounds=render_bounds,
         )
 
     return f"{stem}: {cache_status} VTP, wrote {1 + len(sheets)} image(s) to {output_dir}"
@@ -358,9 +510,22 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Temporary free space: {free_gb(TEMP_DIRECTORY):.1f} GiB")
     print(f"Output free space: {free_gb(OUTPUT_DIRECTORY):.1f} GiB")
 
+    render_bounds = None
+    render_rebuild_cache = args.rebuild_cache
+    if SHEET_RENDERER_USE_GLOBAL_BOUNDS:
+        render_bounds = collect_global_render_bounds(
+            rs_files=rs_files,
+            library_path=library_path,
+            rebuild_cache=args.rebuild_cache,
+            workers=workers,
+        )
+        render_rebuild_cache = False
+        print(f"Global sheet image bounds: {render_bounds}")
+        print(f"Sheet image size: {SHEET_RENDERER_IMAGE_SIZE[0]}x{SHEET_RENDERER_IMAGE_SIZE[1]} px")
+
     with ProcessPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(render_one, rs_path, library_path, args.rebuild_cache): rs_path
+            executor.submit(render_one, rs_path, library_path, render_rebuild_cache, render_bounds): rs_path
             for rs_path in rs_files
         }
 

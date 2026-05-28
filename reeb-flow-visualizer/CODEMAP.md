@@ -154,6 +154,12 @@ The stage reuses cached VTP geometry by default. `SHEET_RENDERER_REBUILD_CACHE`
 and `SHEET_RENDERER_CLEAN_CACHE` in `common.py` control explicit cache rebuilds
 or cache cleanup.
 
+With `SHEET_RENDERER_USE_GLOBAL_BOUNDS = True`, the stage first computes one
+global 2D sheet-space extent across all timesteps, expands it to the configured
+`SHEET_RENDERER_IMAGE_SIZE` aspect ratio, and renders every PNG with that same
+coordinate frame. This keeps image dimensions and visual scale fixed across
+timesteps.
+
 ### Stage 4B: Sheet Fiber Surfaces
 
 `stage_04_compute_sheet_fiber_surfaces.py` renders top-sheet fiber-surface
