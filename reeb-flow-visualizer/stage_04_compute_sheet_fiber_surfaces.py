@@ -224,6 +224,30 @@ def molecule_vtp_path(vtu_file: Path) -> Path:
     return FIBER_SURFACE_MOLECULAR_STRUCTURE_DIR / f"{vtu_file.stem}.vtp"
 
 
+def write_empty_molecule_vtp(destination: Path) -> Path:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    poly_data = vtk.vtkPolyData()
+    poly_data.SetPoints(vtk.vtkPoints())
+
+    writer = vtk.vtkXMLPolyDataWriter()
+    writer.SetFileName(str(destination))
+    writer.SetInputData(poly_data)
+    writer.SetDataModeToBinary()
+    if writer.Write() != 1:
+        raise RuntimeError(f"failed to write empty molecular structure placeholder: {destination}")
+    return destination
+
+
+def render_molecule_vtp_path(vtu_file: Path, work_dir: Path) -> Path:
+    molecule_file = molecule_vtp_path(vtu_file)
+    if molecule_file.exists():
+        return molecule_file
+
+    return write_empty_molecule_vtp(
+        work_dir / "molecularStructure" / f"{vtu_file.stem}.vtp"
+    )
+
+
 def read_top_sheet_ids(rsi_file: Path) -> list[int]:
     rsi_data = read_rsi(rsi_file)
     finite_areas = [
@@ -561,14 +585,6 @@ def compute_timestep(vtu_file: Path, rebuild: bool) -> TimestepResult:
             message=f"missing rsi file: {rsi_file}",
         )
 
-    molecule_file = molecule_vtp_path(vtu_file)
-    if not molecule_file.exists():
-        return TimestepResult(
-            vtu=vtu_file,
-            status="failed",
-            message=f"missing molecular structure VTP: {molecule_file}",
-        )
-
     if not rebuild and existing_outputs_complete(vtu_file):
         return TimestepResult(vtu=vtu_file, status="skipped_existing")
 
@@ -656,12 +672,14 @@ def compute_timestep(vtu_file: Path, rebuild: bool) -> TimestepResult:
                 temp_surfaces_dir,
             )
             render_log_file = log_dir / f"{vtu_file.stem}.render.log"
+            render_work_dir = tmp_dir / "render"
+            molecule_file = render_molecule_vtp_path(vtu_file, render_work_dir)
             images = render_sheet_images(
                 vtu_file,
                 molecule_file,
                 surfaces_by_sheet,
                 image_step_dir,
-                tmp_dir / "render",
+                render_work_dir,
                 render_log_file,
             )
         except subprocess.TimeoutExpired as exc:
