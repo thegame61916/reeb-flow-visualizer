@@ -2257,7 +2257,7 @@ d3.json("data.json").then(data => {
         renderAll();
       });
       controls.append("button").attr("type", "button").text("Highlight")
-        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(rows.slice(0, panel.analysis.topIntervals), `Top ${panel.analysis.topIntervals} intervals`)));
+        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(rows.slice(0, panel.analysis.topIntervals), `Top ${panel.analysis.topIntervals} intervals`), false));
 
       const list = content.append("div").attr("class", "analysis-list");
       rows.forEach((item, index) => {
@@ -2270,7 +2270,7 @@ d3.json("data.json").then(data => {
           links: item.highlight?.links || [],
           start: item.source_timestep_index,
           end: item.target_timestep_index,
-        }));
+        }, false));
       });
       if (!rows.length) content.append("div").attr("class", "analysis-hint").text("No interval analysis for this theta.");
       return;
@@ -2290,7 +2290,7 @@ d3.json("data.json").then(data => {
         renderAll();
       });
       controls.append("button").attr("type", "button").text("Highlight")
-        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(rows.slice(0, panel.analysis.topFeatures), `Top ${panel.analysis.topFeatures} continuing features`)));
+        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(rows.slice(0, panel.analysis.topFeatures), `Top ${panel.analysis.topFeatures} continuing features`), false));
 
       const list = content.append("div").attr("class", "analysis-list");
       rows.forEach((item, index) => {
@@ -2303,7 +2303,7 @@ d3.json("data.json").then(data => {
           links: item.highlight?.links || [],
           start: item.start_timestep_index,
           end: item.end_timestep_index,
-        }));
+        }, false));
       });
       if (!rows.length) content.append("div").attr("class", "analysis-hint").text("No continuing-feature analysis for this theta.");
       return;
@@ -2362,7 +2362,7 @@ d3.json("data.json").then(data => {
           links: item.highlight?.links || [],
           start: item.source_timestep_index,
           end: item.target_timestep_index,
-        }));
+        }, false));
       });
       if (!rows.length) content.append("div").attr("class", "analysis-hint").text("No domain/range disagreement examples were exported.");
     }
