@@ -1508,12 +1508,27 @@ d3.json("data.json").then(data => {
 
   const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 });
   const shapeMatchLookup = new Map();
+  const shapeOutgoingByNode = new Map();
+  const shapeIncomingByNode = new Map();
   for (const pair of (Array.isArray(data.shape_pairs) ? data.shape_pairs : [])) {
     for (const match of (pair.matches || [])) {
-      shapeMatchLookup.set(
-        `${pair.source_timestep_index}:${match.source_sheet_id}->${pair.target_timestep_index}:${match.target_sheet_id}`,
-        match
-      );
+      const key = `${pair.source_timestep_index}:${match.source_sheet_id}->${pair.target_timestep_index}:${match.target_sheet_id}`;
+      const enriched = {
+        ...match,
+        source_timestep_index: pair.source_timestep_index,
+        target_timestep_index: pair.target_timestep_index,
+        source_label: pair.source_label,
+        target_label: pair.target_label,
+        source_stem: pair.source_stem || "",
+        target_stem: pair.target_stem || "",
+      };
+      shapeMatchLookup.set(key, enriched);
+      const sourceKey = `${pair.source_timestep_index}:${match.source_sheet_id}`;
+      const targetKey = `${pair.target_timestep_index}:${match.target_sheet_id}`;
+      if (!shapeOutgoingByNode.has(sourceKey)) shapeOutgoingByNode.set(sourceKey, []);
+      if (!shapeIncomingByNode.has(targetKey)) shapeIncomingByNode.set(targetKey, []);
+      shapeOutgoingByNode.get(sourceKey).push(enriched);
+      shapeIncomingByNode.get(targetKey).push(enriched);
     }
   }
 
@@ -2390,6 +2405,71 @@ d3.json("data.json").then(data => {
     }
   }
 
+
+
+  function panelTheta(panel) {
+    ensurePanelAnalysis(panel);
+    const theta = Number(panel?.analysis?.theta);
+    return Number.isFinite(theta) ? theta : defaultAnalysisTheta();
+  }
+
+  function continuationScore(match, panel) {
+    if (!match) return null;
+    return combinedShapeScore(match.metrics || {}, panel?.shapeWeights || cloneDefaultShapeWeights());
+  }
+
+  function continuationStatus(score, theta) {
+    if (!Number.isFinite(Number(score))) return "N/A";
+    return Number(score) >= Number(theta) ? "strong" : "weak";
+  }
+
+  function formatContinuation(score, theta) {
+    if (!Number.isFinite(Number(score))) return "N/A";
+    return `${formatScore(score)} (${continuationStatus(score, theta)} at theta ${formatScore(theta)})`;
+  }
+
+  function continuationLinkInfo(link, panel) {
+    const key = linkKeyFromDatum(link);
+    const match = shapeMatchLookup.get(key) || (link?.metrics?.shape_iou !== undefined ? link : null);
+    const theta = panelTheta(panel);
+    const score = continuationScore(match, panel);
+    return {
+      theta,
+      score,
+      status: continuationStatus(score, theta),
+      text: formatContinuation(score, theta),
+    };
+  }
+
+  function bestContinuationForNode(node, direction, panel) {
+    if (!node) return { theta: panelTheta(panel), score: null, text: "N/A" };
+    const key = nodeKeyFromDatum(node);
+    const matches = direction === "incoming"
+      ? (shapeIncomingByNode.get(key) || [])
+      : (shapeOutgoingByNode.get(key) || []);
+    const theta = panelTheta(panel);
+    let best = null;
+    let bestScore = null;
+    for (const match of matches) {
+      const score = continuationScore(match, panel);
+      if (!Number.isFinite(Number(score))) continue;
+      if (bestScore === null || score > bestScore) {
+        best = match;
+        bestScore = score;
+      }
+    }
+    if (!best) return { theta, score: null, text: "N/A" };
+    const otherSheet = direction === "incoming" ? best.source_sheet_id : best.target_sheet_id;
+    const otherLabel = direction === "incoming" ? best.source_label : best.target_label;
+    return {
+      theta,
+      score: bestScore,
+      status: continuationStatus(bestScore, theta),
+      text: `${formatContinuation(bestScore, theta)} ${direction === "incoming" ? "from" : "to"} S${otherSheet} (${otherLabel})`,
+      match: best,
+    };
+  }
+
   function ensurePanelMetric(panel) {
     ensurePanelShapeWeights(panel);
     ensurePanelHybridConfig(panel);
@@ -2618,8 +2698,10 @@ d3.json("data.json").then(data => {
     return `<div class="media-stack">${sheetImage}${fiberImage}</div>`;
   }
 
-  function nodeTooltip(node) {
+  function nodeTooltip(node, panel) {
     const image = nodeMediaStack(node);
+    const incoming = bestContinuationForNode(node, "incoming", panel);
+    const outgoing = bestContinuationForNode(node, "outgoing", panel);
     const imageFile = node.thumbnail ? imageFilename(node.thumbnail) : "N/A";
     const fiberImageFile = node.fiber_surface_image ? imageFilename(node.fiber_surface_image) : "N/A";
     const rsiFile = pathFilename(node.rsi_file) || "N/A";
@@ -2633,6 +2715,8 @@ d3.json("data.json").then(data => {
         <div>Rank</div><div>${escapeHtml(node.rank)}</div>
         <div>Area</div><div>${escapeHtml(formatScore(node.area))}</div>
         <div>Vertices</div><div>${escapeHtml(node.num_vertices)}</div>
+        <div>Best incoming continuation</div><div>${escapeHtml(incoming.text)}</div>
+        <div>Best outgoing continuation</div><div>${escapeHtml(outgoing.text)}</div>
         <div>Centroid color</div><div>${colorSwatch(node.centroid_color)}</div>
         <div>RSI</div><div>${escapeHtml(rsiFile)}</div>
         <div>RSI JSON</div><div>${escapeHtml(rsijsonFile)}</div>
@@ -2653,6 +2737,7 @@ d3.json("data.json").then(data => {
     const sourceRsijson = pathFilename(link.source_rsijson_file || sourceNode?.rsijson_file) || "N/A";
     const targetRsijson = pathFilename(link.target_rsijson_file || targetNode?.rsijson_file) || "N/A";
     const metricValueNow = metricValue(link, panel, panel.metricId);
+    const continuation = continuationLinkInfo(link, panel);
     const metricMax = metricMaxForPanel(panel, panel.metricId);
     const metricRatio = metricMax > 0 ? clamp(metricValueNow / metricMax, 0, 1) : 0;
     const scoreRows = metricsForMode(panel.dataMode)
@@ -2670,6 +2755,7 @@ d3.json("data.json").then(data => {
         <div>Source RSI JSON</div><div>${escapeHtml(sourceRsijson)}</div>
         <div>Target RSI JSON</div><div>${escapeHtml(targetRsijson)}</div>
         <div>${escapeHtml(metricLabel(panel.dataMode, panel.metricId))}</div><div>${escapeHtml(formatScore(metricValueNow))}</div>
+        <div>Continuation score</div><div>${escapeHtml(continuation.text)}</div>
         <div>Normalized</div><div>${escapeHtml(formatScore(metricRatio * 100))}%</div>
       </div>
       <div class="tooltip-grid" style="margin-top:10px;">
@@ -2695,9 +2781,11 @@ d3.json("data.json").then(data => {
     return `<span class="color-swatch" style="background:${safe}"></span>${escapeHtml(safe)}`;
   }
 
-  function showNodeDetails(node) {
+  function showNodeDetails(node, panel) {
     if (!detailsContent) return;
     const image = nodeMediaStack(node, "thumb");
+    const incoming = bestContinuationForNode(node, "incoming", panel);
+    const outgoing = bestContinuationForNode(node, "outgoing", panel);
     const imageFile = node.thumbnail ? imageFilename(node.thumbnail) : "N/A";
     const fiberImageFile = node.fiber_surface_image ? imageFilename(node.fiber_surface_image) : "N/A";
     const rawTable = scalarMetadataTable({
@@ -2709,6 +2797,9 @@ d3.json("data.json").then(data => {
       stem: node.stem || "",
       area: node.area,
       num_vertices: node.num_vertices,
+      analysis_theta: panelTheta(panel),
+      best_incoming_continuation: incoming.text,
+      best_outgoing_continuation: outgoing.text,
       rsi_file: node.rsi_file || "",
       rsijson_file: node.rsijson_file || "",
       thumbnail: node.thumbnail || "",
@@ -2728,6 +2819,8 @@ d3.json("data.json").then(data => {
         <div>Rank</div><div>${escapeHtml(node.rank)}</div>
         <div>Area</div><div>${escapeHtml(formatScore(node.area))}</div>
         <div>Vertices</div><div>${escapeHtml(node.num_vertices)}</div>
+        <div>Best incoming continuation</div><div>${escapeHtml(incoming.text)}</div>
+        <div>Best outgoing continuation</div><div>${escapeHtml(outgoing.text)}</div>
         <div>Centroid color</div><div>${colorSwatch(node.centroid_color)}</div>
         <div>RSI file</div><div>${escapeHtml(node.rsi_file || "N/A")}</div>
         <div>RSI JSON file</div><div>${escapeHtml(node.rsijson_file || "N/A")}</div>
@@ -2747,6 +2840,7 @@ d3.json("data.json").then(data => {
     const targetImage = nodeMediaStack(targetNode, "thumb", { ...linkedPair, role: "Target" }) || "<p>No image</p>";
     const selectedMetricLabel = metricLabel(panel.dataMode, panel.metricId);
     const selectedMetricValue = metricValue(link, panel, panel.metricId);
+    const continuation = continuationLinkInfo(link, panel);
     const sourceImageFile = sourceNode?.thumbnail ? imageFilename(sourceNode.thumbnail) : "N/A";
     const targetImageFile = targetNode?.thumbnail ? imageFilename(targetNode.thumbnail) : "N/A";
     const sourceFiberImageFile = sourceNode?.fiber_surface_image ? imageFilename(sourceNode.fiber_surface_image) : "N/A";
@@ -2790,6 +2884,9 @@ d3.json("data.json").then(data => {
       target_fiber_surface_image: targetNode?.fiber_surface_image || "",
       selected_metric: selectedMetricLabel,
       selected_metric_value: selectedMetricValue,
+      analysis_theta: continuation.theta,
+      continuation_score: continuation.score,
+      continuation_status: continuation.status,
       width: link.width,
       opacity: link.opacity,
       score: link.score
@@ -2807,6 +2904,7 @@ d3.json("data.json").then(data => {
         <div>Source fiber image file</div><div>${escapeHtml(sourceFiberImageFile)}</div>
         <div>Target fiber image file</div><div>${escapeHtml(targetFiberImageFile)}</div>
         <div>${escapeHtml(selectedMetricLabel)}</div><div>${escapeHtml(formatScore(selectedMetricValue))}</div>
+        <div>Continuation score</div><div>${escapeHtml(continuation.text)}</div>
       </div>
       <div class="thumb-row link-media-row">
         <div>${sourceImage}</div>
@@ -3845,14 +3943,14 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       .classed("analysis-highlight", d => activeNodeHighlights.has(nodeKeyFromDatum(d)))
       .on("mouseenter", function(event, d) {
         d3.select(this).classed("hover", true);
-        updateTooltip(nodeTooltip(d), event.clientX, event.clientY);
+        updateTooltip(nodeTooltip(d, panel), event.clientX, event.clientY);
       })
-      .on("mousemove", (event, d) => updateTooltip(nodeTooltip(d), event.clientX, event.clientY))
+      .on("mousemove", (event, d) => updateTooltip(nodeTooltip(d, panel), event.clientX, event.clientY))
       .on("mouseleave", function() {
         d3.select(this).classed("hover", false);
         hideTooltip();
       })
-      .on("click", (_, d) => showNodeDetails(d));
+      .on("click", (_, d) => showNodeDetails(d, panel));
 
     state.panelViews.get(panel.id).nodeSelection = node;
 
