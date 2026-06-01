@@ -2164,6 +2164,26 @@ d3.json("data.json").then(data => {
     };
   }
 
+  function expandRangesForHighlight(highlight) {
+    if (!highlight || !Number.isFinite(Number(highlight.start)) || !Number.isFinite(Number(highlight.end))) return;
+    const pad = 1;
+    const highlightStart = clamp(Math.floor(Math.min(Number(highlight.start), Number(highlight.end))) - pad, 0, timestepMax);
+    const highlightEnd = clamp(Math.ceil(Math.max(Number(highlight.start), Number(highlight.end))) + pad, 0, timestepMax);
+    const ranges = normalizedRanges();
+    if (!ranges.length) return;
+
+    const currentStart = d3.min(ranges, range => Number(range.start));
+    const currentEnd = d3.max(ranges, range => Number(range.end));
+    if (!Number.isFinite(currentStart) || !Number.isFinite(currentEnd)) return;
+
+    const nextStart = Math.min(currentStart, highlightStart);
+    const nextEnd = Math.max(currentEnd, highlightEnd);
+    if (nextStart === currentStart && nextEnd === currentEnd) return;
+
+    state.ranges = [{ start: nextStart, end: nextEnd }];
+    state.selectedRangeIndex = 0;
+  }
+
   function setAnalysisHighlight(panel, highlight, focusRange = true) {
     ensurePanelAnalysis(panel);
     panel.analysis.highlight = highlight;
@@ -2173,6 +2193,8 @@ d3.json("data.json").then(data => {
       const end = clamp(Math.ceil(Number(highlight.end)) + pad, 0, timestepMax);
       state.ranges = [{ start, end: Math.max(start, end) }];
       state.selectedRangeIndex = 0;
+    } else {
+      expandRangesForHighlight(highlight);
     }
     renderAll();
   }
