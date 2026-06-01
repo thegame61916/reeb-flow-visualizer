@@ -2263,7 +2263,7 @@ d3.json("data.json").then(data => {
       rows.forEach((item, index) => {
         const row = list.append("button").attr("type", "button").attr("class", "analysis-row");
         row.append("strong").text(`${index + 1}. ${item.source_label} -> ${item.target_label}`);
-        row.append("span").text(`event ${formatScore(item.event_score)} | weak ${item.source_weak_count}/${item.target_weak_count} | splits ${item.possible_splits} merges ${item.possible_merges}`);
+        row.append("span").text(`event ${formatScore(item.event_score)} | weak continuation source/target ${item.source_weak_count}/${item.target_weak_count} | splits ${item.possible_splits} merges ${item.possible_merges}`);
         row.on("click", () => setAnalysisHighlight(panel, {
           label: `Interval ${item.source_label} -> ${item.target_label}`,
           nodes: item.highlight?.nodes || [],
