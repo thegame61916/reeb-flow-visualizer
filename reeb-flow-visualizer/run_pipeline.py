@@ -4,6 +4,7 @@ import stage_01_run_fv99 as s1
 import stage_02_build_sankey_data as s2
 import stage_03_compute_sheet_overlaps as s3
 import stage_04_compute_sheet_fiber_surfaces as s4
+import stage_06_analyze_tracking_results as s6
 
 from compareSheetShapes.compare_sheet_shapes import (
     main as run_shape_matching_main,
@@ -17,6 +18,7 @@ from common import (
     RUN_STAGE_4A_SHEET_RENDERING,
     RUN_STAGE_4B_SHEET_FIBER_SURFACES,
     RUN_STAGE_5_UNIFIED_SANKEY_VIEWER,
+    RUN_STAGE_6_TRACKING_ANALYSIS,
     SHAPE_MATCHING_WORKERS,
     SHEET_RENDERER_CLEAN_CACHE,
     SHEET_RENDERER_REBUILD_CACHE,
@@ -86,6 +88,14 @@ def enabled_stages():
             )
         )
 
+    if RUN_STAGE_6_TRACKING_ANALYSIS:
+        stages.append(
+            (
+                "Stage 6: analyze tracking results",
+                run_tracking_analysis_stage,
+            )
+        )
+
     return stages
 
 
@@ -116,6 +126,12 @@ def run_shape_matching_stage():
     exit_code = run_shape_matching_main(args)
     if exit_code:
         raise RuntimeError(f"shape matching stage failed with exit code {exit_code}")
+
+
+def run_tracking_analysis_stage():
+    exit_code = s6.analyze_tracking_results_stage([])
+    if exit_code:
+        raise RuntimeError(f"tracking analysis stage failed with exit code {exit_code}")
 
 
 def run_stage(title, func):

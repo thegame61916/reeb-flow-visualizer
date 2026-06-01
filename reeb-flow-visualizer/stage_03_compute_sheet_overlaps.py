@@ -23,7 +23,6 @@ SHAPE_MATCHES_FILE = (
 RANGE_METRIC_FIELDS = (
     "range_combined_score",
     "range_shape_iou",
-    "range_support_jaccard",
     "range_area_ratio",
     "range_bbox_iou",
     "range_centroid_similarity",
@@ -250,7 +249,6 @@ def load_shape_match_index(warning_lines):
             metrics = {
                 "range_combined_score": safe_float(match.get("final_score")),
                 "range_shape_iou": safe_float(match.get("shape_iou")),
-                "range_support_jaccard": safe_float(match.get("support_jaccard")),
                 "range_area_ratio": safe_float(match.get("area_ratio")),
                 "range_bbox_iou": safe_float(match.get("bbox_iou")),
                 "range_centroid_similarity": safe_float(match.get("centroid_similarity")),

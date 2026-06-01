@@ -1,0 +1,956 @@
+\begin{filecontents*}{paper_draft_reeb_space_sheet_tracking.bib}
+@inproceedings{edelsbrunner2008reebspaces,
+  author = {Edelsbrunner, Herbert and Harer, John and Patel, Amit K.},
+  title = {Reeb Spaces of Piecewise Linear Mappings},
+  booktitle = {Proceedings of the Annual Symposium on Computational Geometry},
+  pages = {242--250},
+  year = {2008},
+  doi = {10.1145/1377676.1377720}
+}
+
+@article{tierny2017jacobi,
+  author = {Tierny, Julien and Carr, Hamish},
+  title = {Jacobi Fiber Surfaces for Bivariate Reeb Space Computation},
+  journal = {IEEE Transactions on Visualization and Computer Graphics},
+  volume = {23},
+  number = {1},
+  pages = {960--969},
+  year = {2017},
+  doi = {10.1109/TVCG.2016.2599017}
+}
+
+@article{edelsbrunner2008timevarying,
+  author = {Edelsbrunner, Herbert and Harer, John and Mascarenhas, Ajith and Pascucci, Valerio and Snoeyink, Jack},
+  title = {Time-Varying Reeb Graphs for Continuous Space-Time Data},
+  journal = {Computational Geometry},
+  volume = {41},
+  number = {3},
+  pages = {149--166},
+  year = {2008},
+  doi = {10.1016/j.comgeo.2007.11.001}
+}
+
+@article{saikia2017global,
+  author = {Saikia, Himangshu and Weinkauf, Tino},
+  title = {Global Feature Tracking and Similarity Estimation in Time-Dependent Scalar Fields},
+  journal = {Computer Graphics Forum},
+  volume = {36},
+  number = {3},
+  pages = {1--11},
+  year = {2017},
+  doi = {10.1111/cgf.13163}
+}
+
+@article{lukasczyk2020dynamic,
+  author = {Lukasczyk, Jonas and Garth, Christoph and Weber, Gunther H. and Biedert, Tim and Maciejewski, Ross and Leitte, Heike},
+  title = {Dynamic Nested Tracking Graphs},
+  journal = {IEEE Transactions on Visualization and Computer Graphics},
+  volume = {26},
+  number = {1},
+  pages = {249--258},
+  year = {2020},
+  doi = {10.1109/TVCG.2019.2934368}
+}
+
+@misc{sharma2025csp,
+  author = {Sharma, Mohit and Masood, Talha Bin and List, Nanna Holmgaard and Hotz, Ingrid and Natarajan, Vijay},
+  title = {Continuous Scatterplot and Image Moments for Time-Varying Bivariate Field Analysis of Electronic Structure Evolution},
+  year = {2025},
+  eprint = {2502.17118},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.HC},
+  doi = {10.48550/arXiv.2502.17118}
+}
+
+@misc{hristov2026singular,
+  author = {Hristov, Petar and Hotz, Ingrid and Masood, Talha Bin},
+  title = {Singular Arrange and Traverse Algorithm for Computing Reeb Spaces of Bivariate PL Maps},
+  year = {2026},
+  eprint = {2602.21087},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CG},
+  doi = {10.48550/arXiv.2602.21087}
+}
+\end{filecontents*}
+
+\documentclass[10pt,journal,compsoc]{IEEEtran}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Domain}{\mathcal{M}}
+\newcommand{\Range}{\mathcal{R}}
+\newcommand{\Sheets}{\mathcal{S}}
+\newcommand{\Sheet}{S}
+\newcommand{\Score}{C}
+\newcommand{\placeholder}[2]{%
+  \begin{center}
+  \fbox{%
+    \begin{minipage}[c][#1][c]{0.92\linewidth}
+      \centering
+      #2
+    \end{minipage}}
+  \end{center}
+}
+\newcommand{\wideplaceholder}[2]{%
+  \begin{center}
+  \fbox{%
+    \begin{minipage}[c][#1][c]{0.96\textwidth}
+      \centering
+      #2
+    \end{minipage}}
+  \end{center}
+}
+
+\begin{document}
+
+\title{Tracking Reeb-Space Sheets in Time-Varying Bivariate Fields}
+
+\author{Author~Names~Omitted~for~Draft%
+\IEEEcompsocitemizethanks{
+\IEEEcompsocthanksitem This is a working draft. Author names, affiliations,
+acknowledgments, and final related work will be added later.}}
+
+\markboth{IEEE Transactions on Visualization and Computer Graphics, Draft}%
+{Tracking Reeb-Space Sheets in Time-Varying Bivariate Fields}
+
+\IEEEtitleabstractindextext{%
+\begin{abstract}
+Time-varying bivariate fields arise in many scientific applications, but their
+feature-level temporal analysis remains difficult because the features are not
+single scalar extrema or contours. Existing visual analysis approaches based on
+continuous scatterplots and image moments provide compact summaries of the
+overall bivariate distribution, while Reeb-space methods provide a topological
+description of a static bivariate map. We connect these two directions by
+tracking \emph{Reeb-space sheets} across time. For each timestep, we compute the
+Reeb space of two scalar fields, extract the most prominent sheets, and compare
+candidate sheet correspondences between adjacent timesteps using complementary
+range-space and domain-space measures. Range-space measures compare sheet
+footprints using mask intersection-over-union, bounding boxes, area ratios, and
+centroid proximity. Domain-space measures compare the mesh vertices associated
+with each sheet. The resulting temporal correspondences are visualized using a
+Sankey-style view linked with sheet renderings, fiber-surface renderings, and
+diagnostic plots. We evaluate the approach on two synthetic torus datasets and
+three time-varying molecular electronic-structure datasets represented by hole
+and particle natural transition orbital fields. The results show that
+range-space sheet overlap gives stable correspondences in the molecular
+datasets, while domain overlap exposes a different notion of spatial support
+continuity. Together, these measures reveal persistent sheets, abrupt
+reconfiguration intervals, and metric disagreements that are difficult to
+identify from global bivariate summaries alone.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Bivariate field, Reeb space, sheet tracking, feature tracking, continuous
+scatterplot, fiber surface, time-varying data, molecular visualization.
+\end{IEEEkeywords}}
+
+\maketitle
+
+\section{Introduction}
+
+Many scientific simulations produce multiple scalar fields over a common spatial
+domain. In electronic-structure analysis, for example, a photoexcited molecule
+can be described by hole and particle natural transition orbital (NTO) fields.
+The pair of fields identifies where charge is depleted and accumulated during
+an electronic transition. Since molecular geometry changes over time, analysts
+must compare a sequence of bivariate fields rather than a single pair of
+volumes.
+
+One common strategy is to visualize isosurfaces or fiber surfaces at selected
+field values. This gives high-quality local evidence, but it does not by itself
+provide a compact temporal representation. Another strategy is to summarize each
+timestep using a continuous scatterplot (CSP) and then track descriptors of the
+CSP over time. This gives an effective overview of global bivariate behavior
+and has been used for electronic-structure evolution~\cite{sharma2025csp}. The
+limitation is that a global descriptor does not directly identify which
+individual bivariate features persist, split, disappear, or reconfigure.
+
+We study a complementary representation based on Reeb spaces. For a bivariate
+map \(F=(f,g):\Domain\rightarrow\R^2\), the Reeb space groups domain points
+that belong to the same connected component of a fiber \(F^{-1}(a,b)\). In
+three-dimensional domains, the two-dimensional cells of the Reeb space can be
+interpreted as sheets in the range of the bivariate map. These sheets summarize
+regions of coherent bivariate behavior: they are neither individual isosurfaces
+nor individual domain regions, but range-space features associated with
+connected preimage structure.
+
+This paper proposes a practical pipeline for tracking prominent Reeb-space
+sheets in time-varying bivariate data. For each timestep, we compute the Reeb
+space, extract the top sheets by area, render each sheet, compute candidate
+correspondences between adjacent timesteps, and visualize the resulting temporal
+graph using a Sankey-style interface. The method deliberately keeps multiple
+similarity notions available. Range-space similarity answers whether two sheets
+occupy similar regions in the bivariate range. Domain-space similarity answers
+whether two sheets are supported by similar mesh vertices. These two questions
+are related but not equivalent, and our experiments show that they often select
+different correspondences.
+
+\begin{figure*}[t]
+  \wideplaceholder{1.55in}{Figure placeholder: pipeline overview. Show input
+  time-varying bivariate fields, Reeb-space computation, top-sheet extraction,
+  sheet and fiber-surface rendering, pairwise sheet matching, event analysis,
+  and Sankey-style visual exploration.}
+  \caption{Overview of the proposed Reeb-space sheet tracking pipeline.}
+  \label{fig:pipeline}
+\end{figure*}
+
+The main contributions are:
+\begin{itemize}
+  \item A feature-level temporal representation for time-varying bivariate
+  fields based on Reeb-space sheet correspondences.
+  \item A set of complementary sheet similarity measures that combine
+  range-space shape overlap with domain-space support overlap.
+  \item A visual analysis workflow that links temporal Sankey diagrams with
+  sheet renderings, fiber-surface renderings, centroid coloring, and
+  diagnostic summaries.
+  \item A quantitative and qualitative evaluation on synthetic and molecular
+  datasets, including metric-agreement analysis and event-interval detection.
+\end{itemize}
+
+This draft intentionally leaves the full Related Work section for later. We
+still cite directly relevant work where it is necessary to define the method,
+position the contribution, or compare capabilities.
+
+\section{Background and Definitions}
+
+\subsection{Bivariate Field}
+
+Let \(\Domain\) be a triangulated spatial domain, typically a tetrahedral or
+regular-grid volume. A bivariate field is a continuous or piecewise-linear map
+\[
+F=(f,g):\Domain\rightarrow\R^2,
+\]
+where \(f\) and \(g\) are scalar fields sampled on the same domain. In the
+molecular datasets used in this paper, \(f\) and \(g\) are NTO-derived scalar
+fields, currently configured in the implementation as \texttt{orb00} and
+\texttt{orb01}.
+
+The \emph{range} of \(F\) is the subset of \(\R^2\) occupied by field-value
+pairs. Each point \(y=(a,b)\in\R^2\) defines a \emph{fiber}
+\[
+F^{-1}(y)=\{x\in\Domain \mid f(x)=a,\ g(x)=b\}.
+\]
+For a three-dimensional domain and a bivariate map, a generic fiber is a curve.
+A fiber surface is the preimage of a curve in range space, for example the
+preimage of \(f=a\), \(f=-a\), \(g=b\), or \(g=-b\). Such surfaces are useful
+for interpreting how a selected range-space feature maps back to the spatial
+domain.
+
+\subsection{Continuous Scatterplot}
+
+A continuous scatterplot represents the density or measure of domain points
+that map to each region of the bivariate range. CSPs are useful for summarizing
+the global distribution of field-value pairs. The CSP and image-moment approach
+summarizes each timestep by moment descriptors and analyzes the resulting
+descriptor sequence in a low-dimensional plot~\cite{sharma2025csp}. Our method
+is complementary: it tracks individual Reeb-space sheets rather than only the
+global distribution.
+
+\subsection{Reeb Space}
+
+The Reeb space generalizes the Reeb graph from scalar functions to multivariate
+maps~\cite{edelsbrunner2008reebspaces}. Define an equivalence relation on
+\(\Domain\) by
+\[
+x\sim x' \quad \text{if} \quad F(x)=F(x') \text{ and } x,x'
+\text{ lie in the same connected component of } F^{-1}(F(x)).
+\]
+The Reeb space is the quotient
+\[
+\mathcal{R}_F = \Domain/\sim.
+\]
+For a bivariate map over a three-dimensional domain, the Reeb space is commonly
+represented by two-dimensional sheets separated by singular structure. Existing
+algorithms compute such structures using Jacobi sets and fiber
+surfaces~\cite{tierny2017jacobi}, or arrange-and-traverse style computations
+for bivariate piecewise-linear maps~\cite{hristov2026singular}.
+
+\subsection{Sheet}
+
+In this paper, a \emph{sheet} is a two-dimensional cell or connected sheet-like
+component in the computed Reeb-space representation. Each sheet has:
+\begin{itemize}
+  \item a range-space footprint, represented geometrically as polygons in the
+  \(f\)-\(g\) plane;
+  \item an area in range space;
+  \item a centroid and bounding box in range space;
+  \item a set of regular domain vertices stored in the sheet information file,
+  when such vertices are available.
+\end{itemize}
+The current pipeline ranks sheets by range-space area and keeps the top
+\(N=20\) sheets at each timestep. Zero-regular-vertex sheets are retained
+instead of discarded because they can still represent meaningful range-space
+geometry. For vertex-overlap metrics, their overlap is treated as zero.
+
+\subsection{Sheet Tracking Problem}
+
+Given a sequence of bivariate fields
+\[
+F_0,F_1,\ldots,F_T,
+\]
+and a set of extracted sheets \(\Sheets_i\) for each timestep \(i\), the goal
+is to estimate candidate temporal correspondences between sheets in
+\(\Sheets_i\) and sheets in \(\Sheets_{i+1}\). We do not assume a one-to-one
+matching because sheets can split, merge, appear, disappear, or undergo large
+shape changes. Instead, the pipeline stores a weighted bipartite graph for each
+adjacent timestep pair.
+
+\section{Method}
+
+\subsection{Input and Preprocessing}
+
+The input is a directory of time-ordered \texttt{.vtu} files. Each file stores
+the two scalar arrays used as the bivariate field. The default field names are
+configured globally so that all calls to the Reeb-space executable use the same
+field pair. The implementation currently uses:
+\[
+f=\texttt{orb00}, \qquad g=\texttt{orb01}.
+\]
+
+For each timestep, the Reeb space is computed using the external Reeb-space
+program. The pipeline stores two primary outputs:
+\begin{itemize}
+  \item \texttt{.rs}: the Reeb-space geometry and sheet structure used for
+  rendering and geometry export;
+  \item \texttt{.rsi}: sheet information used by the Python pipeline, including
+  sheet identifiers, area/rank data, and associated regular vertices.
+\end{itemize}
+Only timesteps with usable \texttt{.rs} and \texttt{.rsi} files are included in
+the main tracking graph. In the main analysis branch, the pipeline does not use
+perturbed inputs for matching; degenerate or failed timesteps are excluded from
+the downstream analysis unless a valid sheet representation is present.
+
+\subsection{Top-Sheet Selection}
+
+Let \(\Sheets_i^\mathrm{all}\) be the set of sheets at timestep \(i\). We sort
+the sheets by range-space area and keep the top \(N\) sheets:
+\[
+\Sheets_i = \operatorname{TopN}(\Sheets_i^\mathrm{all}, N).
+\]
+The experiments use \(N=20\). This keeps the temporal graph readable and
+focuses the analysis on dominant bivariate features. The choice of \(N\) is a
+parameter and can be varied in future sensitivity studies.
+
+\subsection{Range-Space Geometry Export}
+
+For each selected sheet, the pipeline exports a polygonal representation of the
+sheet footprint in range space. The exported VTP cache stores a collection of
+sheet polygons for a timestep, not a separate VTP file per sheet. These cached
+VTP files are used for shape comparison and sheet rendering. To ensure visual
+comparability across time, sheet images are rendered using global bounds and a
+fixed image size. This avoids a misleading effect where sheets appear to have
+similar size because each image is independently zoomed.
+
+\begin{figure}[t]
+  \placeholder{1.35in}{Figure placeholder: one timestep with the full
+  Reeb-space sheet collection, top sheets highlighted, and a zoomed example of
+  one sheet footprint in range space.}
+  \caption{A Reeb-space sheet is represented by its footprint in the bivariate
+  range and by its associated domain support.}
+  \label{fig:sheet-definition}
+\end{figure}
+
+\subsection{Sheet Rendering}
+
+Each selected sheet is rendered as an image. The rendering stage uses a uniform
+sheet color to avoid encoding unrelated orbital or metric information into the
+sheet image itself. A faint context can be rendered from the full sheet set,
+while the selected sheet remains visually dominant. The same global range-space
+camera and image size are used for all timesteps, so changes in sheet size and
+position can be compared visually.
+
+\subsection{Fiber-Surface Rendering}
+
+For selected sheet and timestep combinations, the pipeline renders
+fiber-surface images using a ParaView state file. The isovalues are configured
+globally. For a value \(a\) of field \(f\) and a value \(b\) of field \(g\),
+the pipeline renders surfaces corresponding to:
+\[
+f=+a,\quad f=-a,\quad g=+b,\quad g=-b.
+\]
+The Reeb-space executable currently generates fiber surfaces for the complete
+data. The Python stage then thresholds or filters those surfaces to the top
+sheets of interest and renders the corresponding image. If a surface does not
+intersect the selected sheet, the generated VTP may have zero points and zero
+cells; such cases are retained as empty evidence rather than treated as a
+pipeline error.
+
+\subsection{Range-Space Sheet Similarity}
+
+For each adjacent timestep pair \((i,i+1)\), every source sheet
+\(\Sheet\in\Sheets_i\) is compared with every target sheet
+\(\Sheet'\in\Sheets_{i+1}\). The first group of metrics compares sheet
+geometry in the bivariate range.
+
+\subsubsection{Shape IoU}
+
+The range-space polygons of each sheet are rasterized into masks over global
+range-space bounds. The shape intersection-over-union is
+\[
+\operatorname{shapeIoU}(\Sheet,\Sheet') =
+\frac{|M_\Sheet\cap M_{\Sheet'}|}{|M_\Sheet\cup M_{\Sheet'}|},
+\]
+where \(M_\Sheet\) and \(M_{\Sheet'}\) are binary raster masks.
+
+\subsubsection{Bounding-Box IoU}
+
+Let \(B_\Sheet\) and \(B_{\Sheet'}\) be axis-aligned bounding boxes in range
+space. The bounding-box IoU is
+\[
+\operatorname{bboxIoU}(\Sheet,\Sheet') =
+\frac{\operatorname{area}(B_\Sheet\cap B_{\Sheet'})}
+{\operatorname{area}(B_\Sheet\cup B_{\Sheet'})}.
+\]
+This is cheaper and coarser than mask-based shape IoU.
+
+\subsubsection{Area Ratio}
+
+The area-ratio score measures whether two sheets have comparable area:
+\[
+\operatorname{areaRatio}(\Sheet,\Sheet') =
+\frac{\min(A_\Sheet,A_{\Sheet'})}{\max(A_\Sheet,A_{\Sheet'})}.
+\]
+It does not encode spatial location in the range plane.
+
+\subsubsection{Centroid Similarity}
+
+Let \(c_\Sheet\) and \(c_{\Sheet'}\) be sheet centroids, and let \(D\) be the
+diagonal of the global range-space bounds. The centroid similarity is
+\[
+\operatorname{centroidSim}(\Sheet,\Sheet') =
+\exp\left(-\frac{\|c_\Sheet-c_{\Sheet'}\|}{D}\right).
+\]
+This metric is useful as a weak positional cue but is not sufficiently
+discriminative as a standalone matching score.
+
+\subsection{Domain-Space Sheet Similarity}
+
+The RSI file stores regular domain vertices associated with each sheet. Let
+\(V_\Sheet\) and \(V_{\Sheet'}\) be the corresponding vertex sets. We compute
+the support Jaccard score:
+\[
+\operatorname{supportJaccard}(\Sheet,\Sheet') =
+\frac{|V_\Sheet\cap V_{\Sheet'}|}{|V_\Sheet\cup V_{\Sheet'}|}.
+\]
+If either sheet has no stored regular vertices, the score is zero. This choice
+is conservative: it avoids inventing vertex overlap where none is recorded.
+Importantly, a zero support score does not imply that the sheet has no
+range-space geometry.
+
+\subsection{Combined Matching Score}
+
+The default combined sheet score is a weighted sum:
+\[
+\begin{aligned}
+\Score(\Sheet,\Sheet') ={}&
+0.40\,\operatorname{shapeIoU}(\Sheet,\Sheet') \\
+&+0.30\,\operatorname{supportJaccard}(\Sheet,\Sheet') \\
+&+0.15\,\operatorname{areaRatio}(\Sheet,\Sheet') \\
+&+0.10\,\operatorname{bboxIoU}(\Sheet,\Sheet') \\
+&+0.05\,\operatorname{centroidSim}(\Sheet,\Sheet').
+\end{aligned}
+\]
+The weights are not claimed to be universal. They are current defaults chosen
+to privilege range-shape agreement while retaining domain support and coarse
+geometric cues. The analysis stage reports individual metric behavior so that
+users can understand when the combined score is driven by range shape, domain
+support, or size/location effects.
+
+\subsection{Temporal Graph Construction}
+
+For every adjacent timestep pair, the method constructs a complete candidate
+bipartite graph between selected sheets:
+\[
+G_i=(\Sheets_i,\Sheets_{i+1},E_i),
+\]
+where each edge \(e=(\Sheet,\Sheet')\) stores all metric values and the
+combined score. The final temporal graph is a sequence of these adjacent
+bipartite graphs. The viewer can display the graph using the combined score,
+domain overlap, range overlap, or a hybrid score.
+
+The current method does not solve a global one-to-one assignment. This is
+intentional. Sheet evolution can be many-to-many, and retaining all candidate
+edges supports visual inspection of split and merge hypotheses.
+
+\subsection{Event Diagnostics}
+
+To identify intervals that deserve closer inspection, we compute an event score
+for each adjacent timestep pair and for several thresholds
+\(\theta\in\{0.3,0.4,0.5,0.6,0.7\}\). For a source sheet, define
+\[
+\operatorname{bestOut}(\Sheet)=
+\max_{\Sheet'\in\Sheets_{i+1}}\Score(\Sheet,\Sheet').
+\]
+For a target sheet, define
+\[
+\operatorname{bestIn}(\Sheet')=
+\max_{\Sheet\in\Sheets_i}\Score(\Sheet,\Sheet').
+\]
+At threshold \(\theta\), we count:
+\begin{itemize}
+  \item weak outgoing sheets: \(\operatorname{bestOut}(\Sheet)<\theta\);
+  \item weak incoming sheets: \(\operatorname{bestIn}(\Sheet')<\theta\);
+  \item possible splits: one source has two or more targets with score
+  at least \(\theta\);
+  \item possible merges: one target has two or more sources with score
+  at least \(\theta\).
+\end{itemize}
+The exploratory event score is
+\[
+\begin{aligned}
+E_i(\theta)={}&
+W^\mathrm{out}_i + W^\mathrm{in}_i
++ \frac{1}{2}(P^\mathrm{split}_i + P^\mathrm{merge}_i) \\
+&+ (1-\overline{B^\mathrm{out}_i})|\Sheets_i|,
+\end{aligned}
+\]
+where \(\overline{B^\mathrm{out}_i}\) is the mean best outgoing combined score.
+Large values indicate intervals with weak continuations, many potential
+reconfigurations, or generally low sheet similarity. The threshold
+\(\theta=0.5\) is used as the default for ranked intervals, while all threshold
+values are exported for sensitivity analysis.
+
+\subsection{Sheet Lifetimes}
+
+For a given threshold, we compute a greedy lifetime summary. Starting from a
+sheet at timestep \(i\), the analysis follows the best outgoing edge while its
+score remains above threshold. The resulting chain length is a diagnostic for
+persistence. It is not a proof of a unique physical track, but it helps
+identify long-lived prominent sheets and intervals where tracks fragment.
+
+\subsection{Visual Encoding and Interaction}
+
+The unified viewer displays sheets as nodes and candidate correspondences as
+links. Node color can encode rank, metric value, or centroid position. For
+centroid-based coloring, global symmetric range-space extents are used so that
+colors are comparable across timesteps. Two centroid color maps are currently
+available: a four-corner interpolation map and an axis-oriented map in which
+distance from the origin increases saturation along red-blue directions.
+
+Clicking or hovering a node shows the corresponding sheet image and
+fiber-surface images. Clicking or hovering a link opens a side-by-side
+comparison of the two sheets and their fiber-surface images. The image detail
+view supports linked pan and zoom so that both sides of a comparison can be
+inspected at the same scale.
+
+\begin{figure*}[t]
+  \wideplaceholder{1.75in}{Figure placeholder: unified viewer screenshot.
+  Include a Sankey diagram with node/link coloring, a selected link, side-by-side
+  sheet images, and side-by-side fiber-surface images with linked zoom.}
+  \caption{The visual interface links temporal sheet correspondences with
+  range-space sheet images and spatial fiber-surface evidence.}
+  \label{fig:viewer}
+\end{figure*}
+
+\section{Implementation}
+
+The pipeline is implemented as a sequence of Python stages. The stages are:
+\begin{enumerate}
+  \item compute Reeb-space files from VTU inputs;
+  \item convert RSI files into JSON used by downstream stages;
+  \item compute range-space sheet shape matches;
+  \item compute domain-space vertex overlaps;
+  \item render sheet images;
+  \item render sheet-restricted fiber-surface images;
+  \item build the unified Sankey viewer;
+  \item run tracking-analysis diagnostics.
+\end{enumerate}
+The current stage naming in the repository uses the sequence
+1, 2, 3A, 3B, 4A, 4B, 5, with the paper-analysis stage added afterward as an
+optional diagnostic stage.
+
+The Reeb-space computation is delegated to the external \texttt{fv99}
+executable. The Python pipeline passes the configured field names and uses the
+resulting \texttt{.rs} and \texttt{.rsi} files for all downstream analysis. VTP
+exports are cached because sheet geometry extraction can be expensive. Cache
+reuse is conservative: cached geometry is reused unless the user explicitly
+requests a rebuild or clean cache.
+
+The tracking-analysis stage consumes the existing unified-viewer JSON and
+writes CSV, JSON, PNG, and PDF outputs. It does not recompute Reeb spaces,
+sheet VTPs, sheet images, or fiber-surface images. This separation keeps the
+paper diagnostics reproducible from a fixed set of generated viewer data.
+
+\section{Datasets}
+
+We evaluate on five datasets: three molecular electronic-structure sequences
+and two synthetic torus sequences. The molecular datasets are named
+\texttt{MVK\_s1}, \texttt{MVK\_s2}, and \texttt{stilbene}. The synthetic
+datasets are \texttt{torusGrowing} and \texttt{torusMoving}. The torus datasets
+are used for controlled behavior: one changes feature scale over time, and the
+other moves the feature center smoothly over time.
+
+\begin{table}[t]
+\caption{Datasets used in the current analysis. Each timestep keeps the top 20
+sheets by range-space area. Zero-vertex sheets are retained.}
+\label{tab:datasets}
+\centering
+\begin{tabular}{lrrr}
+\toprule
+Dataset & Timesteps & Top sheets & Zero-vertex sheets \\
+\midrule
+MVK\_s1 & 82 & 1640 & 116 \\
+MVK\_s2 & 82 & 1640 & 68 \\
+stilbene & 698 & 13960 & 148 \\
+torusGrowing & 25 & 500 & 188 \\
+torusMoving & 25 & 500 & 151 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure*}[t]
+  \wideplaceholder{1.8in}{Figure placeholder: dataset overview. Show one or
+  two representative timesteps from each dataset, including the molecule or
+  synthetic volume, the CSP/range-space view, and selected Reeb-space sheets.}
+  \caption{Representative timesteps from the molecular and synthetic datasets.}
+  \label{fig:datasets}
+\end{figure*}
+
+\section{Results}
+
+\subsection{Metric Agreement}
+
+We first ask how often an individual metric selects the same best target as the
+default combined score. For each source sheet, we choose the target with maximum
+value according to one metric and compare it with the target chosen by the
+combined score. Table~\ref{tab:metric-agreement} summarizes the agreement.
+
+\begin{table*}[t]
+\caption{Best-target agreement with the default combined score. Values are
+percentages of source sheets for which an individual metric selects the same
+target as the combined score.}
+\label{tab:metric-agreement}
+\centering
+\begin{tabular}{lrrrrrr}
+\toprule
+Dataset & Shape IoU & BBox IoU & Support Jaccard & Area ratio & Centroid & Domain overlap \\
+\midrule
+MVK\_s1 & 95.6 & 94.2 & 50.0 & 65.9 & 90.9 & 9.7 \\
+MVK\_s2 & 93.7 & 91.4 & 48.6 & 58.1 & 88.0 & 9.6 \\
+stilbene & 96.1 & 89.3 & 40.5 & 47.7 & 87.1 & 8.7 \\
+torusGrowing & 85.4 & 44.2 & 70.2 & 43.1 & 42.7 & 16.0 \\
+torusMoving & 37.7 & 29.2 & 46.5 & 89.2 & 31.2 & 1.8 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+For the molecular datasets, shape IoU is highly consistent with the combined
+score. This is partly expected because shape IoU has the largest weight in the
+combined score. However, the result is still useful: it shows that the combined
+score is largely governed by range-space sheet footprint overlap in these
+datasets. Bounding-box IoU is also strong but less precise. Centroid similarity
+often agrees with the combined score in the molecular data, but visual
+inspection shows that it is a weaker standalone metric because many candidates
+can be spatially close in the range plane.
+
+Domain overlap behaves differently. The domain-overlap best target agrees with
+the combined shape target in only \(8.7\%\)--\(9.7\%\) of source sheets in the
+molecular datasets. This low agreement is not necessarily a failure. It means
+that range-shape continuity and domain-support continuity answer different
+questions. A sheet can keep a similar range-space footprint while being
+supported by different domain vertices, or it can preserve some domain support
+while changing its range-space shape.
+
+The synthetic datasets expose different behavior. In \texttt{torusGrowing},
+support Jaccard is stronger than in the molecular data, while bounding-box and
+centroid metrics are less reliable. In \texttt{torusMoving}, area ratio agrees
+with the combined score more often than shape IoU because the dominant feature
+changes position more than size. This result supports the need to report
+multiple metrics rather than relying on a single universal score.
+
+\begin{figure*}[t]
+  \wideplaceholder{1.55in}{Figure placeholder: metric comparison plots. Include
+  distributions of shape IoU, support Jaccard, centroid similarity, and combined
+  score; include domain-vs-shape best-target disagreement.}
+  \caption{Metric diagnostics reveal that range-space and domain-space
+  similarities capture complementary notions of sheet continuity.}
+  \label{fig:metric-diagnostics}
+\end{figure*}
+
+\subsection{Event Intervals}
+
+Table~\ref{tab:event-intervals} reports the top event intervals according to
+the default threshold \(\theta=0.5\). These intervals are not final scientific
+interpretations; they are candidates for visual inspection and domain expert
+analysis.
+
+\begin{table*}[t]
+\caption{Highest-ranked event intervals at threshold \(\theta=0.5\). Mean best
+score is the mean best outgoing combined score. Weak source and weak target
+counts are out of 20 top sheets per timestep.}
+\label{tab:event-intervals}
+\centering
+\begin{tabular}{llrrrr}
+\toprule
+Dataset & Interval & Event score & Mean best & Weak source & Weak target \\
+\midrule
+MVK\_s1 & step\_01200 $\rightarrow$ step\_01220 & 48.08 & 0.396 & 18 & 18 \\
+MVK\_s1 & step\_01180 $\rightarrow$ step\_01200 & 37.70 & 0.415 & 13 & 13 \\
+MVK\_s2 & step\_01140 $\rightarrow$ step\_01160 & 42.14 & 0.393 & 15 & 15 \\
+MVK\_s2 & step\_01160 $\rightarrow$ step\_01180 & 40.23 & 0.388 & 14 & 14 \\
+stilbene & step\_11915 $\rightarrow$ step\_11920 & 53.57 & 0.321 & 20 & 20 \\
+stilbene & step\_11920 $\rightarrow$ step\_11925 & 53.30 & 0.335 & 20 & 20 \\
+torusGrowing & step\_00200 $\rightarrow$ step\_00220 & 47.28 & 0.336 & 16 & 16 \\
+torusMoving & step\_00200 $\rightarrow$ step\_00220 & 48.21 & 0.289 & 16 & 16 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+The molecular datasets show compact event regions. In \texttt{MVK\_s1}, the
+strongest region is around \texttt{step\_01180}--\texttt{step\_01220}, with the
+largest event score at \texttt{step\_01200} to \texttt{step\_01220}. In
+\texttt{MVK\_s2}, the strongest region is around
+\texttt{step\_01120}--\texttt{step\_01180}. In \texttt{stilbene}, the strongest
+intervals occur around \texttt{step\_11915}--\texttt{step\_11925}, where all
+top sheets have weak outgoing and incoming continuations under the default
+threshold.
+
+The synthetic datasets show frequent weak tracks, partly because many top
+sheets are small or have zero stored regular vertices. These cases are useful
+stress tests for the analysis but should not be interpreted in the same way as
+the molecular events without further synthetic ground-truth labeling.
+
+\begin{figure*}[t]
+  \wideplaceholder{1.6in}{Figure placeholder: event-score curves for MVK\_s1,
+  MVK\_s2, and stilbene. Mark the intervals reported in
+  Table~\ref{tab:event-intervals}.}
+  \caption{Event-score curves help prioritize temporal intervals for detailed
+  inspection.}
+  \label{fig:event-curves}
+\end{figure*}
+
+\subsection{Sheet Lifetimes}
+
+The lifetime diagnostic summarizes how long greedy best-score tracks persist at
+threshold \(\theta=0.5\). The maximum lifetime reaches all 82 timesteps for
+\texttt{MVK\_s1}, 57 timesteps for \texttt{MVK\_s2}, 139 timesteps for
+\texttt{stilbene}, and all 25 timesteps for both synthetic datasets. However,
+the median lifetime is short: one timestep for \texttt{MVK\_s1},
+\texttt{MVK\_s2}, \texttt{torusGrowing}, and \texttt{torusMoving}, and two
+timesteps for \texttt{stilbene}. This indicates a mixture of long-lived
+dominant sheets and many short-lived or unstable lower-ranked sheets.
+
+\begin{figure}[t]
+  \placeholder{1.25in}{Figure placeholder: lifetime histogram for each dataset
+  at threshold 0.5, with insets for the longest tracks.}
+  \caption{Greedy sheet lifetimes reveal long-lived dominant sheets amid many
+  short-lived top-sheet candidates.}
+  \label{fig:lifetime}
+\end{figure}
+
+\subsection{Visual Case Studies}
+
+\subsubsection{MVK\_s1}
+
+The strongest event interval occurs around \texttt{step\_01200} to
+\texttt{step\_01220}. The mean best combined score is 0.396, and 18 of the 20
+top sheets have weak outgoing and incoming continuations at threshold 0.5. This
+interval should be shown with side-by-side sheet images and fiber-surface
+images. The expected visual evidence is a reconfiguration of dominant
+range-space sheets rather than a simple smooth continuation.
+
+\begin{figure*}[t]
+  \wideplaceholder{1.8in}{Figure placeholder: MVK\_s1 case study. Show
+  \texttt{step\_01180}, \texttt{step\_01200}, and \texttt{step\_01220}; include
+  Sankey subgraph, selected sheet images, fiber surfaces, and event-score
+  marker.}
+  \caption{Candidate event in \texttt{MVK\_s1}.}
+  \label{fig:mvk-s1-case}
+\end{figure*}
+
+\subsubsection{MVK\_s2}
+
+The main event region occurs around \texttt{step\_01120} to
+\texttt{step\_01180}. Two adjacent intervals,
+\texttt{step\_01140} to \texttt{step\_01160} and \texttt{step\_01160} to
+\texttt{step\_01180}, have high event scores and low mean best continuation.
+This suggests a sustained transition rather than a single isolated timestep.
+
+\begin{figure*}[t]
+  \wideplaceholder{1.8in}{Figure placeholder: MVK\_s2 case study with temporal
+  window \texttt{step\_01120}--\texttt{step\_01180}.}
+  \caption{Candidate event region in \texttt{MVK\_s2}.}
+  \label{fig:mvk-s2-case}
+\end{figure*}
+
+\subsubsection{Stilbene}
+
+The \texttt{stilbene} dataset contains 698 usable timesteps and therefore
+benefits most from a temporal overview. The strongest event region appears
+around \texttt{step\_11915} to \texttt{step\_11925}. Both adjacent intervals
+have all 20 source and target sheets below threshold 0.5. This region should be
+examined in the viewer together with molecular geometry and fiber-surface
+images.
+
+\begin{figure*}[t]
+  \wideplaceholder{1.8in}{Figure placeholder: stilbene case study around
+  \texttt{step\_11915}--\texttt{step\_11925}. Include sheet renderings,
+  fiber-surface renderings, and linked temporal context.}
+  \caption{Candidate event region in \texttt{stilbene}.}
+  \label{fig:stilbene-case}
+\end{figure*}
+
+\subsubsection{Synthetic Torus}
+
+The synthetic torus datasets are used to test controlled changes. The
+\texttt{torusGrowing} sequence should emphasize scale change, while
+\texttt{torusMoving} should emphasize translation in the range-space
+representation. Current results show that metric behavior changes substantially
+between these two cases. In the moving sequence, area ratio remains high while
+shape IoU and centroid metrics may disagree with the combined score, depending
+on the exact geometry and sheet ranking. This makes the synthetic datasets
+useful for validating metric sensitivity.
+
+\begin{figure*}[t]
+  \wideplaceholder{1.6in}{Figure placeholder: synthetic torus results. Compare
+  torusGrowing and torusMoving with known expected behavior, selected sheet
+  tracks, and metric curves.}
+  \caption{Synthetic datasets provide controlled tests for scale and motion.}
+  \label{fig:torus-case}
+\end{figure*}
+
+\section{Comparison With Existing Approaches}
+
+The goal of this section is not to replace a full Related Work section. Instead
+it summarizes how the proposed pipeline differs from several directly relevant
+families of methods.
+
+\begin{table*}[t]
+\caption{Capability comparison with representative prior approaches. The table
+is qualitative and should be refined after the full Related Work section is
+written.}
+\label{tab:comparison}
+\centering
+\begin{tabular}{p{0.23\textwidth}p{0.14\textwidth}p{0.14\textwidth}p{0.14\textwidth}p{0.14\textwidth}p{0.14\textwidth}}
+\toprule
+Approach & Bivariate input & Reeb-space features & Temporal tracking & Domain/range metrics & Linked feature images \\
+\midrule
+CSP image moments~\cite{sharma2025csp} & Yes & No & Descriptor curve & Global descriptors & Fiber surfaces for selected states \\
+Static Reeb-space computation~\cite{tierny2017jacobi,hristov2026singular} & Yes & Yes & No & Static topology & Not primary focus \\
+Time-varying Reeb graphs~\cite{edelsbrunner2008timevarying} & Scalar & Reeb graph & Yes & Topological graph evolution & Level-set extraction support \\
+Scalar feature tracking~\cite{saikia2017global,lukasczyk2020dynamic} & Scalar or component based & Merge-tree/component features & Yes & Overlap and similarity & Application dependent \\
+Ours & Yes & Reeb-space sheets & Yes & Domain and range metrics & Sheet and fiber-surface views \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+Compared with CSP image moments, our method is less compact but more
+feature-specific. A CSP moment curve can quickly identify unusual timesteps, but
+it does not directly indicate which Reeb-space sheet persisted or changed.
+Compared with static Reeb-space computation, our method adds temporal
+correspondence and visual diagnostics. Compared with scalar feature tracking,
+our method operates on bivariate Reeb-space sheets rather than scalar
+components or merge-tree regions.
+
+\section{Discussion}
+
+\subsection{Why Domain and Range Metrics Both Matter}
+
+The low agreement between domain-overlap and range-shape best targets is one of
+the most important observations. It shows that ``same feature'' is not a single
+unambiguous concept for bivariate Reeb-space sheets. If the scientific question
+concerns a stable relationship between the two scalar fields, range-space
+similarity is appropriate. If the question concerns persistence of a spatial
+region in the original domain, domain support overlap is more relevant. The
+viewer therefore exposes both notions instead of hiding them inside one score.
+
+\subsection{Interpreting Zero-Vertex Sheets}
+
+Some high-rank sheets have zero stored regular vertices. The pipeline now keeps
+these sheets because their range-space footprint and sheet area can still be
+meaningful. Vertex-based overlap for such sheets is zero by construction. In
+the paper, these sheets should be discussed carefully: they are valid
+range-space entities, but they provide no regular-vertex support evidence under
+the current RSI representation.
+
+\subsection{Threshold Sensitivity}
+
+The event threshold \(\theta=0.5\) is a useful exploratory setting, but it is
+not a calibrated physical threshold. The analysis stage exports event scores
+and lifetimes for thresholds from 0.3 to 0.7. A final paper should include a
+threshold-sensitivity figure showing which event intervals remain stable across
+thresholds. Intervals that appear only at one threshold should be treated as
+weak evidence.
+
+\subsection{Computational Considerations}
+
+The most expensive parts of the pipeline are Reeb-space computation, sheet
+geometry export, sheet rendering, and fiber-surface rendering. Caching reduces
+recomputation, but cache consistency is important: all stages should use the
+same input VTU, field names, and Reeb-space outputs. Rendering uses global
+sheet bounds for comparability, which can increase memory use because a larger
+context must be available for each image.
+
+\section{Limitations}
+
+The current method has several limitations.
+
+First, the matching score is heuristic. The weights are practical defaults, not
+learned or theoretically optimal. We report individual metric behavior to make
+this visible, but a final system should allow users to tune weights and inspect
+sensitivity.
+
+Second, the current temporal graph stores adjacent-pair candidate matches. It
+does not solve a global optimization problem over the full time sequence. This
+is appropriate for exploratory visual analysis, but it can produce fragmented
+tracks when short-term scores are ambiguous.
+
+Third, the method depends on successful Reeb-space computation and geometry
+export. Degenerate bivariate inputs can cause the external computation to fail.
+The main branch of the analysis avoids perturbation-based correction so that
+all reported results correspond to unperturbed input data.
+
+Fourth, the current RSI representation stores regular vertices but not all
+singular-vertex membership information per sheet. This limits the precision of
+domain-support comparisons for sheets whose evidence is concentrated near
+singular structure.
+
+Fifth, the event score is an analysis heuristic. It is useful for prioritizing
+inspection but should not be presented as a mathematically complete event
+detector without additional validation.
+
+Finally, the synthetic datasets currently provide controlled qualitative tests
+but not a full ground-truth benchmark. A stronger evaluation would include
+known sheet correspondences, controlled split/merge events, and quantitative
+accuracy against ground truth.
+
+\section{Future Work}
+
+Future work should address four directions. First, we plan to add a formal
+threshold and weight sensitivity study. Second, we will improve the RSI
+representation by storing singular-vertex membership per sheet, enabling richer
+domain-overlap metrics. Third, we will design synthetic benchmarks with known
+sheet correspondences and controlled degeneracies. Fourth, we will add global
+tracking algorithms that use the adjacent-pair graph as input but optimize
+tracks over the full sequence.
+
+\section{Conclusion}
+
+We presented a Reeb-space sheet tracking pipeline for time-varying bivariate
+fields. The method extracts prominent Reeb-space sheets, compares them across
+adjacent timesteps using range-space and domain-space metrics, and visualizes
+the resulting correspondences with linked sheet and fiber-surface evidence.
+Experiments on molecular and synthetic datasets show that range-space shape
+overlap provides stable correspondences in molecular sequences, while
+domain-overlap metrics expose complementary spatial-support behavior. The
+approach bridges global bivariate summaries and feature-level temporal
+inspection, supporting the identification of persistent sheets and important
+transition intervals in time-varying bivariate data.
+
+\section*{Acknowledgments}
+
+Acknowledgments will be added in the final version.
+
+\bibliographystyle{IEEEtran}
+\bibliography{paper_draft_reeb_space_sheet_tracking}
+
+\end{document}

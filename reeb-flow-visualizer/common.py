@@ -3,8 +3,44 @@ from pathlib import Path
 
 # ================= USER SETTINGS =================
 
-BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/MVK_s1")
+BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/torusGrowing")
 
+DATASET_CONFIGS = {
+    "stilbene": {
+        "state_file": "sampleFSImage_stilbene.pvsm",
+        "f_isovalue": 0.05,
+        "g_isovalue": 0.05,
+    },
+    "mvk": {
+        "state_file": "sampleFSImage_MVK.pvsm",
+        "f_isovalue": 0.07,
+        "g_isovalue": 0.07,
+    },
+    "torus": {
+        "state_file": "sampleFSImage_torus.pvsm",
+        "f_isovalue": 0.0,
+        "g_isovalue": -10.0,
+    },
+}
+
+last_dir = BASE_DIR.name.lower()
+
+if "stilbene" in last_dir:
+    dataset_key = "stilbene"
+elif "mvk" in last_dir:
+    dataset_key = "mvk"
+elif "torus" in last_dir:
+    dataset_key = "torus"
+else:
+    raise ValueError(f"Unknown dataset type from BASE_DIR last directory: {BASE_DIR.name}")
+
+config = DATASET_CONFIGS[dataset_key]
+
+# Fiber-surface extraction for top Reeb sheets. For each timestep, the stage
+# writes surfaces for +f, -f, +g, and -g at these absolute isovalues.
+FIBER_SURFACE_FIELD_F_ISOVALUE = config["f_isovalue"]
+FIBER_SURFACE_FIELD_G_ISOVALUE = config["g_isovalue"]
+    
 # Range-field selection passed to fv99.
 # Keep these close to BASE_DIR so dataset switches can update them together.
 FV99_FNAME = "orb00"
@@ -20,7 +56,7 @@ RESERVE_CORES = 20
 FV99_OMP_THREADS = 1
 TOP_N_SHEETS = 20
 VIEWER_DEFAULT_TOP_SHEETS = 10
-SHEET_RENDERER_WORKERS = 10
+SHEET_RENDERER_WORKERS = 4
 SHEET_RENDERER_REBUILD_CACHE = False
 SHEET_RENDERER_CLEAN_CACHE = False
 SHEET_RENDERER_USE_GLOBAL_BOUNDS = True
@@ -31,11 +67,10 @@ SHEET_RENDERER_GLOBAL_PADDING = 0.03
 # These are used by compareSheetShapes, overlap attachment metadata,
 # and unified viewer defaults.
 SHAPE_SCORE_DEFAULT_WEIGHTS = {
-    "shape_iou": 0.40,
-    "support_jaccard": 0.30,
-    "area_ratio": 0.15,
-    "bbox_iou": 0.10,
-    "centroid_similarity": 0.05,
+    "shape_iou": 0.6,
+    "area_ratio": 1.9,
+    "bbox_iou": 0.2,
+    "centroid_similarity": 0.1,
 }
 
 # Same weights with stage_03 range-metric key prefix.
@@ -53,14 +88,22 @@ HYBRID_SCORE_DEFAULT_WEIGHTS = {
 # Default overlap metric used as vertex component in hybrid mode.
 HYBRID_VERTEX_METRIC_DEFAULT = "overlap_max_percent"
 
+# Analysis thresholds used by the tracking diagnostics stage. The preferred
+# threshold is used for ranked interval JSON and plots; all thresholds are
+# written to the event/lifetime CSVs for sensitivity checks.
+TRACKING_ANALYSIS_THRESHOLDS = (0.3, 0.4, 0.5, 0.6, 0.7)
+TRACKING_ANALYSIS_PREFERRED_THRESHOLD = 0.5
+TRACKING_ANALYSIS_TOP_INTERVALS = 12
+
 # Pipeline stage flags
 RUN_STAGE_1_FV99 = False
 RUN_STAGE_2_RSI_JSON = False
-RUN_STAGE_3A_SHAPE_MATCHING = True
+RUN_STAGE_3A_SHAPE_MATCHING = False
 RUN_STAGE_3B_OVERLAPS = False
 RUN_STAGE_4A_SHEET_RENDERING = True
-RUN_STAGE_4B_SHEET_FIBER_SURFACES = False
-RUN_STAGE_5_UNIFIED_SANKEY_VIEWER = False
+RUN_STAGE_4B_SHEET_FIBER_SURFACES = True
+RUN_STAGE_5_UNIFIED_SANKEY_VIEWER = True
+RUN_STAGE_6_TRACKING_ANALYSIS = False
 
 # Backward-compatible aliases for older scripts/imports.
 RUN_STAGE_2B_SHAPE_MATCHING = RUN_STAGE_3A_SHAPE_MATCHING
@@ -86,25 +129,21 @@ OUTPUT_DIR = BASE_DIR / "sankey"
 RSI_JSON_DIR = OUTPUT_DIR / "rsi_json"
 UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
 VIEWER_DIR = UNIFIED_VIEWER_DIR
+TRACKING_ANALYSIS_DIR = OUTPUT_DIR / "tracking_analysis"
 SHEET_IMAGE_DIR = BASE_DIR / "sheetRendering"
 SHEET_RENDERER_TEMP_DIR = (
     Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/sheet_renderer_tmp")
     / BASE_DIR.name
 )
 SHEET_RENDERER_UNIFORM_SHEET_COLOR = (0.20, 0.60, 0.90)
-
-# Fiber-surface extraction for top Reeb sheets. For each timestep, the stage
-# writes surfaces for +f, -f, +g, and -g at these absolute isovalues.
-FIBER_SURFACE_FIELD_F_ISOVALUE = 0.07
-FIBER_SURFACE_FIELD_G_ISOVALUE = 0.07
 FIBER_SURFACE_TOP_N_SHEETS = TOP_N_SHEETS
-FIBER_SURFACE_WORKERS = 1
+FIBER_SURFACE_WORKERS = 20
 FIBER_SURFACE_REBUILD = False
 FIBER_SURFACE_DIR = BASE_DIR / "sheetFiberSurfaces"
 FIBER_SURFACE_IMAGE_DIR = BASE_DIR / "sheetFiberSurfaceImages"
 FIBER_SURFACE_TEMP_DIR = SHEET_RENDERER_TEMP_DIR / "fiber_surfaces"
 FIBER_SURFACE_MOLECULAR_STRUCTURE_DIR = VTU_DIR / "molecularStructure"
-FIBER_SURFACE_RENDER_STATE_FILE = Path(__file__).resolve().parent / "smapleFSImage.pvsm"
+FIBER_SURFACE_RENDER_STATE_FILE = Path(__file__).resolve().parent / config["state_file"]
 FIBER_SURFACE_RENDER_IMAGE_RESOLUTION = (1600, 1200)
 FIBER_SURFACE_RENDER_TIMEOUT_SECONDS = 300
 FIBER_SURFACE_RENDER_RETRIES = 2

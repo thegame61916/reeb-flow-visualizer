@@ -102,6 +102,7 @@ DPI = 200
 FIGURE_WIDTH = SHEET_RENDERER_IMAGE_SIZE[0] / DPI
 FIGURE_HEIGHT = SHEET_RENDERER_IMAGE_SIZE[1] / DPI
 UNIFORM_SHEET_COLOR = SHEET_RENDERER_UNIFORM_SHEET_COLOR
+CONTEXT_CACHE_DIR = TEMP_DIRECTORY / "context_cache"
 
 
 @dataclass(frozen=True)
@@ -266,35 +267,19 @@ def expand_bounds_to_canvas(
     )
 
 
-def render_colored(
-    sheet_polygons,
-    output_path: Path,
-    colors_by_sheet: dict[int, tuple[float, float, float]],
-    selected_sheet: int | None = None,
-    render_bounds: tuple[float, float, float, float] | None = None,
-) -> None:
+def make_render_axes():
     fig, ax = plt.subplots(figsize=(FIGURE_WIDTH, FIGURE_HEIGHT), dpi=DPI)
     fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
     ax.set_position([0, 0, 1, 1])
     ax.set_aspect("equal", adjustable="box")
     ax.axis("off")
+    return fig, ax
 
-    polygons = []
-    colors = []
 
-    for polygon, sheet_id in zip(sheet_polygons.polygons, sheet_polygons.sheet_ids, strict=True):
-        if selected_sheet is not None and sheet_id != selected_sheet:
-            polygons.append([sheet_polygons.points[i] for i in polygon])
-            colors.append((0.80, 0.80, 0.80, 0.08))
-            continue
-
-        rgb = colors_by_sheet.get(sheet_id, (0.85, 0.85, 0.85))
-        alpha = 0.88 if selected_sheet is not None else 0.58
-        polygons.append([sheet_polygons.points[i] for i in polygon])
-        colors.append((rgb[0], rgb[1], rgb[2], alpha))
-
-    collection = PolyCollection(polygons, facecolors=colors, edgecolors="none", antialiased=True)
-    ax.add_collection(collection)
+def apply_render_bounds(
+    ax,
+    render_bounds: tuple[float, float, float, float] | None,
+) -> None:
     if render_bounds is not None:
         xmin, ymin, xmax, ymax = render_bounds
         ax.set_xlim(xmin, xmax)
@@ -304,12 +289,125 @@ def render_colored(
         ax.autoscale_view()
         ax.margins(0.03)
 
+
+def save_render_figure(
+    fig,
+    output_path: Path,
+    render_bounds: tuple[float, float, float, float] | None,
+) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if render_bounds is not None:
         fig.savefig(output_path, dpi=DPI)
     else:
         fig.savefig(output_path, bbox_inches="tight", pad_inches=0.03)
-    plt.close(fig)
+
+
+def add_polygon_collection(ax, polygons, colors) -> None:
+    if not polygons:
+        return
+    collection = PolyCollection(polygons, facecolors=colors, edgecolors="none", antialiased=True)
+    ax.add_collection(collection)
+
+
+def render_colored(
+    sheet_polygons,
+    output_path: Path,
+    colors_by_sheet: dict[int, tuple[float, float, float]],
+    render_bounds: tuple[float, float, float, float] | None = None,
+) -> None:
+    fig, ax = make_render_axes()
+    try:
+        polygons = []
+        colors = []
+
+        for polygon, sheet_id in zip(sheet_polygons.polygons, sheet_polygons.sheet_ids, strict=True):
+            rgb = colors_by_sheet.get(sheet_id, (0.85, 0.85, 0.85))
+            polygons.append([sheet_polygons.points[i] for i in polygon])
+            colors.append((rgb[0], rgb[1], rgb[2], 0.58))
+
+        add_polygon_collection(ax, polygons, colors)
+        apply_render_bounds(ax, render_bounds)
+        save_render_figure(fig, output_path, render_bounds)
+    finally:
+        plt.close(fig)
+
+
+def render_context(
+    sheet_polygons,
+    output_path: Path,
+    render_bounds: tuple[float, float, float, float],
+) -> None:
+    fig, ax = make_render_axes()
+    try:
+        polygons = [
+            [sheet_polygons.points[index] for index in polygon]
+            for polygon in sheet_polygons.polygons
+        ]
+        colors = [(0.80, 0.80, 0.80, 0.08)] * len(polygons)
+        add_polygon_collection(ax, polygons, colors)
+        apply_render_bounds(ax, render_bounds)
+        save_render_figure(fig, output_path, render_bounds)
+    finally:
+        plt.close(fig)
+
+
+def collect_selected_sheet_polygons(sheet_polygons, sheet_ids: list[int]) -> dict[int, list[list[tuple[float, float]]]]:
+    selected = set(sheet_ids)
+    polygons_by_sheet: dict[int, list[list[tuple[float, float]]]] = {
+        sheet_id: []
+        for sheet_id in sheet_ids
+    }
+    for polygon, sheet_id in zip(sheet_polygons.polygons, sheet_polygons.sheet_ids, strict=True):
+        if sheet_id not in selected:
+            continue
+        polygons_by_sheet[sheet_id].append([
+            sheet_polygons.points[index]
+            for index in polygon
+        ])
+    return polygons_by_sheet
+
+
+def render_selected_sheet(
+    sheet_polygons,
+    output_path: Path,
+    colors_by_sheet: dict[int, tuple[float, float, float]],
+    selected_sheet: int,
+    render_bounds: tuple[float, float, float, float] | None = None,
+    context_image=None,
+    selected_polygons: list[list[tuple[float, float]]] | None = None,
+) -> None:
+    fig, ax = make_render_axes()
+    try:
+        if context_image is not None and render_bounds is not None:
+            xmin, ymin, xmax, ymax = render_bounds
+            ax.imshow(
+                context_image,
+                extent=(xmin, xmax, ymin, ymax),
+                origin="upper",
+                interpolation="nearest",
+            )
+
+        polygons = []
+        colors = []
+        rgb = colors_by_sheet.get(selected_sheet, (0.85, 0.85, 0.85))
+        if context_image is not None:
+            polygons = list(selected_polygons or [])
+            colors = [(rgb[0], rgb[1], rgb[2], 0.88)] * len(polygons)
+        else:
+            for polygon, sheet_id in zip(sheet_polygons.polygons, sheet_polygons.sheet_ids, strict=True):
+                if sheet_id != selected_sheet:
+                    polygons.append([sheet_polygons.points[index] for index in polygon])
+                    colors.append((0.80, 0.80, 0.80, 0.08))
+                    continue
+
+                polygons.append([sheet_polygons.points[index] for index in polygon])
+                colors.append((rgb[0], rgb[1], rgb[2], 0.88))
+
+        add_polygon_collection(ax, polygons, colors)
+        apply_render_bounds(ax, render_bounds)
+        save_render_figure(fig, output_path, render_bounds)
+    finally:
+        plt.close(fig)
 
 
 def uniform_sheet_colors(sheet_polygons) -> dict[int, tuple[float, float, float]]:
@@ -456,13 +554,23 @@ def render_one(
         render_bounds=render_bounds,
     )
 
+    context_image = None
+    selected_polygons_by_sheet: dict[int, list[list[tuple[float, float]]]] = {}
+    if render_bounds is not None:
+        context_path = CONTEXT_CACHE_DIR / f"{stem}.png"
+        render_context(sheet_polygons, context_path, render_bounds)
+        context_image = plt.imread(context_path)
+        selected_polygons_by_sheet = collect_selected_sheet_polygons(sheet_polygons, sheets)
+
     for sheet_id in sheets:
-        render_colored(
+        render_selected_sheet(
             sheet_polygons,
             output_dir / f"sheet_{sheet_id}.png",
             colors_by_sheet,
             selected_sheet=sheet_id,
             render_bounds=render_bounds,
+            context_image=context_image,
+            selected_polygons=selected_polygons_by_sheet.get(sheet_id),
         )
 
     return f"{stem}: {cache_status} VTP, wrote {1 + len(sheets)} image(s) to {output_dir}"
@@ -489,6 +597,7 @@ def main(argv: list[str] | None = None) -> int:
     TEMP_DIRECTORY.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
     VTP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    CONTEXT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     if args.clean_cache and VTP_CACHE_DIR.exists():
         shutil.rmtree(VTP_CACHE_DIR)

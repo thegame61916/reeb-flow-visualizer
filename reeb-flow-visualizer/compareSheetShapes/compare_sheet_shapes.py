@@ -661,12 +661,6 @@ def build_cache(timesteps: list[TimestepInput], workers: int, library_path: str)
     return bounds, results
 
 
-def jaccard(a: set[int], b: set[int]) -> float:
-    if not a or not b:
-        return 0.0
-    union = a | b
-    return len(a & b) / len(union) if union else 0.0
-
 
 def bbox_iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
     ax0, ay0, ax1, ay1 = a
@@ -706,7 +700,6 @@ def mask_iou(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def shape_score(source: SheetDescriptor, target: SheetDescriptor, source_mask: np.ndarray, target_mask: np.ndarray, global_bounds: tuple[float, float, float, float]) -> dict[str, float]:
-    support = jaccard(set(source.vertices), set(target.vertices))
     geom = mask_iou(source_mask, target_mask)
     area_ratio = min(source.area, target.area) / max(source.area, target.area) if max(source.area, target.area) > 0 else 0.0
     bb_iou = bbox_iou(source.bbox, target.bbox)
@@ -714,7 +707,6 @@ def shape_score(source: SheetDescriptor, target: SheetDescriptor, source_mask: n
 
     final = (
         SHAPE_SCORE_DEFAULT_WEIGHTS["shape_iou"] * geom
-        + SHAPE_SCORE_DEFAULT_WEIGHTS["support_jaccard"] * support
         + SHAPE_SCORE_DEFAULT_WEIGHTS["area_ratio"] * area_ratio
         + SHAPE_SCORE_DEFAULT_WEIGHTS["bbox_iou"] * bb_iou
         + SHAPE_SCORE_DEFAULT_WEIGHTS["centroid_similarity"] * centroid
@@ -723,7 +715,6 @@ def shape_score(source: SheetDescriptor, target: SheetDescriptor, source_mask: n
     return {
         "final_score": final,
         "shape_iou": geom,
-        "support_jaccard": support,
         "area_ratio": area_ratio,
         "bbox_iou": bb_iou,
         "centroid_similarity": centroid,

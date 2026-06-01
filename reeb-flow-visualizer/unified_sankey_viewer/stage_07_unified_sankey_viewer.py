@@ -37,7 +37,6 @@ UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
 SHAPE_METRICS = [
     {"id": "combined", "label": "combined", "field": "final_score"},
     {"id": "shape_iou", "label": "shape IoU", "field": "shape_iou"},
-    {"id": "support_jaccard", "label": "vertex Jaccard", "field": "support_jaccard"},
     {"id": "area_ratio", "label": "area ratio", "field": "area_ratio"},
     {"id": "bbox_iou", "label": "bbox IoU", "field": "bbox_iou"},
     {"id": "centroid_similarity", "label": "centroid similarity", "field": "centroid_similarity"},
@@ -1338,9 +1337,15 @@ d3.json("data.json").then(data => {
   const modeById = new Map(dataModes.map(mode => [mode.id, mode]));
   const metricMaxima = data.meta.metric_maxima || {};
   const overlapMetricIds = (modeById.get("overlap")?.metrics || []).map(metric => metric.id);
-  const shapeScoreComponentIds = Array.isArray(data.meta.shape_score_components) && data.meta.shape_score_components.length
+  const shapeMetricIds = (modeById.get("shape")?.metrics || []).map(metric => metric.id);
+  const shapeScoreComponentFallback = ["shape_iou", "area_ratio", "bbox_iou", "centroid_similarity"];
+  const shapeScoreComponentRaw = Array.isArray(data.meta.shape_score_components) && data.meta.shape_score_components.length
     ? data.meta.shape_score_components.slice()
-    : ["shape_iou", "support_jaccard", "area_ratio", "bbox_iou", "centroid_similarity"];
+    : shapeScoreComponentFallback;
+  const shapeScoreComponentIds = shapeScoreComponentRaw.filter(metricId =>
+    metricId !== "combined" && shapeMetricIds.includes(metricId)
+  );
+  if (!shapeScoreComponentIds.length) shapeScoreComponentIds.push(...shapeScoreComponentFallback);
   const shapeScoreDefaultWeightsRaw = data.meta.shape_score_default_weights || {};
   const hybridScoreDefaultWeightsRaw = data.meta.hybrid_score_default_weights || {};
   const hybridVertexMetricDefault = overlapMetricIds.includes(data.meta.hybrid_vertex_metric_default)
@@ -2032,7 +2037,6 @@ d3.json("data.json").then(data => {
   function shapeWeightLabel(metricId) {
     const labels = {
       shape_iou: "Shape",
-      support_jaccard: "Jaccard",
       area_ratio: "Area",
       bbox_iou: "BBox",
       centroid_similarity: "Center"
