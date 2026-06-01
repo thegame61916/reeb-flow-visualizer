@@ -25,6 +25,7 @@ from common import (
 )
 
 from unified_sankey_viewer.stage_07_unified_sankey_viewer import (
+    build_unified_sankey_data_stage,
     build_unified_sankey_viewer_stage,
 )
 
@@ -80,19 +81,27 @@ def enabled_stages():
             )
         )
 
-    if RUN_STAGE_5_UNIFIED_SANKEY_VIEWER:
+    if RUN_STAGE_5_UNIFIED_SANKEY_VIEWER or RUN_STAGE_6_TRACKING_ANALYSIS:
         stages.append(
             (
-                "Stage 5: build unified Sankey viewer",
-                build_unified_sankey_viewer_stage,
+                "Stage 5A: build unified Sankey data",
+                build_unified_sankey_data_stage,
             )
         )
 
     if RUN_STAGE_6_TRACKING_ANALYSIS:
         stages.append(
             (
-                "Stage 6: analyze tracking results",
+                "Stage 5B: analyze tracking results",
                 run_tracking_analysis_stage,
+            )
+        )
+
+    if RUN_STAGE_5_UNIFIED_SANKEY_VIEWER:
+        stages.append(
+            (
+                "Stage 5C: build unified Sankey viewer",
+                build_unified_sankey_viewer_stage,
             )
         )
 

@@ -3,7 +3,7 @@ from pathlib import Path
 
 # ================= USER SETTINGS =================
 
-BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/torusGrowing")
+BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/MVK_s1")
 
 DATASET_CONFIGS = {
     "stilbene": {
@@ -94,16 +94,18 @@ HYBRID_VERTEX_METRIC_DEFAULT = "overlap_max_percent"
 TRACKING_ANALYSIS_THRESHOLDS = (0.3, 0.4, 0.5, 0.6, 0.7)
 TRACKING_ANALYSIS_PREFERRED_THRESHOLD = 0.5
 TRACKING_ANALYSIS_TOP_INTERVALS = 12
+TRACKING_ANALYSIS_TOP_FEATURES = 12
+TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT = 0.5
 
 # Pipeline stage flags
 RUN_STAGE_1_FV99 = False
 RUN_STAGE_2_RSI_JSON = False
 RUN_STAGE_3A_SHAPE_MATCHING = False
 RUN_STAGE_3B_OVERLAPS = False
-RUN_STAGE_4A_SHEET_RENDERING = True
-RUN_STAGE_4B_SHEET_FIBER_SURFACES = True
+RUN_STAGE_4A_SHEET_RENDERING = False
+RUN_STAGE_4B_SHEET_FIBER_SURFACES = False
 RUN_STAGE_5_UNIFIED_SANKEY_VIEWER = True
-RUN_STAGE_6_TRACKING_ANALYSIS = False
+RUN_STAGE_6_TRACKING_ANALYSIS = True
 
 # Backward-compatible aliases for older scripts/imports.
 RUN_STAGE_2B_SHAPE_MATCHING = RUN_STAGE_3A_SHAPE_MATCHING
@@ -129,7 +131,9 @@ OUTPUT_DIR = BASE_DIR / "sankey"
 RSI_JSON_DIR = OUTPUT_DIR / "rsi_json"
 UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
 VIEWER_DIR = UNIFIED_VIEWER_DIR
+TRACKING_DATA_FILE = OUTPUT_DIR / "tracking_data.json"
 TRACKING_ANALYSIS_DIR = OUTPUT_DIR / "tracking_analysis"
+TRACKING_ANALYSIS_VIEWER_FILE = TRACKING_ANALYSIS_DIR / "viewer_analysis.json"
 SHEET_IMAGE_DIR = BASE_DIR / "sheetRendering"
 SHEET_RENDERER_TEMP_DIR = (
     Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/sheet_renderer_tmp")

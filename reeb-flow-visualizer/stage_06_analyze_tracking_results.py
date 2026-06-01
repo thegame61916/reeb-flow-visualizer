@@ -17,8 +17,12 @@ from common import (
     BASE_DIR,
     TRACKING_ANALYSIS_DIR,
     TRACKING_ANALYSIS_PREFERRED_THRESHOLD,
+    TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT,
     TRACKING_ANALYSIS_THRESHOLDS,
+    TRACKING_ANALYSIS_TOP_FEATURES,
     TRACKING_ANALYSIS_TOP_INTERVALS,
+    TRACKING_ANALYSIS_VIEWER_FILE,
+    TRACKING_DATA_FILE,
 )
 
 SHAPE_METRICS = (
@@ -121,6 +125,11 @@ def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
 
 
 def viewer_data_file(base_dir: Path) -> Path:
+    if base_dir == BASE_DIR and TRACKING_DATA_FILE.exists():
+        return TRACKING_DATA_FILE
+    tracking_data = base_dir / "sankey" / "tracking_data.json"
+    if tracking_data.exists():
+        return tracking_data
     return base_dir / "sankey" / "unified_sankey_viewer" / "data.json"
 
 
@@ -128,6 +137,20 @@ def output_dir_for(base_dir: Path) -> Path:
     if base_dir == BASE_DIR:
         return TRACKING_ANALYSIS_DIR
     return base_dir / "sankey" / "tracking_analysis"
+
+
+def viewer_analysis_file_for(base_dir: Path) -> Path:
+    if base_dir == BASE_DIR:
+        return TRACKING_ANALYSIS_VIEWER_FILE
+    return base_dir / "sankey" / "tracking_analysis" / "viewer_analysis.json"
+
+
+def node_key(timestep_index: int, sheet_id: int) -> str:
+    return f"{safe_int(timestep_index)}:{safe_int(sheet_id)}"
+
+
+def link_key(source_timestep_index: int, source_sheet_id: int, target_timestep_index: int, target_sheet_id: int) -> str:
+    return f"{safe_int(source_timestep_index)}:{safe_int(source_sheet_id)}->{safe_int(target_timestep_index)}:{safe_int(target_sheet_id)}"
 
 
 def get_shape_metrics(match: dict) -> dict[str, float]:
@@ -517,7 +540,7 @@ def collect_event_scores(
             event_score = (
                 source_weak_count
                 + target_weak_count
-                + 0.5 * (possible_splits + possible_merges)
+                + TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT * (possible_splits + possible_merges)
                 + (1.0 - mean_best_combined) * max(source_sheet_count, 1)
             )
 
@@ -636,6 +659,12 @@ def collect_sheet_lifetimes(
                 if 0 <= node[0] < len(data.get("timesteps", []))
             ]
 
+            node_path = [node_key(timestep, sheet_id) for timestep, sheet_id in nodes]
+            link_path = [
+                link_key(nodes[index][0], nodes[index][1], nodes[index + 1][0], nodes[index + 1][1])
+                for index in range(max(0, len(nodes) - 1))
+            ]
+
             rows.append(
                 {
                     "dataset": dataset,
@@ -656,6 +685,8 @@ def collect_sheet_lifetimes(
                     "mean_continuation_score": mean(scores),
                     "min_continuation_score": min(scores) if scores else 0.0,
                     "sheet_path": " ".join(str(node[1]) for node in nodes),
+                    "node_path": " ".join(node_path),
+                    "link_path": " ".join(link_path),
                 }
             )
 
@@ -795,10 +826,279 @@ def collect_interesting_intervals(
         "preferred_threshold": preferred_threshold,
         "event_score_formula": (
             "source_weak_count + target_weak_count + "
-            "0.5*(possible_splits + possible_merges) + "
+            f"{TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT:g}*(possible_splits + possible_merges) + "
             "(1 - mean_best_combined)*source_sheet_count"
         ),
         "intervals": intervals,
+    }
+
+
+def shape_pair_index(data: dict) -> dict[tuple[int, int], dict]:
+    return {
+        (
+            safe_int(pair.get("source_timestep_index")),
+            safe_int(pair.get("target_timestep_index")),
+        ): pair
+        for pair in data.get("shape_pairs", [])
+    }
+
+
+def interval_viewer_record(data: dict, pair: dict, row: dict, threshold: float) -> dict:
+    source_index = safe_int(row.get("source_timestep_index"))
+    target_index = safe_int(row.get("target_timestep_index"))
+
+    by_source: dict[int, list[dict]] = defaultdict(list)
+    by_target: dict[int, list[dict]] = defaultdict(list)
+    for match in pair.get("matches", []):
+        by_source[safe_int(match.get("source_sheet_id"))].append(match)
+        by_target[safe_int(match.get("target_sheet_id"))].append(match)
+
+    source_sheets = sheets_for_timestep(data, source_index)
+    target_sheets = sheets_for_timestep(data, target_index)
+    highlight_nodes: set[str] = set()
+    highlight_links: set[str] = set()
+    weak_source_nodes: list[str] = []
+    weak_target_nodes: list[str] = []
+    split_source_nodes: list[str] = []
+    merge_target_nodes: list[str] = []
+
+    for sheet in source_sheets:
+        source_sheet_id = safe_int(sheet.get("sheet_id"))
+        best = best_shape_match(by_source.get(source_sheet_id, []), "combined")
+        best_score = get_shape_metrics(best)["combined"] if best else 0.0
+        if best_score < threshold:
+            key = node_key(source_index, source_sheet_id)
+            weak_source_nodes.append(key)
+            highlight_nodes.add(key)
+            if best:
+                target_sheet_id = safe_int(best.get("target_sheet_id"))
+                highlight_nodes.add(node_key(target_index, target_sheet_id))
+                highlight_links.add(link_key(source_index, source_sheet_id, target_index, target_sheet_id))
+
+    for sheet in target_sheets:
+        target_sheet_id = safe_int(sheet.get("sheet_id"))
+        best = best_shape_match(by_target.get(target_sheet_id, []), "combined")
+        best_score = get_shape_metrics(best)["combined"] if best else 0.0
+        if best_score < threshold:
+            key = node_key(target_index, target_sheet_id)
+            weak_target_nodes.append(key)
+            highlight_nodes.add(key)
+            if best:
+                source_sheet_id = safe_int(best.get("source_sheet_id"))
+                highlight_nodes.add(node_key(source_index, source_sheet_id))
+                highlight_links.add(link_key(source_index, source_sheet_id, target_index, target_sheet_id))
+
+    for source_sheet_id, matches in by_source.items():
+        above = [match for match in matches if get_shape_metrics(match)["combined"] >= threshold]
+        if len(above) >= 2:
+            split_source_nodes.append(node_key(source_index, source_sheet_id))
+            highlight_nodes.add(node_key(source_index, source_sheet_id))
+            for match in above:
+                target_sheet_id = safe_int(match.get("target_sheet_id"))
+                highlight_nodes.add(node_key(target_index, target_sheet_id))
+                highlight_links.add(link_key(source_index, source_sheet_id, target_index, target_sheet_id))
+
+    for target_sheet_id, matches in by_target.items():
+        above = [match for match in matches if get_shape_metrics(match)["combined"] >= threshold]
+        if len(above) >= 2:
+            merge_target_nodes.append(node_key(target_index, target_sheet_id))
+            highlight_nodes.add(node_key(target_index, target_sheet_id))
+            for match in above:
+                source_sheet_id = safe_int(match.get("source_sheet_id"))
+                highlight_nodes.add(node_key(source_index, source_sheet_id))
+                highlight_links.add(link_key(source_index, source_sheet_id, target_index, target_sheet_id))
+
+    return {
+        "id": f"interval:{threshold_slug(threshold)}:{source_index}:{target_index}",
+        "threshold": threshold,
+        "source_timestep_index": source_index,
+        "target_timestep_index": target_index,
+        "source_label": row.get("source_label"),
+        "target_label": row.get("target_label"),
+        "source_stem": row.get("source_stem"),
+        "target_stem": row.get("target_stem"),
+        "pair_label": row.get("pair_label"),
+        "event_score": safe_float(row.get("event_score")),
+        "mean_best_combined": safe_float(row.get("mean_best_combined")),
+        "min_best_combined": safe_float(row.get("min_best_combined")),
+        "source_weak_count": safe_int(row.get("source_weak_count")),
+        "target_weak_count": safe_int(row.get("target_weak_count")),
+        "possible_splits": safe_int(row.get("possible_splits")),
+        "possible_merges": safe_int(row.get("possible_merges")),
+        "domain_shape_agreement_fraction": safe_float(row.get("domain_shape_agreement_fraction")),
+        "highlight": {
+            "nodes": sorted(highlight_nodes),
+            "links": sorted(highlight_links),
+            "weak_source_nodes": weak_source_nodes,
+            "weak_target_nodes": weak_target_nodes,
+            "split_source_nodes": split_source_nodes,
+            "merge_target_nodes": merge_target_nodes,
+        },
+    }
+
+
+def collect_viewer_intervals(data: dict, event_rows: list[dict], thresholds: tuple[float, ...], top_n: int) -> dict[str, list[dict]]:
+    pair_index = shape_pair_index(data)
+    result: dict[str, list[dict]] = {}
+    for threshold in thresholds:
+        rows = [row for row in event_rows if safe_float(row.get("threshold")) == threshold]
+        rows.sort(key=lambda row: safe_float(row.get("event_score")), reverse=True)
+        records = []
+        for row in rows[:top_n]:
+            pair = pair_index.get((safe_int(row.get("source_timestep_index")), safe_int(row.get("target_timestep_index"))))
+            if pair is None:
+                continue
+            records.append(interval_viewer_record(data, pair, row, threshold))
+        result[str(threshold)] = records
+    return result
+
+
+def collect_viewer_tracks(lifetime_rows: list[dict], thresholds: tuple[float, ...], top_n: int) -> dict[str, list[dict]]:
+    result: dict[str, list[dict]] = {}
+    for threshold in thresholds:
+        rows = [row for row in lifetime_rows if safe_float(row.get("threshold")) == threshold]
+        rows.sort(
+            key=lambda row: (
+                safe_int(row.get("length")),
+                safe_float(row.get("mean_continuation_score")),
+                safe_float(row.get("min_continuation_score")),
+            ),
+            reverse=True,
+        )
+        records = []
+        for row in rows[:top_n]:
+            node_path = [item for item in str(row.get("node_path", "")).split() if item]
+            link_path = [item for item in str(row.get("link_path", "")).split() if item]
+            records.append(
+                {
+                    "id": f"track:{threshold_slug(threshold)}:{safe_int(row.get('track_id'))}",
+                    "threshold": threshold,
+                    "track_id": safe_int(row.get("track_id")),
+                    "length": safe_int(row.get("length")),
+                    "start_timestep_index": safe_int(row.get("start_timestep_index")),
+                    "end_timestep_index": safe_int(row.get("end_timestep_index")),
+                    "start_label": row.get("start_label"),
+                    "end_label": row.get("end_label"),
+                    "start_sheet_id": safe_int(row.get("start_sheet_id")),
+                    "end_sheet_id": safe_int(row.get("end_sheet_id")),
+                    "rank_min": safe_int(row.get("rank_min")),
+                    "rank_max": safe_int(row.get("rank_max")),
+                    "area_mean": safe_float(row.get("area_mean")),
+                    "mean_continuation_score": safe_float(row.get("mean_continuation_score")),
+                    "min_continuation_score": safe_float(row.get("min_continuation_score")),
+                    "highlight": {"nodes": node_path, "links": link_path},
+                }
+            )
+        result[str(threshold)] = records
+    return result
+
+
+def collect_sensitivity_summary(event_rows: list[dict], lifetime_rows: list[dict], thresholds: tuple[float, ...]) -> list[dict]:
+    rows = []
+    for threshold in thresholds:
+        events = [row for row in event_rows if safe_float(row.get("threshold")) == threshold]
+        tracks = [row for row in lifetime_rows if safe_float(row.get("threshold")) == threshold]
+        top_event = max(events, key=lambda row: safe_float(row.get("event_score")), default={})
+        lengths = sorted(safe_int(row.get("length")) for row in tracks)
+        rows.append(
+            {
+                "threshold": threshold,
+                "event_count": len(events),
+                "mean_event_score": mean(safe_float(row.get("event_score")) for row in events),
+                "max_event_score": safe_float(top_event.get("event_score")),
+                "top_event_pair_label": top_event.get("pair_label", ""),
+                "top_event_source_timestep_index": safe_int(top_event.get("source_timestep_index")),
+                "top_event_target_timestep_index": safe_int(top_event.get("target_timestep_index")),
+                "track_count": len(tracks),
+                "max_lifetime": max(lengths) if lengths else 0,
+                "median_lifetime": quantile(lengths, 0.5) if lengths else 0,
+                "mean_lifetime": mean(lengths),
+            }
+        )
+    return rows
+
+
+def collect_domain_shape_disagreement_examples(data: dict, limit: int = 200) -> list[dict]:
+    shape_groups = shape_matches_by_pair(data)
+    overlap_groups = overlap_matches_by_pair(data)
+    examples = []
+    for pair in data.get("shape_pairs", []):
+        source_index = safe_int(pair.get("source_timestep_index"))
+        target_index = safe_int(pair.get("target_timestep_index"))
+        pair_key = (source_index, target_index)
+        shape_source_groups = shape_groups.get(pair_key, {})
+        overlap_source_groups = overlap_groups.get(pair_key, {})
+        for source_sheet_id, overlap_matches in overlap_source_groups.items():
+            shape_matches = shape_source_groups.get(source_sheet_id, [])
+            shape_best = best_shape_match(shape_matches, "combined")
+            overlap_best = best_overlap_match(overlap_matches, "overlap_max_percent")
+            if shape_best is None or overlap_best is None:
+                continue
+            shape_target = safe_int(shape_best.get("target_sheet_id"))
+            overlap_target = safe_int(overlap_best.get("target_sheet_id"))
+            if shape_target == overlap_target:
+                continue
+            shape_score = get_shape_metrics(shape_best)["combined"]
+            overlap_score = get_overlap_metrics(overlap_best)["overlap_max_percent"]
+            examples.append(
+                {
+                    "id": f"disagreement:{source_index}:{target_index}:{source_sheet_id}",
+                    "source_timestep_index": source_index,
+                    "target_timestep_index": target_index,
+                    "source_label": pair.get("source_label"),
+                    "target_label": pair.get("target_label"),
+                    "source_sheet_id": source_sheet_id,
+                    "shape_target_sheet_id": shape_target,
+                    "overlap_target_sheet_id": overlap_target,
+                    "shape_score": shape_score,
+                    "overlap_max_percent": overlap_score,
+                    "source_node": node_key(source_index, source_sheet_id),
+                    "shape_target_node": node_key(target_index, shape_target),
+                    "overlap_target_node": node_key(target_index, overlap_target),
+                    "shape_link": link_key(source_index, source_sheet_id, target_index, shape_target),
+                    "overlap_link": link_key(source_index, source_sheet_id, target_index, overlap_target),
+                    "highlight": {
+                        "nodes": sorted({node_key(source_index, source_sheet_id), node_key(target_index, shape_target), node_key(target_index, overlap_target)}),
+                        "links": sorted({link_key(source_index, source_sheet_id, target_index, shape_target), link_key(source_index, source_sheet_id, target_index, overlap_target)}),
+                    },
+                }
+            )
+    examples.sort(key=lambda item: (item["shape_score"], item["overlap_max_percent"]), reverse=True)
+    return examples[:limit]
+
+
+def build_viewer_analysis(
+    dataset: str,
+    base_dir: Path,
+    data: dict,
+    metric_rows: list[dict],
+    agreement_rows: list[dict],
+    event_rows: list[dict],
+    lifetime_rows: list[dict],
+    thresholds: tuple[float, ...],
+    preferred_threshold: float,
+    top_intervals: int,
+    top_features: int,
+) -> dict:
+    return {
+        "dataset": dataset,
+        "base_dir": str(base_dir),
+        "thresholds": list(thresholds),
+        "preferred_threshold": preferred_threshold,
+        "top_intervals": top_intervals,
+        "top_features": top_features,
+        "split_merge_weight": TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT,
+        "metric_summary": metric_rows,
+        "best_target_agreement": agreement_rows,
+        "sensitivity": collect_sensitivity_summary(event_rows, lifetime_rows, thresholds),
+        "intervals_by_threshold": collect_viewer_intervals(data, event_rows, thresholds, top_intervals),
+        "tracks_by_threshold": collect_viewer_tracks(lifetime_rows, thresholds, top_features),
+        "domain_shape_disagreements": collect_domain_shape_disagreement_examples(data),
+        "notes": {
+            "interval_score": "Higher event score means weaker or more ambiguous sheet continuation between adjacent timesteps.",
+            "track_score": "Continuing features are greedy best-combined-score tracks at the selected theta.",
+            "disagreement": "Domain-vs-range disagreements compare overlap_max_percent best targets against combined range-shape best targets.",
+        },
     }
 
 
@@ -907,6 +1207,7 @@ def analyze_dataset(
     thresholds: tuple[float, ...],
     preferred_threshold: float,
     top_intervals: int,
+    top_features: int,
 ) -> dict:
     dataset = base_dir.name
     data_file = viewer_data_file(base_dir)
@@ -928,6 +1229,19 @@ def analyze_dataset(
         event_rows,
         preferred_threshold,
         top_intervals,
+    )
+    viewer_analysis = build_viewer_analysis(
+        dataset,
+        base_dir,
+        data,
+        metric_rows,
+        agreement_rows,
+        event_rows,
+        lifetime_rows,
+        thresholds,
+        preferred_threshold,
+        top_intervals,
+        top_features,
     )
 
     write_csv(
@@ -1026,12 +1340,17 @@ def analyze_dataset(
             "mean_continuation_score",
             "min_continuation_score",
             "sheet_path",
+            "node_path",
+            "link_path",
         ],
     )
 
     (output_dir / "interesting_intervals.json").write_text(
         json.dumps(intervals, indent=2, allow_nan=False)
     )
+    viewer_analysis_path = viewer_analysis_file_for(base_dir)
+    viewer_analysis_path.parent.mkdir(parents=True, exist_ok=True)
+    viewer_analysis_path.write_text(json.dumps(viewer_analysis, indent=2, allow_nan=False))
 
     plot_warnings = plot_outputs(
         output_dir,
@@ -1048,6 +1367,8 @@ def analyze_dataset(
         "thresholds": list(thresholds),
         "preferred_threshold": preferred_threshold,
         "top_intervals": top_intervals,
+        "top_features": top_features,
+        "split_merge_weight": TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT,
         "num_timesteps": len(data.get("timesteps", [])),
         "num_shape_pairs": len(data.get("shape_pairs", [])),
         "num_overlap_pairs": len(data.get("overlap_pairs", [])),
@@ -1062,6 +1383,7 @@ def analyze_dataset(
             "event_scores": str(output_dir / "event_scores.csv"),
             "sheet_lifetimes": str(output_dir / "sheet_lifetimes.csv"),
             "interesting_intervals": str(output_dir / "interesting_intervals.json"),
+            "viewer_analysis": str(viewer_analysis_path),
             "plots": str(output_dir / "plots"),
         },
     }
@@ -1112,7 +1434,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--top-intervals",
         type=int,
         default=TRACKING_ANALYSIS_TOP_INTERVALS,
-        help="Number of highest-scoring intervals to store in interesting_intervals.json.",
+        help="Number of highest-scoring intervals to store in interesting_intervals.json and viewer_analysis.json.",
+    )
+    parser.add_argument(
+        "--top-features",
+        type=int,
+        default=TRACKING_ANALYSIS_TOP_FEATURES,
+        help="Number of longest continuing features to store in viewer_analysis.json.",
     )
     return parser.parse_args(argv)
 
@@ -1134,6 +1462,7 @@ def analyze_tracking_results_stage(argv: list[str] | None = None) -> int:
             thresholds=thresholds,
             preferred_threshold=args.preferred_threshold,
             top_intervals=max(1, args.top_intervals),
+            top_features=max(1, args.top_features),
         )
         metadata.append(result)
         print(f"Analysis output: {result['output_dir']}", flush=True)
