@@ -1431,6 +1431,19 @@ svg.summary-chart {
 .link.analysis-highlight {
   filter: drop-shadow(0 0 3px rgba(239, 68, 68, 0.9)) brightness(0.88) saturate(1.2);
 }
+.analysis-timestep-focus {
+  fill: rgba(245, 158, 11, 0.12);
+  stroke: rgba(217, 119, 6, 0.78);
+  stroke-width: 2px;
+  stroke-dasharray: 7 5;
+  pointer-events: none;
+  animation: analysisTimestepFocusFade 1800ms ease-out forwards;
+}
+@keyframes analysisTimestepFocusFade {
+  0% { opacity: 0.92; }
+  65% { opacity: 0.34; }
+  100% { opacity: 0; }
+}
 #tooltip,
 .tooltip {
   position: fixed;
@@ -1509,6 +1522,7 @@ d3.json("data.json").then(data => {
     activePanelId: 1,
     panelViews: new Map(),
     panelPan: null,
+    analysisFocusPulse: null,
     layoutControls: {
       orderingMode: "crossings",
       nodeSizeMode: "vertices",
@@ -3019,8 +3033,21 @@ d3.json("data.json").then(data => {
       ? selected.filter(entry => entry !== key)
       : [...selected, key];
     panel.analysis.highlight = aggregateSelectedIntervalHighlight(panel);
+    if (!alreadySelected) queueAnalysisFocusPulse(panel, payload);
     expandRangesForHighlight(panel.analysis.highlight);
     renderAll();
+  }
+
+  function queueAnalysisFocusPulse(panel, highlight) {
+    const start = Number(highlight?.start);
+    const end = Number(highlight?.end);
+    if (!panel || !Number.isFinite(start) || !Number.isFinite(end)) return;
+    state.analysisFocusPulse = {
+      panelId: panel.id,
+      start: Math.min(start, end),
+      end: Math.max(start, end),
+      key: `${panel.id}:${start}:${end}:${Date.now()}`
+    };
   }
 
   function expandRangesForHighlight(highlight) {
@@ -3046,6 +3073,7 @@ d3.json("data.json").then(data => {
   function setAnalysisHighlight(panel, highlight, focusRange = true) {
     ensurePanelAnalysis(panel);
     panel.analysis.selectedIntervalKeys = [];
+    state.analysisFocusPulse = null;
     panel.analysis.highlight = highlight;
     if (focusRange && highlight && Number.isFinite(Number(highlight.start)) && Number.isFinite(Number(highlight.end))) {
       const pad = 1;
@@ -3062,6 +3090,7 @@ d3.json("data.json").then(data => {
   function clearAnalysisHighlight(panel) {
     ensurePanelAnalysis(panel);
     panel.analysis.selectedIntervalKeys = [];
+    state.analysisFocusPulse = null;
     panel.analysis.highlight = null;
     renderAll();
   }
@@ -3097,6 +3126,7 @@ d3.json("data.json").then(data => {
     theta.on("change", event => {
       panel.analysis.theta = Number(event.target.value);
       panel.analysis.selectedIntervalKeys = [];
+      state.analysisFocusPulse = null;
       panel.analysis.highlight = null;
       renderAll();
     });
@@ -3203,6 +3233,7 @@ d3.json("data.json").then(data => {
             panel.analysis.theta = Number(row.threshold);
             panel.analysis.tab = "intervals";
             panel.analysis.selectedIntervalKeys = [];
+            state.analysisFocusPulse = null;
             panel.analysis.highlight = null;
             renderAll();
           });
@@ -4300,6 +4331,49 @@ d3.json("data.json").then(data => {
     );
   }
 
+  function timestepFocusBounds(layout, start, end) {
+    if (!layout?.visibleNodes?.length) return null;
+    const minTime = Math.min(Number(start), Number(end));
+    const maxTime = Math.max(Number(start), Number(end));
+    if (!Number.isFinite(minTime) || !Number.isFinite(maxTime)) return null;
+    const nodes = (layout.visibleNodes || []).filter(node => {
+      const timestep = Number(node.timestep_index);
+      return Number.isFinite(timestep) && timestep >= minTime && timestep <= maxTime;
+    });
+    if (!nodes.length) return null;
+    const allNodes = layout.visibleNodes || [];
+    const padX = 24;
+    const padY = 20;
+    const minX = (d3.min(nodes, d => Number(d.x0)) ?? 0) - padX;
+    const maxX = (d3.max(nodes, d => Number(d.x1)) ?? 0) + padX;
+    const minY = Math.max(0, (d3.min(allNodes, d => Number(d.y0)) ?? 0) - padY);
+    const maxY = (d3.max(allNodes, d => Number(d.y1)) ?? layout.height ?? 0) + padY;
+    if (![minX, maxX, minY, maxY].every(Number.isFinite)) return null;
+    return { minX, maxX, minY, maxY };
+  }
+
+  function drawQueuedAnalysisFocusPulse(panel, layout, root, layoutBounds) {
+    const pulse = state.analysisFocusPulse;
+    if (!pulse || pulse.panelId !== panel?.id) return;
+    const bounds = timestepFocusBounds(layout, pulse.start, pulse.end);
+    state.analysisFocusPulse = null;
+    if (!bounds) return;
+
+    const currentFocus = camera?.getViewFocus?.();
+    const fallbackY = ((layoutBounds?.minY ?? bounds.minY) + (layoutBounds?.maxY ?? bounds.maxY)) / 2;
+    camera?.setViewFocus({
+      x: (bounds.minX + bounds.maxX) / 2,
+      y: currentFocus?.y ?? fallbackY
+    });
+
+    root.append("rect")
+      .attr("class", "analysis-timestep-focus")
+      .attr("x", bounds.minX)
+      .attr("y", bounds.minY)
+      .attr("width", Math.max(1, bounds.maxX - bounds.minX))
+      .attr("height", Math.max(1, bounds.maxY - bounds.minY));
+  }
+
   function assignLinkOffsets(links) {
     const outgoing = new Map();
     const incoming = new Map();
@@ -4692,6 +4766,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       .sort((a, b) => a.index - b.index);
 
     if (!layout.visibleNodes.length) {
+      if (state.analysisFocusPulse?.panelId === panel.id) state.analysisFocusPulse = null;
       canvas.append("div").attr("class", "panel-empty").text("No timesteps in the selected range.");
       bindPanelResizeHandle(panel, canvas, null, null);
       return;
@@ -4750,6 +4825,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
 
     const activeLinkHighlights = highlightedLinkSet(panel);
     const activeNodeHighlights = highlightedNodeSet(panel);
+    drawQueuedAnalysisFocusPulse(panel, layout, root, layoutBounds);
 
     const linkSelection = root.append("g")
       .selectAll("path")
