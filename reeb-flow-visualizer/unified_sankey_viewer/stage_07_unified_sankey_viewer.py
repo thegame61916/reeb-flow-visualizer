@@ -20,8 +20,14 @@ from common import (
     OVERLAP_FILE,
     SHEET_IMAGE_DIR,
     SHAPE_SCORE_DEFAULT_WEIGHTS,
+    TRACKING_ANALYSIS_EVENT_SCORE_TERMS,
+    TRACKING_ANALYSIS_PREFERRED_THRESHOLD,
+    TRACKING_ANALYSIS_THRESHOLDS,
+    TRACKING_ANALYSIS_TOP_FEATURES,
+    TRACKING_ANALYSIS_TOP_INTERVALS,
     TRACKING_ANALYSIS_VIEWER_FILE,
     TRACKING_DATA_FILE,
+    tracking_analysis_event_score_formula_text,
     VIEWER_DEFAULT_TOP_SHEETS,
 )
 from unified_sankey_viewer.viewer_common import (
@@ -521,6 +527,12 @@ def prepare_data(viewer_dir: Path) -> dict:
             "shape_score_default_weights": SHAPE_SCORE_DEFAULT_WEIGHTS,
             "hybrid_score_default_weights": HYBRID_SCORE_DEFAULT_WEIGHTS,
             "hybrid_vertex_metric_default": HYBRID_VERTEX_METRIC_DEFAULT,
+            "tracking_analysis_thresholds": list(TRACKING_ANALYSIS_THRESHOLDS),
+            "tracking_analysis_preferred_threshold": TRACKING_ANALYSIS_PREFERRED_THRESHOLD,
+            "tracking_analysis_top_intervals": TRACKING_ANALYSIS_TOP_INTERVALS,
+            "tracking_analysis_top_features": TRACKING_ANALYSIS_TOP_FEATURES,
+            "tracking_analysis_event_score_terms": list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS),
+            "tracking_analysis_event_score_formula": tracking_analysis_event_score_formula_text(),
             "global_area_max": max_area,
             "global_vertex_max": max_vertices,
             "centroid_color_bounds": list(centroid_color_bounds),
@@ -560,10 +572,21 @@ def write_viewer_data_json(data: dict) -> Path:
     return write_json_file(data, UNIFIED_VIEWER_DIR / "data.json")
 
 
+def apply_current_tracking_analysis_meta(data: dict) -> dict:
+    meta = data.setdefault("meta", {})
+    meta["tracking_analysis_thresholds"] = list(TRACKING_ANALYSIS_THRESHOLDS)
+    meta["tracking_analysis_preferred_threshold"] = TRACKING_ANALYSIS_PREFERRED_THRESHOLD
+    meta["tracking_analysis_top_intervals"] = TRACKING_ANALYSIS_TOP_INTERVALS
+    meta["tracking_analysis_top_features"] = TRACKING_ANALYSIS_TOP_FEATURES
+    meta["tracking_analysis_event_score_terms"] = list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS)
+    meta["tracking_analysis_event_score_formula"] = tracking_analysis_event_score_formula_text()
+    return data
+
+
 def load_tracking_data() -> dict:
     if TRACKING_DATA_FILE.exists():
-        return json.loads(TRACKING_DATA_FILE.read_text())
-    return prepare_data(UNIFIED_VIEWER_DIR)
+        return apply_current_tracking_analysis_meta(json.loads(TRACKING_DATA_FILE.read_text()))
+    return apply_current_tracking_analysis_meta(prepare_data(UNIFIED_VIEWER_DIR))
 
 
 def load_analysis_for_viewer() -> dict | None:
@@ -579,7 +602,7 @@ def build_unified_sankey_data_stage() -> None:
     if not MATCHES_FILE.exists():
         raise FileNotFoundError(f"Expected match results at {MATCHES_FILE}")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    data = prepare_data(UNIFIED_VIEWER_DIR)
+    data = apply_current_tracking_analysis_meta(prepare_data(UNIFIED_VIEWER_DIR))
     data_path = write_tracking_data_json(data)
     print(f"Wrote tracking data: {data_path}")
 
@@ -1300,6 +1323,65 @@ svg.summary-chart {
   border-color: #1f6feb;
   color: #fff;
 }
+.analysis-graph {
+  border: 1px solid #d9e2ec;
+  border-radius: 5px;
+  background: #fff;
+  padding: 6px 8px 4px;
+  margin: 7px 0 8px;
+}
+.analysis-graph svg {
+  cursor: grab;
+  display: block;
+  width: 100%;
+  height: 240px;
+  touch-action: none;
+}
+.analysis-graph.dragging svg {
+  cursor: grabbing;
+}
+.analysis-graph-axis path,
+.analysis-graph-axis line {
+  stroke: #cbd5e1;
+}
+.analysis-graph-axis text {
+  fill: #536273;
+  font-size: 11px;
+}
+.analysis-graph-label {
+  fill: #536273;
+  font-size: 11px;
+  font-weight: 600;
+}
+.analysis-graph-grid line {
+  stroke: #edf2f7;
+}
+.analysis-graph-line {
+  fill: none;
+  stroke: #1f6feb;
+  stroke-width: 1.6px;
+}
+.analysis-graph-zoom {
+  fill: transparent;
+  pointer-events: all;
+}
+.analysis-graph-dot {
+  fill: #1f6feb;
+  stroke: #fff;
+  stroke-width: 1.4px;
+}
+.analysis-graph-dot.active {
+  fill: #ef4444;
+  stroke: #991b1b;
+  stroke-width: 1.8px;
+}
+.analysis-graph-hit {
+  fill: transparent;
+  cursor: pointer;
+}
+.analysis-graph-resizer {
+  margin: 4px 0 8px;
+}
 .analysis-list {
   display: grid;
   gap: 6px;
@@ -1455,10 +1537,41 @@ d3.json("data.json").then(data => {
     labelField: "label"
   });
   const timestepByIndex = timestepLookup.byIndex;
-  const analysisData = data.analysis || null;
+  const embeddedAnalysisData = data.analysis || null;
+  const metaAnalysisThresholds = Array.isArray(data.meta?.tracking_analysis_thresholds) && data.meta.tracking_analysis_thresholds.length
+    ? data.meta.tracking_analysis_thresholds.map(Number).filter(Number.isFinite)
+    : [0.3, 0.4, 0.5, 0.6, 0.7];
+  const metaEventScoreTerms = Array.isArray(data.meta?.tracking_analysis_event_score_terms) && data.meta.tracking_analysis_event_score_terms.length
+    ? data.meta.tracking_analysis_event_score_terms
+    : [
+        { component: "source_weak_count", weight: 1 },
+        { component: "target_weak_count", weight: 1 },
+        { component: "possible_splits", weight: 0.5 },
+        { component: "possible_merges", weight: 0.5 },
+        { component: "continuation_gap_source_count", weight: 1 },
+      ];
+  const analysisData = embeddedAnalysisData
+    ? {
+        ...embeddedAnalysisData,
+        event_score_terms: embeddedAnalysisData.event_score_terms || metaEventScoreTerms,
+        event_score_formula: embeddedAnalysisData.event_score_formula || data.meta?.tracking_analysis_event_score_formula || "",
+      }
+    : {
+        thresholds: metaAnalysisThresholds,
+        preferred_threshold: Number(data.meta?.tracking_analysis_preferred_threshold) || 0.5,
+        top_intervals: Number(data.meta?.tracking_analysis_top_intervals) || 12,
+        top_features: Number(data.meta?.tracking_analysis_top_features) || 12,
+        split_merge_weight: 0.5,
+        event_score_terms: metaEventScoreTerms,
+        event_score_formula: data.meta?.tracking_analysis_event_score_formula || "",
+        sensitivity: [],
+        best_target_agreement: [],
+        domain_shape_disagreements: [],
+      };
+  const hasEmbeddedAnalysisData = Boolean(embeddedAnalysisData);
   const analysisThresholds = Array.isArray(analysisData?.thresholds) && analysisData.thresholds.length
     ? analysisData.thresholds.map(Number).filter(Number.isFinite)
-    : [];
+    : [0.5];
   const dataModes = data.meta.data_modes || [];
   const modeById = new Map(dataModes.map(mode => [mode.id, mode]));
   const metricMaxima = data.meta.metric_maxima || {};
@@ -1503,14 +1616,26 @@ d3.json("data.json").then(data => {
   const PAN_DRAG_THRESHOLD = 4;
   const PANEL_HEIGHT_MIN = 360;
   const PANEL_HEIGHT_MAX = 1400;
+  const INTERVAL_GRAPH_HEIGHT_DEFAULT = 240;
+  const INTERVAL_GRAPH_HEIGHT_MIN = 160;
+  const INTERVAL_GRAPH_HEIGHT_MAX = 680;
   const IMAGE_ZOOM_MIN = 0.03;
   const IMAGE_ZOOM_MAX = 20;
+  const TIMESTEP_LABEL_OPTIONS = { divisor: 41.341374575751, digits: 2 };
 
   const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 });
+  const shapePairLookup = new Map();
+  const overlapPairLookup = new Map();
+  const analysisRuntimeCache = new Map();
   const shapeMatchLookup = new Map();
   const shapeOutgoingByNode = new Map();
   const shapeIncomingByNode = new Map();
+  for (const pair of (Array.isArray(data.overlap_pairs) ? data.overlap_pairs : [])) {
+    overlapPairLookup.set(`${pair.source_timestep_index}:${pair.target_timestep_index}`, pair);
+  }
+
   for (const pair of (Array.isArray(data.shape_pairs) ? data.shape_pairs : [])) {
+    shapePairLookup.set(`${pair.source_timestep_index}:${pair.target_timestep_index}`, pair);
     for (const match of (pair.matches || [])) {
       const key = `${pair.source_timestep_index}:${match.source_sheet_id}->${pair.target_timestep_index}:${match.target_sheet_id}`;
       const enriched = {
@@ -1770,6 +1895,12 @@ d3.json("data.json").then(data => {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return PANEL_HEIGHT_DEFAULT;
     return Math.round(clamp(numeric, PANEL_HEIGHT_MIN, PANEL_HEIGHT_MAX));
+  }
+
+  function clampIntervalGraphHeight(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return INTERVAL_GRAPH_HEIGHT_DEFAULT;
+    return Math.round(clamp(numeric, INTERVAL_GRAPH_HEIGHT_MIN, INTERVAL_GRAPH_HEIGHT_MAX));
   }
 
   function formatScore(value) {
@@ -2129,6 +2260,10 @@ d3.json("data.json").then(data => {
         theta: defaultAnalysisTheta(),
         topIntervals: Math.min(5, Math.max(1, Number(analysisData?.top_intervals) || 5)),
         topFeatures: Math.min(5, Math.max(1, Number(analysisData?.top_features) || 5)),
+        intervalGraphHeight: INTERVAL_GRAPH_HEIGHT_DEFAULT,
+        intervalGraphZoomScale: 1,
+        intervalGraphFocus: null,
+        intervalGraphKey: "",
         highlight: null,
       };
     }
@@ -2137,16 +2272,677 @@ d3.json("data.json").then(data => {
     }
     panel.analysis.topIntervals = Math.max(1, Math.floor(Number(panel.analysis.topIntervals) || 1));
     panel.analysis.topFeatures = Math.max(1, Math.floor(Number(panel.analysis.topFeatures) || 1));
+    panel.analysis.intervalGraphHeight = clampIntervalGraphHeight(panel.analysis.intervalGraphHeight);
+    panel.analysis.intervalGraphZoomScale = Number.isFinite(Number(panel.analysis.intervalGraphZoomScale))
+      ? Number(panel.analysis.intervalGraphZoomScale)
+      : 1;
+  }
+
+  function analysisEventScoreTerms() {
+    const terms = Array.isArray(analysisData?.event_score_terms) ? analysisData.event_score_terms : [];
+    return terms
+      .map(term => ({
+        component: String(term?.component || ""),
+        weight: Number(term?.weight),
+      }))
+      .filter(term => term.component && Number.isFinite(term.weight));
+  }
+
+  function analysisEventScore(components) {
+    return analysisEventScoreTerms().reduce((score, term) => {
+      const value = Number(components?.[term.component]) || 0;
+      return score + term.weight * value;
+    }, 0);
+  }
+
+  function analysisCacheKey(kind, panel) {
+    ensurePanelAnalysis(panel);
+    return `${kind}:${thresholdKey(panel.analysis.theta)}`;
+  }
+
+  function meanNumber(values) {
+    const cleaned = (values || []).map(Number).filter(Number.isFinite);
+    return cleaned.length ? cleaned.reduce((sum, value) => sum + value, 0) / cleaned.length : 0;
+  }
+
+  function sheetKey(timestepIndex, sheetId) {
+    return `${Number(timestepIndex)}:${Number(sheetId)}`;
+  }
+
+  function linkKeyParts(sourceIndex, sourceSheetId, targetIndex, targetSheetId) {
+    return `${Number(sourceIndex)}:${Number(sourceSheetId)}->${Number(targetIndex)}:${Number(targetSheetId)}`;
+  }
+
+  function groupMatchesByField(matches, field) {
+    const groups = new Map();
+    for (const match of matches || []) {
+      const key = Number(match?.[field]);
+      if (!Number.isFinite(key)) continue;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(match);
+    }
+    return groups;
+  }
+
+  function analysisCombinedScore(match) {
+    const metrics = match?.metrics || match || {};
+    const value = Number(metrics.combined ?? metrics.final_score);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function bestAnalysisMatch(matches) {
+    let best = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (const match of matches || []) {
+      const score = analysisCombinedScore(match);
+      if (score > bestScore) {
+        best = match;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
+  function overlapMaxPercent(match) {
+    const metrics = match?.metrics || {};
+    const sourcePercent = Number(metrics.overlap_source_percent ?? match?.source_percent ?? 0) || 0;
+    const targetPercent = Number(metrics.overlap_target_percent ?? match?.target_percent ?? 0) || 0;
+    const value = Number(metrics.overlap_max_percent ?? Math.max(sourcePercent, targetPercent));
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function bestOverlapMatch(matches) {
+    let best = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (const match of matches || []) {
+      const score = overlapMaxPercent(match);
+      if (score > bestScore) {
+        best = match;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
+  function pairDomainShapeAgreementFraction(sourceIndex, targetIndex) {
+    const shapePair = shapePairLookup.get(`${sourceIndex}:${targetIndex}`);
+    const overlapPair = overlapPairLookup.get(`${sourceIndex}:${targetIndex}`);
+    if (!shapePair || !overlapPair) return 0;
+
+    const shapeBySource = groupMatchesByField(shapePair.matches || [], "source_sheet_id");
+    const overlapBySource = groupMatchesByField(overlapPair.matches || [], "source_sheet_id");
+    let compared = 0;
+    let agreements = 0;
+    for (const [sourceSheetId, overlapMatches] of overlapBySource.entries()) {
+      const shapeBest = bestAnalysisMatch(shapeBySource.get(sourceSheetId) || []);
+      const overlapBest = bestOverlapMatch(overlapMatches || []);
+      if (!shapeBest || !overlapBest) continue;
+      compared += 1;
+      if (Number(shapeBest.target_sheet_id) === Number(overlapBest.target_sheet_id)) agreements += 1;
+    }
+    return compared ? agreements / compared : 0;
+  }
+
+  function computeRuntimeIntervals(panel) {
+    ensurePanelAnalysis(panel);
+    const theta = Number(panel.analysis.theta);
+    const cacheKey = analysisCacheKey("intervals", panel);
+    if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
+
+    const rows = [];
+    for (const pair of (Array.isArray(data.shape_pairs) ? data.shape_pairs : [])) {
+      const sourceIndex = Number(pair.source_timestep_index);
+      const targetIndex = Number(pair.target_timestep_index);
+      if (!Number.isFinite(sourceIndex) || !Number.isFinite(targetIndex)) continue;
+
+      const sourceSheets = timestepByIndex.get(sourceIndex)?.sheets || [];
+      const targetSheets = timestepByIndex.get(targetIndex)?.sheets || [];
+      const bySource = groupMatchesByField(pair.matches || [], "source_sheet_id");
+      const byTarget = groupMatchesByField(pair.matches || [], "target_sheet_id");
+      const bestSourceCombined = [];
+      const bestTargetCombined = [];
+
+      for (const sheet of sourceSheets) {
+        const best = bestAnalysisMatch(bySource.get(Number(sheet.sheet_id)) || []);
+        bestSourceCombined.push(best ? analysisCombinedScore(best) : 0);
+      }
+
+      for (const sheet of targetSheets) {
+        const best = bestAnalysisMatch(byTarget.get(Number(sheet.sheet_id)) || []);
+        bestTargetCombined.push(best ? analysisCombinedScore(best) : 0);
+      }
+
+      const sourceWeakCount = bestSourceCombined.filter(value => value < theta).length;
+      const targetWeakCount = bestTargetCombined.filter(value => value < theta).length;
+      let possibleSplits = 0;
+      for (const matches of bySource.values()) {
+        if ((matches || []).filter(match => analysisCombinedScore(match) >= theta).length >= 2) possibleSplits += 1;
+      }
+      let possibleMerges = 0;
+      for (const matches of byTarget.values()) {
+        if ((matches || []).filter(match => analysisCombinedScore(match) >= theta).length >= 2) possibleMerges += 1;
+      }
+
+      const meanBestCombined = meanNumber(bestSourceCombined);
+      const minBestCombined = bestSourceCombined.length ? Math.min(...bestSourceCombined) : 0;
+      const sourceSheetCount = sourceSheets.length;
+      const eventScoreComponents = {
+        source_weak_count: sourceWeakCount,
+        target_weak_count: targetWeakCount,
+        possible_splits: possibleSplits,
+        possible_merges: possibleMerges,
+        continuation_gap_source_count: (1 - meanBestCombined) * Math.max(sourceSheetCount, 1),
+      };
+      const eventScore = analysisEventScore(eventScoreComponents);
+
+      rows.push({
+        id: `interval_runtime:${thresholdKey(theta)}:${sourceIndex}:${targetIndex}`,
+        threshold: theta,
+        source_timestep_index: sourceIndex,
+        target_timestep_index: targetIndex,
+        source_label: pair.source_label,
+        target_label: pair.target_label,
+        source_stem: pair.source_stem || "",
+        target_stem: pair.target_stem || "",
+        pair_label: `${pair.source_label || sourceIndex}->${pair.target_label || targetIndex}`,
+        source_sheet_count: sourceSheetCount,
+        target_sheet_count: targetSheets.length,
+        candidate_match_count: Number(pair.pair_count ?? (pair.matches || []).length) || 0,
+        mean_best_combined: meanBestCombined,
+        min_best_combined: minBestCombined,
+        source_weak_count: sourceWeakCount,
+        target_weak_count: targetWeakCount,
+        possible_splits: possibleSplits,
+        possible_merges: possibleMerges,
+        event_score: eventScore,
+        domain_shape_agreement_fraction: pairDomainShapeAgreementFraction(sourceIndex, targetIndex),
+      });
+    }
+
+    rows.sort((a, b) => Number(a.source_timestep_index) - Number(b.source_timestep_index) || Number(a.target_timestep_index) - Number(b.target_timestep_index));
+    const result = {
+      series: rows,
+      ranked: rows.slice().sort((a, b) => Number(b.event_score) - Number(a.event_score) || Number(a.source_timestep_index) - Number(b.source_timestep_index)),
+    };
+    analysisRuntimeCache.set(cacheKey, result);
+    return result;
   }
 
   function analysisIntervals(panel) {
+    return computeRuntimeIntervals(panel).ranked;
+  }
+
+  function computeRuntimeTracks(panel) {
     ensurePanelAnalysis(panel);
-    return analysisData?.intervals_by_threshold?.[thresholdKey(panel.analysis.theta)] || [];
+    const theta = Number(panel.analysis.theta);
+    const cacheKey = analysisCacheKey("tracks", panel);
+    if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
+
+    const nodeMeta = new Map();
+    for (const timestep of (data.timesteps || [])) {
+      const timestepIndex = Number(timestep.timestep_index);
+      for (const sheet of (timestep.sheets || [])) {
+        nodeMeta.set(sheetKey(timestepIndex, sheet.sheet_id), { timestep, sheet });
+      }
+    }
+
+    const edges = new Map();
+    for (const pair of (Array.isArray(data.shape_pairs) ? data.shape_pairs : [])) {
+      const sourceIndex = Number(pair.source_timestep_index);
+      const targetIndex = Number(pair.target_timestep_index);
+      const bySource = groupMatchesByField(pair.matches || [], "source_sheet_id");
+      for (const [sourceSheetId, matches] of bySource.entries()) {
+        const best = bestAnalysisMatch(matches || []);
+        if (!best) continue;
+        const score = analysisCombinedScore(best);
+        if (score < theta) continue;
+        const targetSheetId = Number(best.target_sheet_id);
+        edges.set(sheetKey(sourceIndex, sourceSheetId), {
+          targetKey: sheetKey(targetIndex, targetSheetId),
+          sourceIndex,
+          sourceSheetId,
+          targetIndex,
+          targetSheetId,
+          score,
+        });
+      }
+    }
+
+    const incoming = new Map();
+    for (const [sourceKey, edge] of edges.entries()) {
+      if (!incoming.has(edge.targetKey)) incoming.set(edge.targetKey, []);
+      incoming.get(edge.targetKey).push(sourceKey);
+    }
+
+    const starts = [...nodeMeta.keys()].filter(key => !(incoming.get(key) || []).length).sort((a, b) => {
+      const [ta, sa] = a.split(":").map(Number);
+      const [tb, sb] = b.split(":").map(Number);
+      return ta - tb || sa - sb;
+    });
+
+    const rows = [];
+    const usedStarts = new Set();
+    let trackId = 0;
+    for (const start of starts) {
+      if (usedStarts.has(start)) continue;
+      trackId += 1;
+      let current = start;
+      const seen = new Set();
+      const nodes = [];
+      const scores = [];
+      const links = [];
+
+      while (nodeMeta.has(current) && !seen.has(current)) {
+        seen.add(current);
+        nodes.push(current);
+        const edge = edges.get(current);
+        if (!edge) break;
+        links.push(linkKeyParts(edge.sourceIndex, edge.sourceSheetId, edge.targetIndex, edge.targetSheetId));
+        scores.push(edge.score);
+        current = edge.targetKey;
+      }
+      usedStarts.add(start);
+
+      const sheets = nodes.map(key => nodeMeta.get(key)?.sheet).filter(Boolean);
+      const ranks = sheets.map(sheet => Number(sheet.rank) || 0);
+      const areas = sheets.map(sheet => Number(sheet.area) || 0);
+      const firstNode = nodes[0]?.split(":").map(Number) || [0, 0];
+      const lastNode = nodes[nodes.length - 1]?.split(":").map(Number) || firstNode;
+      const firstTs = timestepByIndex.get(firstNode[0]);
+      const lastTs = timestepByIndex.get(lastNode[0]);
+
+      rows.push({
+        id: `track_runtime:${thresholdKey(theta)}:${trackId}`,
+        threshold: theta,
+        track_id: trackId,
+        length: nodes.length,
+        start_timestep_index: firstNode[0],
+        end_timestep_index: lastNode[0],
+        start_label: firstTs?.label || String(firstNode[0]),
+        end_label: lastTs?.label || String(lastNode[0]),
+        start_sheet_id: firstNode[1],
+        end_sheet_id: lastNode[1],
+        rank_min: ranks.length ? Math.min(...ranks) : 0,
+        rank_max: ranks.length ? Math.max(...ranks) : 0,
+        area_mean: meanNumber(areas),
+        mean_continuation_score: meanNumber(scores),
+        min_continuation_score: scores.length ? Math.min(...scores) : 0,
+        highlight: { nodes, links },
+      });
+    }
+
+    rows.sort((a, b) =>
+      Number(b.length) - Number(a.length) ||
+      Number(b.mean_continuation_score) - Number(a.mean_continuation_score) ||
+      Number(b.min_continuation_score) - Number(a.min_continuation_score)
+    );
+    analysisRuntimeCache.set(cacheKey, rows);
+    return rows;
   }
 
   function analysisTracks(panel) {
+    return computeRuntimeTracks(panel);
+  }
+
+  function intervalKeyFromItem(item) {
+    return `${Number(item?.source_timestep_index)}:${Number(item?.target_timestep_index)}`;
+  }
+
+  function intervalHighlightFromData(item, panel) {
+    const sourceIndex = Number(item?.source_timestep_index);
+    const targetIndex = Number(item?.target_timestep_index);
+    const threshold = Number(item?.threshold ?? panel?.analysis?.theta ?? defaultAnalysisTheta());
+    const pair = shapePairLookup.get(`${sourceIndex}:${targetIndex}`);
+    const highlightNodes = new Set();
+    const highlightLinks = new Set();
+    const weakSourceNodes = [];
+    const weakTargetNodes = [];
+    const splitSourceNodes = [];
+    const mergeTargetNodes = [];
+
+    if (!pair) {
+      return {
+        nodes: [],
+        links: [],
+        weak_source_nodes: [],
+        weak_target_nodes: [],
+        split_source_nodes: [],
+        merge_target_nodes: [],
+      };
+    }
+
+    const bySource = groupMatchesByField(pair.matches || [], "source_sheet_id");
+    const byTarget = groupMatchesByField(pair.matches || [], "target_sheet_id");
+    const sourceSheets = timestepByIndex.get(sourceIndex)?.sheets || [];
+    const targetSheets = timestepByIndex.get(targetIndex)?.sheets || [];
+
+    for (const sheet of sourceSheets) {
+      const sourceSheetId = Number(sheet.sheet_id);
+      const best = bestAnalysisMatch(bySource.get(sourceSheetId) || []);
+      const bestScore = best ? analysisCombinedScore(best) : 0;
+      if (bestScore < threshold) {
+        const sourceKey = sheetKey(sourceIndex, sourceSheetId);
+        weakSourceNodes.push(sourceKey);
+        highlightNodes.add(sourceKey);
+        if (best) {
+          const targetSheetId = Number(best.target_sheet_id);
+          highlightNodes.add(sheetKey(targetIndex, targetSheetId));
+          highlightLinks.add(linkKeyParts(sourceIndex, sourceSheetId, targetIndex, targetSheetId));
+        }
+      }
+    }
+
+    for (const sheet of targetSheets) {
+      const targetSheetId = Number(sheet.sheet_id);
+      const best = bestAnalysisMatch(byTarget.get(targetSheetId) || []);
+      const bestScore = best ? analysisCombinedScore(best) : 0;
+      if (bestScore < threshold) {
+        const targetKey = sheetKey(targetIndex, targetSheetId);
+        weakTargetNodes.push(targetKey);
+        highlightNodes.add(targetKey);
+        if (best) {
+          const sourceSheetId = Number(best.source_sheet_id);
+          highlightNodes.add(sheetKey(sourceIndex, sourceSheetId));
+          highlightLinks.add(linkKeyParts(sourceIndex, sourceSheetId, targetIndex, targetSheetId));
+        }
+      }
+    }
+
+    for (const [sourceSheetId, matches] of bySource.entries()) {
+      const above = (matches || []).filter(match => analysisCombinedScore(match) >= threshold);
+      if (above.length >= 2) {
+        const sourceKey = sheetKey(sourceIndex, sourceSheetId);
+        splitSourceNodes.push(sourceKey);
+        highlightNodes.add(sourceKey);
+        for (const match of above) {
+          const targetSheetId = Number(match.target_sheet_id);
+          highlightNodes.add(sheetKey(targetIndex, targetSheetId));
+          highlightLinks.add(linkKeyParts(sourceIndex, sourceSheetId, targetIndex, targetSheetId));
+        }
+      }
+    }
+
+    for (const [targetSheetId, matches] of byTarget.entries()) {
+      const above = (matches || []).filter(match => analysisCombinedScore(match) >= threshold);
+      if (above.length >= 2) {
+        const targetKey = sheetKey(targetIndex, targetSheetId);
+        mergeTargetNodes.push(targetKey);
+        highlightNodes.add(targetKey);
+        for (const match of above) {
+          const sourceSheetId = Number(match.source_sheet_id);
+          highlightNodes.add(sheetKey(sourceIndex, sourceSheetId));
+          highlightLinks.add(linkKeyParts(sourceIndex, sourceSheetId, targetIndex, targetSheetId));
+        }
+      }
+    }
+
+    return {
+      nodes: [...highlightNodes].sort(),
+      links: [...highlightLinks].sort(),
+      weak_source_nodes: weakSourceNodes,
+      weak_target_nodes: weakTargetNodes,
+      split_source_nodes: splitSourceNodes,
+      merge_target_nodes: mergeTargetNodes,
+    };
+  }
+
+  function intervalHighlightPayload(item, panel) {
+    const sourceIndex = Number(item?.source_timestep_index);
+    const targetIndex = Number(item?.target_timestep_index);
+    const highlight = item?.highlight || intervalHighlightFromData(item, panel);
+    return {
+      id: item?.id || `interval:${intervalKeyFromItem(item)}`,
+      intervalKey: intervalKeyFromItem(item),
+      label: `Interval ${item?.source_label || sourceIndex} -> ${item?.target_label || targetIndex}`,
+      nodes: highlight.nodes || [],
+      links: highlight.links || [],
+      start: sourceIndex,
+      end: targetIndex,
+    };
+  }
+
+  function intervalTimestepLabel(item, role = "source") {
+    const index = Number(role === "target" ? item?.target_timestep_index : item?.source_timestep_index);
+    const direct = role === "target" ? item?.target_label : item?.source_label;
+    const fallback = Number.isFinite(index) ? String(index) : "";
+    return String(direct ?? timestepLookup.labelAt(index, fallback) ?? fallback);
+  }
+
+  function intervalTimestepPrimary(item, role = "source") {
+    const index = Number(role === "target" ? item?.target_timestep_index : item?.source_timestep_index);
+    return window.ReebViewerCommon.formatTimestepPrimary(index, intervalTimestepLabel(item, role));
+  }
+
+  function intervalTimeFs(item) {
+    const fsRaw = window.ReebViewerCommon.formatFsFromLabel(intervalTimestepLabel(item, "source"), TIMESTEP_LABEL_OPTIONS);
+    const fs = Number(fsRaw);
+    if (Number.isFinite(fs)) return fs;
+    return Number(item?.source_timestep_index) || 0;
+  }
+
+  function formatIntervalFs(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? `${numeric.toFixed(TIMESTEP_LABEL_OPTIONS.digits)} fs` : "";
+  }
+
+  function intervalGraphTooltip(item, panel) {
+    const theta = panelTheta(panel);
+    return `
+      <strong>${escapeHtml(intervalTimestepPrimary(item, "source"))} -> ${escapeHtml(intervalTimestepPrimary(item, "target"))}</strong>
+      <div class="tooltip-grid" style="margin-top:8px;">
+        <div>Time</div><div>${escapeHtml(formatIntervalFs(intervalTimeFs(item)))}</div>
+        <div>Event score</div><div>${escapeHtml(formatScore(item.event_score))}</div>
+        <div>Theta</div><div>${escapeHtml(formatScore(theta))}</div>
+        <div>Weak continuation source/target</div><div>${escapeHtml(item.source_weak_count)}/${escapeHtml(item.target_weak_count)}</div>
+        <div>Splits / merges</div><div>${escapeHtml(item.possible_splits)} / ${escapeHtml(item.possible_merges)}</div>
+        <div>Mean continuation</div><div>${escapeHtml(formatScore(item.mean_best_combined))}</div>
+        <div>Min continuation</div><div>${escapeHtml(formatScore(item.min_best_combined))}</div>
+        <div>Domain/range agreement</div><div>${escapeHtml(formatScore(100 * Number(item.domain_shape_agreement_fraction || 0)))}%</div>
+      </div>`;
+  }
+
+  function renderIntervalScoreGraph(container, panel, rows) {
     ensurePanelAnalysis(panel);
-    return analysisData?.tracks_by_threshold?.[thresholdKey(panel.analysis.theta)] || [];
+    const valid = (rows || [])
+      .filter(item => Number.isFinite(intervalTimeFs(item)) && Number.isFinite(Number(item.event_score)))
+      .slice()
+      .sort((a, b) => intervalTimeFs(a) - intervalTimeFs(b));
+    if (!valid.length) return;
+
+    const width = 760;
+    const height = clampIntervalGraphHeight(panel.analysis.intervalGraphHeight);
+    panel.analysis.intervalGraphHeight = height;
+    const margin = { top: 12, right: 18, bottom: 46, left: 46 };
+    const innerWidth = width - margin.left - margin.right;
+    const innerHeight = Math.max(1, height - margin.top - margin.bottom);
+    const xValue = item => intervalTimeFs(item);
+    const yValue = item => Number(item.event_score);
+    let xDomain = d3.extent(valid, xValue);
+    if (xDomain[0] === xDomain[1]) xDomain = [xDomain[0] - 1, xDomain[1] + 1];
+    const yMax = d3.max(valid, yValue) || 1;
+    const yDomain = [0, yMax * 1.05 || 1];
+    const xBase = d3.scaleLinear().domain(xDomain).range([0, innerWidth]);
+    const yBase = d3.scaleLinear().domain(yDomain).range([innerHeight, 0]).nice();
+    const activeIntervalKey = panel?.analysis?.highlight?.intervalKey || null;
+    const clipId = `analysis-graph-clip-${String(panel.id).replace(/[^a-zA-Z0-9_-]/g, "")}`;
+    const graphKey = `${thresholdKey(panel.analysis.theta)}:${valid.map(intervalKeyFromItem).join("|")}`;
+    if (panel.analysis.intervalGraphKey !== graphKey) {
+      panel.analysis.intervalGraphKey = graphKey;
+      panel.analysis.intervalGraphZoomScale = 1;
+      panel.analysis.intervalGraphFocus = null;
+    }
+
+    const centerFocus = { x: innerWidth / 2, y: innerHeight / 2 };
+    const initialFocus = panel.analysis.intervalGraphFocus &&
+      Number.isFinite(Number(panel.analysis.intervalGraphFocus.x)) &&
+      Number.isFinite(Number(panel.analysis.intervalGraphFocus.y))
+        ? { x: Number(panel.analysis.intervalGraphFocus.x), y: Number(panel.analysis.intervalGraphFocus.y) }
+        : centerFocus;
+    const initialZoom = Number.isFinite(Number(panel.analysis.intervalGraphZoomScale))
+      ? Number(panel.analysis.intervalGraphZoomScale)
+      : 1;
+
+    const graph = container.append("div").attr("class", "analysis-graph");
+    const svg = graph.append("svg")
+      .attr("viewBox", `0 0 ${width} ${height}`)
+      .style("height", `${height}px`);
+    svg.append("defs")
+      .append("clipPath")
+      .attr("id", clipId)
+      .append("rect")
+      .attr("width", innerWidth)
+      .attr("height", innerHeight);
+    const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+    const grid = g.append("g").attr("class", "analysis-graph-grid");
+    const xAxis = g.append("g")
+      .attr("class", "analysis-graph-axis")
+      .attr("transform", `translate(0,${innerHeight})`);
+    const yAxis = g.append("g").attr("class", "analysis-graph-axis");
+    const marks = g.append("g").attr("clip-path", `url(#${clipId})`);
+    const linePath = marks.append("path").attr("class", "analysis-graph-line");
+    const dotLayer = marks.append("g");
+    const hitLayer = marks.append("g");
+
+    g.append("text")
+      .attr("class", "analysis-graph-label")
+      .attr("x", innerWidth / 2)
+      .attr("y", innerHeight + 38)
+      .attr("text-anchor", "middle")
+      .text("time (fs)");
+
+    g.append("text")
+      .attr("class", "analysis-graph-label")
+      .attr("x", -innerHeight / 2)
+      .attr("y", -34)
+      .attr("text-anchor", "middle")
+      .attr("transform", "rotate(-90)")
+      .text("event score");
+
+    g.insert("rect", ":first-child")
+      .attr("class", "analysis-graph-zoom")
+      .attr("width", innerWidth)
+      .attr("height", innerHeight);
+
+    function viewState(next = null) {
+      const focus = next?.viewFocus || graphCamera?.getViewFocus?.() || centerFocus;
+      const zoomScale = Math.max(1e-6, Number(next?.zoomScale ?? graphCamera?.getZoomScale?.() ?? initialZoom) || 1);
+      return { focus, zoomScale };
+    }
+
+    function screenXFromWorld(worldX, stateForDraw) {
+      return innerWidth / 2 + (worldX - stateForDraw.focus.x) * stateForDraw.zoomScale;
+    }
+
+    function screenYFromWorld(worldY, stateForDraw) {
+      return innerHeight / 2 + (worldY - stateForDraw.focus.y) * stateForDraw.zoomScale;
+    }
+
+    function draw(next = null) {
+      const stateForDraw = viewState(next);
+      const visibleLeft = stateForDraw.focus.x - innerWidth / (2 * stateForDraw.zoomScale);
+      const visibleRight = stateForDraw.focus.x + innerWidth / (2 * stateForDraw.zoomScale);
+      const visibleTop = stateForDraw.focus.y - innerHeight / (2 * stateForDraw.zoomScale);
+      const visibleBottom = stateForDraw.focus.y + innerHeight / (2 * stateForDraw.zoomScale);
+      const xAxisScale = d3.scaleLinear()
+        .domain([xBase.invert(visibleLeft), xBase.invert(visibleRight)])
+        .range([0, innerWidth]);
+      const yAxisScale = d3.scaleLinear()
+        .domain([yBase.invert(visibleBottom), yBase.invert(visibleTop)])
+        .range([innerHeight, 0]);
+
+      grid.call(d3.axisLeft(yAxisScale).ticks(4).tickSize(-innerWidth).tickFormat(""));
+      xAxis.call(d3.axisBottom(xAxisScale).ticks(Math.min(8, valid.length)).tickFormat(value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits)));
+      yAxis.call(d3.axisLeft(yAxisScale).ticks(4));
+
+      linePath.attr("d", d3.line()
+        .x(d => screenXFromWorld(xBase(xValue(d)), stateForDraw))
+        .y(d => screenYFromWorld(yBase(yValue(d)), stateForDraw))(valid));
+
+      dotLayer.selectAll("circle.analysis-graph-dot")
+        .data(valid, intervalKeyFromItem)
+        .join("circle")
+        .attr("class", d => `analysis-graph-dot${activeIntervalKey === intervalKeyFromItem(d) ? " active" : ""}`)
+        .attr("cx", d => screenXFromWorld(xBase(xValue(d)), stateForDraw))
+        .attr("cy", d => screenYFromWorld(yBase(yValue(d)), stateForDraw))
+        .attr("r", d => activeIntervalKey === intervalKeyFromItem(d) ? 4.8 : 3.7);
+
+      hitLayer.selectAll("circle.analysis-graph-hit")
+        .data(valid, intervalKeyFromItem)
+        .join("circle")
+        .attr("class", "analysis-graph-hit")
+        .attr("cx", d => screenXFromWorld(xBase(xValue(d)), stateForDraw))
+        .attr("cy", d => screenYFromWorld(yBase(yValue(d)), stateForDraw))
+        .attr("r", 8)
+        .on("mouseenter", (event, d) => updateTooltip(intervalGraphTooltip(d, panel), event.clientX, event.clientY))
+        .on("mousemove", (event, d) => updateTooltip(intervalGraphTooltip(d, panel), event.clientX, event.clientY))
+        .on("mouseleave", hideTooltip)
+        .on("click", (event, d) => {
+          event.stopPropagation();
+          hideTooltip();
+          setAnalysisHighlight(panel, intervalHighlightPayload(d, panel), false);
+        });
+    }
+
+    const graphCamera = window.ReebViewerCommon.createCameraController({
+      zoomMin: 0.1,
+      zoomMax: Math.max(20, Math.min(80, valid.length * 2)),
+      zoomStep: ZOOM_STEP,
+      panDragThreshold: PAN_DRAG_THRESHOLD,
+      initialZoomScale: initialZoom,
+      initialViewFocus: initialFocus,
+      applyTransform: next => {
+        panel.analysis.intervalGraphZoomScale = next.zoomScale;
+        panel.analysis.intervalGraphFocus = next.viewFocus
+          ? { x: next.viewFocus.x, y: next.viewFocus.y }
+          : null;
+        draw(next);
+      }
+    });
+
+    draw({ zoomScale: graphCamera.getZoomScale(), viewFocus: graphCamera.getViewFocus() || centerFocus });
+    graphCamera.bindPanAndWheel(svg.node(), {
+      cursorTarget: svg.node(),
+      isPanTarget: target => !target.closest(".analysis-graph-hit, .analysis-graph-dot, button, input, select, label"),
+      ensureFocus: () => graphCamera.getViewFocus() || centerFocus,
+      onPanState: active => graph.classed("dragging", active)
+    });
+
+    const handle = container.append("div")
+      .attr("class", "panel-resizer analysis-graph-resizer")
+      .attr("title", "Drag to resize interval plot");
+    const handleNode = handle.node();
+    const svgNode = svg.node();
+    let resizeState = null;
+
+    const finishResize = event => {
+      if (!resizeState) return;
+      resizeState = null;
+      handle.classed("active", false);
+      try {
+        if (handleNode.hasPointerCapture(event.pointerId)) handleNode.releasePointerCapture(event.pointerId);
+      } catch (_) {}
+      renderAll();
+    };
+
+    handleNode.addEventListener("pointerdown", event => {
+      if (event.button !== 0) return;
+      resizeState = { startY: event.clientY, startHeight: panel.analysis.intervalGraphHeight };
+      handle.classed("active", true);
+      handleNode.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+
+    handleNode.addEventListener("pointermove", event => {
+      if (!resizeState) return;
+      const nextHeight = clampIntervalGraphHeight(resizeState.startHeight + event.clientY - resizeState.startY);
+      panel.analysis.intervalGraphHeight = nextHeight;
+      svg.attr("viewBox", `0 0 ${width} ${nextHeight}`).style("height", `${nextHeight}px`);
+      event.preventDefault();
+    });
+
+    handleNode.addEventListener("pointerup", finishResize);
+    handleNode.addEventListener("pointercancel", finishResize);
   }
 
   function nodeKeyFromDatum(d) {
@@ -2163,10 +2959,10 @@ d3.json("data.json").then(data => {
     let start = Number.POSITIVE_INFINITY;
     let end = Number.NEGATIVE_INFINITY;
     for (const item of items || []) {
-      for (const key of item?.highlight?.nodes || []) nodes.add(key);
-      for (const key of item?.highlight?.links || []) links.add(key);
-      const itemStart = Number(item?.source_timestep_index ?? item?.start_timestep_index);
-      const itemEnd = Number(item?.target_timestep_index ?? item?.end_timestep_index);
+      for (const key of item?.highlight?.nodes || item?.nodes || []) nodes.add(key);
+      for (const key of item?.highlight?.links || item?.links || []) links.add(key);
+      const itemStart = Number(item?.source_timestep_index ?? item?.start_timestep_index ?? item?.start);
+      const itemEnd = Number(item?.target_timestep_index ?? item?.end_timestep_index ?? item?.end);
       if (Number.isFinite(itemStart)) start = Math.min(start, itemStart);
       if (Number.isFinite(itemEnd)) end = Math.max(end, itemEnd);
     }
@@ -2235,9 +3031,8 @@ d3.json("data.json").then(data => {
     toolbar.append("div").attr("class", "analysis-title").text("Analysis");
     const actions = toolbar.append("div").attr("class", "analysis-actions");
 
-    if (!analysisData) {
-      box.append("div").attr("class", "analysis-hint").text("No tracking analysis JSON was found. Enable the analysis stage, then rebuild the viewer.");
-      return;
+    if (!hasEmbeddedAnalysisData) {
+      box.append("div").attr("class", "analysis-hint").text("Runtime interval and continuing-feature analysis is available. Run Stage 5B to populate sensitivity and metric-agreement summaries.");
     }
 
     const thetaSelect = actions.append("label");
@@ -2282,55 +3077,48 @@ d3.json("data.json").then(data => {
     const content = box.append("div").attr("class", "analysis-content");
     if (panel.analysis.tab === "intervals") {
       const rows = analysisIntervals(panel);
+      const visibleRows = rows.slice(0, Math.min(panel.analysis.topIntervals, rows.length));
       const controls = content.append("div").attr("class", "analysis-actions");
-      controls.append("span").attr("class", "analysis-hint").text("Highlight top intervals");
+      controls.append("span").attr("class", "analysis-hint").text(`Show/highlight top intervals out of ${rows.length}`);
       const countInput = controls.append("input")
         .attr("type", "number")
         .attr("min", 1)
         .attr("max", Math.max(1, rows.length))
-        .property("value", panel.analysis.topIntervals);
+        .property("value", Math.min(panel.analysis.topIntervals, Math.max(1, rows.length)));
       countInput.on("change", event => {
-        panel.analysis.topIntervals = Math.max(1, Math.floor(Number(event.target.value) || 1));
+        const maxCount = Math.max(1, rows.length);
+        panel.analysis.topIntervals = clamp(Math.floor(Number(event.target.value) || 1), 1, maxCount);
         renderAll();
       });
       controls.append("button").attr("type", "button").text("Highlight")
-        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(rows.slice(0, panel.analysis.topIntervals), `Top ${panel.analysis.topIntervals} intervals`), false));
+        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(visibleRows.map(item => intervalHighlightPayload(item, panel)), `Top ${visibleRows.length} intervals`), false));
 
-      const list = content.append("div").attr("class", "analysis-list");
-      rows.forEach((item, index) => {
-        const row = list.append("button").attr("type", "button").attr("class", "analysis-row");
-        row.append("strong").text(`${index + 1}. ${item.source_label} -> ${item.target_label}`);
-        row.append("span").text(`event ${formatScore(item.event_score)} | weak continuation source/target ${item.source_weak_count}/${item.target_weak_count} | splits ${item.possible_splits} merges ${item.possible_merges}`);
-        row.on("click", () => setAnalysisHighlight(panel, {
-          label: `Interval ${item.source_label} -> ${item.target_label}`,
-          nodes: item.highlight?.nodes || [],
-          links: item.highlight?.links || [],
-          start: item.source_timestep_index,
-          end: item.target_timestep_index,
-        }, false));
-      });
+      renderIntervalScoreGraph(content, panel, visibleRows);
+
       if (!rows.length) content.append("div").attr("class", "analysis-hint").text("No interval analysis for this theta.");
       return;
     }
 
     if (panel.analysis.tab === "tracks") {
       const rows = analysisTracks(panel);
+      const visibleRows = rows.slice(0, Math.min(panel.analysis.topFeatures, rows.length));
       const controls = content.append("div").attr("class", "analysis-actions");
-      controls.append("span").attr("class", "analysis-hint").text("Highlight top continuing features");
+      controls.append("span").attr("class", "analysis-hint").text(`Show/highlight top continuing features out of ${rows.length}`);
       const countInput = controls.append("input")
         .attr("type", "number")
         .attr("min", 1)
         .attr("max", Math.max(1, rows.length))
-        .property("value", panel.analysis.topFeatures);
+        .property("value", Math.min(panel.analysis.topFeatures, Math.max(1, rows.length)));
       countInput.on("change", event => {
-        panel.analysis.topFeatures = Math.max(1, Math.floor(Number(event.target.value) || 1));
+        const maxCount = Math.max(1, rows.length);
+        panel.analysis.topFeatures = clamp(Math.floor(Number(event.target.value) || 1), 1, maxCount);
         renderAll();
       });
       controls.append("button").attr("type", "button").text("Highlight")
-        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(rows.slice(0, panel.analysis.topFeatures), `Top ${panel.analysis.topFeatures} continuing features`), false));
+        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(visibleRows, `Top ${visibleRows.length} continuing features`), false));
 
       const list = content.append("div").attr("class", "analysis-list");
-      rows.forEach((item, index) => {
+      visibleRows.forEach((item, index) => {
         const row = list.append("button").attr("type", "button").attr("class", "analysis-row");
         row.append("strong").text(`${index + 1}. S${item.start_sheet_id} ${item.start_label} -> ${item.end_label}`);
         row.append("span").text(`length ${item.length} | mean ${formatScore(item.mean_continuation_score)} | min ${formatScore(item.min_continuation_score)}`);
@@ -3904,8 +4692,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         window.ReebViewerCommon.appendTimestepLabel(d3.select(this), d, {
           indexAccessor: item => item.index,
           labelAccessor: item => item.label,
-          divisor: 41.341374575751,
-          digits: 2
+          ...TIMESTEP_LABEL_OPTIONS
         });
       });
 

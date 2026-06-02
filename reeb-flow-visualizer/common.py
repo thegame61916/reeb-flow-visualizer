@@ -3,7 +3,7 @@ from pathlib import Path
 
 # ================= USER SETTINGS =================
 
-BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/MVK_s1")
+BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene")
 
 DATASET_CONFIGS = {
     "stilbene": {
@@ -97,6 +97,54 @@ TRACKING_ANALYSIS_TOP_INTERVALS = 12
 TRACKING_ANALYSIS_TOP_FEATURES = 12
 TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT = 0.5
 
+# Event-score formula used by both precomputed tracking analysis and the
+# browser-side runtime analysis. Each term reads one component from the
+# interval summary and multiplies it by the configured weight.
+TRACKING_ANALYSIS_EVENT_SCORE_TERMS = (
+    {"component": "source_weak_count", "weight": 1.0},
+    {"component": "target_weak_count", "weight": 1.0},
+    {"component": "possible_splits", "weight": TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT},
+    {"component": "possible_merges", "weight": TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT},
+    {"component": "continuation_gap_source_count", "weight": 1.0},
+)
+
+
+def tracking_analysis_event_score_components(
+    *,
+    source_weak_count,
+    target_weak_count,
+    possible_splits,
+    possible_merges,
+    mean_best_combined,
+    source_sheet_count,
+):
+    return {
+        "source_weak_count": float(source_weak_count),
+        "target_weak_count": float(target_weak_count),
+        "possible_splits": float(possible_splits),
+        "possible_merges": float(possible_merges),
+        "continuation_gap_source_count": (1.0 - float(mean_best_combined)) * max(float(source_sheet_count), 1.0),
+    }
+
+
+def tracking_analysis_event_score(components):
+    return sum(
+        float(term["weight"]) * float(components.get(term["component"], 0.0))
+        for term in TRACKING_ANALYSIS_EVENT_SCORE_TERMS
+    )
+
+
+def tracking_analysis_event_score_formula_text():
+    labels = []
+    for term in TRACKING_ANALYSIS_EVENT_SCORE_TERMS:
+        weight = float(term["weight"])
+        component = term["component"]
+        if weight == 1.0:
+            labels.append(component)
+        else:
+            labels.append(f"{weight:g}*{component}")
+    return " + ".join(labels)
+
 # Pipeline stage flags
 RUN_STAGE_1_FV99 = False
 RUN_STAGE_2_RSI_JSON = False
@@ -104,15 +152,18 @@ RUN_STAGE_3A_SHAPE_MATCHING = False
 RUN_STAGE_3B_OVERLAPS = False
 RUN_STAGE_4A_SHEET_RENDERING = False
 RUN_STAGE_4B_SHEET_FIBER_SURFACES = False
-RUN_STAGE_5_UNIFIED_SANKEY_VIEWER = True
-RUN_STAGE_6_TRACKING_ANALYSIS = True
+RUN_STAGE_5A_BUILD_UNIFIED_SANKEY_DATA = True
+RUN_STAGE_5B_TRACKING_ANALYSIS = True
+RUN_STAGE_5C_UNIFIED_SANKEY_VIEWER = True
 
 # Backward-compatible aliases for older scripts/imports.
 RUN_STAGE_2B_SHAPE_MATCHING = RUN_STAGE_3A_SHAPE_MATCHING
 RUN_STAGE_3_OVERLAPS = RUN_STAGE_3B_OVERLAPS
 RUN_STAGE_4_SHEET_RENDERING = RUN_STAGE_4A_SHEET_RENDERING
 RUN_STAGE_4_SHEET_FIBER_SURFACES = RUN_STAGE_4B_SHEET_FIBER_SURFACES
-RUN_UNIFIED_SANKEY_VIEWER = RUN_STAGE_5_UNIFIED_SANKEY_VIEWER
+RUN_STAGE_5_UNIFIED_SANKEY_VIEWER = RUN_STAGE_5C_UNIFIED_SANKEY_VIEWER
+RUN_STAGE_6_TRACKING_ANALYSIS = RUN_STAGE_5B_TRACKING_ANALYSIS
+RUN_UNIFIED_SANKEY_VIEWER = RUN_STAGE_5C_UNIFIED_SANKEY_VIEWER
 
 # Shape matching can be expensive.
 # Use a small number for testing, or None to use the default from

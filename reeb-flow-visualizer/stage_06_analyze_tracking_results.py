@@ -17,8 +17,12 @@ from common import (
     BASE_DIR,
     TRACKING_ANALYSIS_DIR,
     TRACKING_ANALYSIS_PREFERRED_THRESHOLD,
+    TRACKING_ANALYSIS_EVENT_SCORE_TERMS,
     TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT,
     TRACKING_ANALYSIS_THRESHOLDS,
+    tracking_analysis_event_score,
+    tracking_analysis_event_score_components,
+    tracking_analysis_event_score_formula_text,
     TRACKING_ANALYSIS_TOP_FEATURES,
     TRACKING_ANALYSIS_TOP_INTERVALS,
     TRACKING_ANALYSIS_VIEWER_FILE,
@@ -537,12 +541,15 @@ def collect_event_scores(
                 )
                 >= 2
             )
-            event_score = (
-                source_weak_count
-                + target_weak_count
-                + TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT * (possible_splits + possible_merges)
-                + (1.0 - mean_best_combined) * max(source_sheet_count, 1)
+            event_components = tracking_analysis_event_score_components(
+                source_weak_count=source_weak_count,
+                target_weak_count=target_weak_count,
+                possible_splits=possible_splits,
+                possible_merges=possible_merges,
+                mean_best_combined=mean_best_combined,
+                source_sheet_count=source_sheet_count,
             )
+            event_score = tracking_analysis_event_score(event_components)
 
             rows.append(
                 {
@@ -824,11 +831,8 @@ def collect_interesting_intervals(
         "dataset": dataset,
         "base_dir": str(base_dir),
         "preferred_threshold": preferred_threshold,
-        "event_score_formula": (
-            "source_weak_count + target_weak_count + "
-            f"{TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT:g}*(possible_splits + possible_merges) + "
-            "(1 - mean_best_combined)*source_sheet_count"
-        ),
+        "event_score_formula": tracking_analysis_event_score_formula_text(),
+        "event_score_terms": list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS),
         "intervals": intervals,
     }
 
@@ -1088,6 +1092,8 @@ def build_viewer_analysis(
         "top_intervals": top_intervals,
         "top_features": top_features,
         "split_merge_weight": TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT,
+        "event_score_terms": list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS),
+        "event_score_formula": tracking_analysis_event_score_formula_text(),
         "metric_summary": metric_rows,
         "best_target_agreement": agreement_rows,
         "sensitivity": collect_sensitivity_summary(event_rows, lifetime_rows, thresholds),
@@ -1369,6 +1375,8 @@ def analyze_dataset(
         "top_intervals": top_intervals,
         "top_features": top_features,
         "split_merge_weight": TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT,
+        "event_score_terms": list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS),
+        "event_score_formula": tracking_analysis_event_score_formula_text(),
         "num_timesteps": len(data.get("timesteps", [])),
         "num_shape_pairs": len(data.get("shape_pairs", [])),
         "num_overlap_pairs": len(data.get("overlap_pairs", [])),

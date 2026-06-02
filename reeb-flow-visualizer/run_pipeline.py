@@ -17,8 +17,9 @@ from common import (
     RUN_STAGE_3B_OVERLAPS,
     RUN_STAGE_4A_SHEET_RENDERING,
     RUN_STAGE_4B_SHEET_FIBER_SURFACES,
-    RUN_STAGE_5_UNIFIED_SANKEY_VIEWER,
-    RUN_STAGE_6_TRACKING_ANALYSIS,
+    RUN_STAGE_5A_BUILD_UNIFIED_SANKEY_DATA,
+    RUN_STAGE_5B_TRACKING_ANALYSIS,
+    RUN_STAGE_5C_UNIFIED_SANKEY_VIEWER,
     SHAPE_MATCHING_WORKERS,
     SHEET_RENDERER_CLEAN_CACHE,
     SHEET_RENDERER_REBUILD_CACHE,
@@ -81,7 +82,7 @@ def enabled_stages():
             )
         )
 
-    if RUN_STAGE_5_UNIFIED_SANKEY_VIEWER or RUN_STAGE_6_TRACKING_ANALYSIS:
+    if RUN_STAGE_5A_BUILD_UNIFIED_SANKEY_DATA:
         stages.append(
             (
                 "Stage 5A: build unified Sankey data",
@@ -89,7 +90,7 @@ def enabled_stages():
             )
         )
 
-    if RUN_STAGE_6_TRACKING_ANALYSIS:
+    if RUN_STAGE_5B_TRACKING_ANALYSIS:
         stages.append(
             (
                 "Stage 5B: analyze tracking results",
@@ -97,7 +98,7 @@ def enabled_stages():
             )
         )
 
-    if RUN_STAGE_5_UNIFIED_SANKEY_VIEWER:
+    if RUN_STAGE_5C_UNIFIED_SANKEY_VIEWER:
         stages.append(
             (
                 "Stage 5C: build unified Sankey viewer",
