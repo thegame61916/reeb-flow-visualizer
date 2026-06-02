@@ -2264,6 +2264,7 @@ d3.json("data.json").then(data => {
         intervalGraphZoomScale: 1,
         intervalGraphFocus: null,
         intervalGraphKey: "",
+        selectedIntervalKeys: [],
         highlight: null,
       };
     }
@@ -2276,6 +2277,11 @@ d3.json("data.json").then(data => {
     panel.analysis.intervalGraphZoomScale = Number.isFinite(Number(panel.analysis.intervalGraphZoomScale))
       ? Number(panel.analysis.intervalGraphZoomScale)
       : 1;
+    if (!Array.isArray(panel.analysis.selectedIntervalKeys)) {
+      panel.analysis.selectedIntervalKeys = Array.isArray(panel.analysis.selectedIntervals)
+        ? panel.analysis.selectedIntervals.map(item => item?.intervalKey).filter(Boolean)
+        : [];
+    }
   }
 
   function analysisEventScoreTerms() {
@@ -2763,7 +2769,12 @@ d3.json("data.json").then(data => {
     const yDomain = [0, yMax * 1.05 || 1];
     const xBase = d3.scaleLinear().domain(xDomain).range([0, innerWidth]);
     const yBase = d3.scaleLinear().domain(yDomain).range([innerHeight, 0]).nice();
-    const activeIntervalKey = panel?.analysis?.highlight?.intervalKey || null;
+    const validIntervalKeys = new Set(valid.map(intervalKeyFromItem));
+    const selectedBeforePrune = panel.analysis.selectedIntervalKeys || [];
+    panel.analysis.selectedIntervalKeys = selectedBeforePrune.filter(key => validIntervalKeys.has(key));
+    if (panel.analysis.selectedIntervalKeys.length !== selectedBeforePrune.length) {
+      panel.analysis.highlight = aggregateSelectedIntervalHighlight(panel);
+    }
     const clipId = `analysis-graph-clip-${String(panel.id).replace(/[^a-zA-Z0-9_-]/g, "")}`;
     const graphKey = `${thresholdKey(panel.analysis.theta)}:${valid.map(intervalKeyFromItem).join("|")}`;
     if (panel.analysis.intervalGraphKey !== graphKey) {
@@ -2839,6 +2850,7 @@ d3.json("data.json").then(data => {
     }
 
     function draw(next = null) {
+      const activeIntervalKeys = selectedIntervalKeySet(panel);
       const stateForDraw = viewState(next);
       const visibleLeft = stateForDraw.focus.x - innerWidth / (2 * stateForDraw.zoomScale);
       const visibleRight = stateForDraw.focus.x + innerWidth / (2 * stateForDraw.zoomScale);
@@ -2862,10 +2874,10 @@ d3.json("data.json").then(data => {
       dotLayer.selectAll("circle.analysis-graph-dot")
         .data(valid, intervalKeyFromItem)
         .join("circle")
-        .attr("class", d => `analysis-graph-dot${activeIntervalKey === intervalKeyFromItem(d) ? " active" : ""}`)
+        .attr("class", d => `analysis-graph-dot${activeIntervalKeys.has(intervalKeyFromItem(d)) ? " active" : ""}`)
         .attr("cx", d => screenXFromWorld(xBase(xValue(d)), stateForDraw))
         .attr("cy", d => screenYFromWorld(yBase(yValue(d)), stateForDraw))
-        .attr("r", d => activeIntervalKey === intervalKeyFromItem(d) ? 4.8 : 3.7);
+        .attr("r", d => activeIntervalKeys.has(intervalKeyFromItem(d)) ? 4.8 : 3.7);
 
       hitLayer.selectAll("circle.analysis-graph-hit")
         .data(valid, intervalKeyFromItem)
@@ -2880,7 +2892,7 @@ d3.json("data.json").then(data => {
         .on("click", (event, d) => {
           event.stopPropagation();
           hideTooltip();
-          setAnalysisHighlight(panel, intervalHighlightPayload(d, panel), false);
+          toggleIntervalGraphSelection(panel, d);
         });
     }
 
@@ -2975,6 +2987,42 @@ d3.json("data.json").then(data => {
     };
   }
 
+  function selectedIntervalKeySet(panel) {
+    ensurePanelAnalysis(panel);
+    return new Set((panel.analysis.selectedIntervalKeys || []).filter(Boolean));
+  }
+
+  function aggregateSelectedIntervalHighlight(panel) {
+    ensurePanelAnalysis(panel);
+    const selectedKeys = selectedIntervalKeySet(panel);
+    if (!selectedKeys.size) return null;
+    const selected = analysisIntervals(panel)
+      .filter(item => selectedKeys.has(intervalKeyFromItem(item)))
+      .map(item => intervalHighlightPayload(item, panel));
+    if (!selected.length) return null;
+    const label = `${selected.length} selected interval${selected.length === 1 ? "" : "s"}`;
+    return {
+      ...combinedHighlight(selected, label),
+      id: "selected-intervals",
+      intervalKeys: selected.map(item => item.intervalKey).filter(Boolean),
+    };
+  }
+
+  function toggleIntervalGraphSelection(panel, item) {
+    ensurePanelAnalysis(panel);
+    const payload = intervalHighlightPayload(item, panel);
+    const key = payload.intervalKey;
+    if (!key) return;
+    const selected = panel.analysis.selectedIntervalKeys || [];
+    const alreadySelected = selected.includes(key);
+    panel.analysis.selectedIntervalKeys = alreadySelected
+      ? selected.filter(entry => entry !== key)
+      : [...selected, key];
+    panel.analysis.highlight = aggregateSelectedIntervalHighlight(panel);
+    expandRangesForHighlight(panel.analysis.highlight);
+    renderAll();
+  }
+
   function expandRangesForHighlight(highlight) {
     if (!highlight || !Number.isFinite(Number(highlight.start)) || !Number.isFinite(Number(highlight.end))) return;
     const pad = 1;
@@ -2997,6 +3045,7 @@ d3.json("data.json").then(data => {
 
   function setAnalysisHighlight(panel, highlight, focusRange = true) {
     ensurePanelAnalysis(panel);
+    panel.analysis.selectedIntervalKeys = [];
     panel.analysis.highlight = highlight;
     if (focusRange && highlight && Number.isFinite(Number(highlight.start)) && Number.isFinite(Number(highlight.end))) {
       const pad = 1;
@@ -3012,6 +3061,7 @@ d3.json("data.json").then(data => {
 
   function clearAnalysisHighlight(panel) {
     ensurePanelAnalysis(panel);
+    panel.analysis.selectedIntervalKeys = [];
     panel.analysis.highlight = null;
     renderAll();
   }
@@ -3046,6 +3096,7 @@ d3.json("data.json").then(data => {
     });
     theta.on("change", event => {
       panel.analysis.theta = Number(event.target.value);
+      panel.analysis.selectedIntervalKeys = [];
       panel.analysis.highlight = null;
       renderAll();
     });
@@ -3151,6 +3202,7 @@ d3.json("data.json").then(data => {
           .on("click", () => {
             panel.analysis.theta = Number(row.threshold);
             panel.analysis.tab = "intervals";
+            panel.analysis.selectedIntervalKeys = [];
             panel.analysis.highlight = null;
             renderAll();
           });
@@ -4909,7 +4961,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       metricId: "combined",
       threshold: 0,
       shapeWeights: cloneDefaultShapeWeights(),
-      analysis: activePanel?.analysis ? { ...activePanel.analysis, highlight: null } : null,
+      analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], highlight: null } : null,
       panelHeight: clampPanelHeight(activePanel?.panelHeight ?? PANEL_HEIGHT_DEFAULT)
     });
     renderAll();
