@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import math
 import shutil
+import time
 from pathlib import Path
 
 from common import (
@@ -23,6 +24,7 @@ from common import (
     TRACKING_ANALYSIS_EVENT_SCORE_TERMS,
     TRACKING_ANALYSIS_PREFERRED_THRESHOLD,
     TRACKING_ANALYSIS_THRESHOLDS,
+    TRACKING_ANALYSIS_TOP_DISAGREEMENTS,
     TRACKING_ANALYSIS_TOP_FEATURES,
     TRACKING_ANALYSIS_TOP_INTERVALS,
     TRACKING_ANALYSIS_VIEWER_FILE,
@@ -531,6 +533,7 @@ def prepare_data(viewer_dir: Path) -> dict:
             "tracking_analysis_preferred_threshold": TRACKING_ANALYSIS_PREFERRED_THRESHOLD,
             "tracking_analysis_top_intervals": TRACKING_ANALYSIS_TOP_INTERVALS,
             "tracking_analysis_top_features": TRACKING_ANALYSIS_TOP_FEATURES,
+            "tracking_analysis_top_disagreements": TRACKING_ANALYSIS_TOP_DISAGREEMENTS,
             "tracking_analysis_event_score_terms": list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS),
             "tracking_analysis_event_score_formula": tracking_analysis_event_score_formula_text(),
             "global_area_max": max_area,
@@ -578,6 +581,7 @@ def apply_current_tracking_analysis_meta(data: dict) -> dict:
     meta["tracking_analysis_preferred_threshold"] = TRACKING_ANALYSIS_PREFERRED_THRESHOLD
     meta["tracking_analysis_top_intervals"] = TRACKING_ANALYSIS_TOP_INTERVALS
     meta["tracking_analysis_top_features"] = TRACKING_ANALYSIS_TOP_FEATURES
+    meta["tracking_analysis_top_disagreements"] = TRACKING_ANALYSIS_TOP_DISAGREEMENTS
     meta["tracking_analysis_event_score_terms"] = list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS)
     meta["tracking_analysis_event_score_formula"] = tracking_analysis_event_score_formula_text()
     return data
@@ -609,6 +613,7 @@ def build_unified_sankey_data_stage() -> None:
 
 def write_index_html() -> Path:
     path = UNIFIED_VIEWER_DIR / "index.html"
+    asset_version = str(int(time.time()))
     path.write_text(
         f"""<!doctype html>
 <html lang="en">
@@ -616,7 +621,7 @@ def write_index_html() -> Path:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Reeb Flow Visualizer</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v={asset_version}">
 </head>
 <body>
   <header>
@@ -719,7 +724,7 @@ def write_index_html() -> Path:
 
   <div id="tooltip" class="tooltip hidden"></div>
 
-  {shared_viewer_script_tags(include_sankey=False)}
+  {shared_viewer_script_tags(include_sankey=False, version=asset_version)}
 </body>
 </html>
 """
@@ -1379,6 +1384,60 @@ svg.summary-chart {
   fill: transparent;
   cursor: pointer;
 }
+.analysis-agreement-line {
+  fill: none;
+  opacity: 1;
+  stroke-opacity: 1;
+  stroke-width: 2.2px;
+}
+.analysis-agreement-dot {
+  stroke: #fff;
+  stroke-width: 1.4px;
+}
+.analysis-agreement-dot.active {
+  stroke: #111827;
+  stroke-width: 2px;
+}
+.analysis-agreement-hit {
+  fill: transparent;
+  cursor: pointer;
+}
+.analysis-metric-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 6px;
+  margin: 7px 0 4px;
+}
+.analysis-metric-card {
+  border: 1px solid #d9e2ec;
+  border-radius: 5px;
+  background: #fff;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.analysis-metric-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.analysis-metric-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  color: #233040;
+}
+.analysis-metric-color {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+}
+.analysis-metric-card button {
+  padding: 2px 6px;
+}
 .analysis-graph-resizer {
   margin: 4px 0 8px;
 }
@@ -1580,6 +1639,7 @@ d3.json("data.json").then(data => {
         event_score_formula: data.meta?.tracking_analysis_event_score_formula || "",
         sensitivity: [],
         best_target_agreement: [],
+        domain_shape_disagreement_summary: [],
         domain_shape_disagreements: [],
       };
   const hasEmbeddedAnalysisData = Boolean(embeddedAnalysisData);
@@ -1636,6 +1696,10 @@ d3.json("data.json").then(data => {
   const IMAGE_ZOOM_MIN = 0.03;
   const IMAGE_ZOOM_MAX = 20;
   const TIMESTEP_LABEL_OPTIONS = { divisor: 41.341374575751, digits: 2 };
+  const AGREEMENT_SERIES_COLORS = ["#1f6feb", "#dc2626", "#16a34a", "#f59e0b", "#7c3aed", "#0891b2", "#db2777", "#4b5563"];
+  const ANALYSIS_DOT_RADIUS = 5.6;
+  const ANALYSIS_DOT_SELECTED_RADIUS = 7.0;
+  const ANALYSIS_DOT_HIT_RADIUS = 12;
 
   const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 });
   const shapePairLookup = new Map();
@@ -2274,11 +2338,28 @@ d3.json("data.json").then(data => {
         theta: defaultAnalysisTheta(),
         topIntervals: Math.min(5, Math.max(1, Number(analysisData?.top_intervals) || 5)),
         topFeatures: Math.min(5, Math.max(1, Number(analysisData?.top_features) || 5)),
+        topDisagreements: Math.min(12, Math.max(1, Number(analysisData?.top_disagreements ?? data.meta?.tracking_analysis_top_disagreements) || 12)),
         intervalGraphHeight: INTERVAL_GRAPH_HEIGHT_DEFAULT,
         intervalGraphZoomScale: 1,
         intervalGraphFocus: null,
         intervalGraphKey: "",
+        trackGraphHeight: INTERVAL_GRAPH_HEIGHT_DEFAULT,
+        trackGraphZoomScale: 1,
+        trackGraphFocus: null,
+        trackGraphKey: "",
+        agreementGraphHeight: INTERVAL_GRAPH_HEIGHT_DEFAULT,
+        agreementGraphZoomScale: 1,
+        agreementGraphFocus: null,
+        agreementGraphKey: "",
+        disagreementGraphHeight: INTERVAL_GRAPH_HEIGHT_DEFAULT,
+        disagreementGraphZoomScale: 1,
+        disagreementGraphFocus: null,
+        disagreementGraphKey: "",
+        selectedAgreementMetrics: [],
+        selectedAgreementPointKeys: [],
+        selectedDisagreementKeys: [],
         selectedIntervalKeys: [],
+        selectedTrackKeys: [],
         highlight: null,
       };
     }
@@ -2287,15 +2368,32 @@ d3.json("data.json").then(data => {
     }
     panel.analysis.topIntervals = Math.max(1, Math.floor(Number(panel.analysis.topIntervals) || 1));
     panel.analysis.topFeatures = Math.max(1, Math.floor(Number(panel.analysis.topFeatures) || 1));
+    panel.analysis.topDisagreements = Math.max(1, Math.floor(Number(panel.analysis.topDisagreements) || 1));
     panel.analysis.intervalGraphHeight = clampIntervalGraphHeight(panel.analysis.intervalGraphHeight);
     panel.analysis.intervalGraphZoomScale = Number.isFinite(Number(panel.analysis.intervalGraphZoomScale))
       ? Number(panel.analysis.intervalGraphZoomScale)
       : 1;
+    panel.analysis.trackGraphHeight = clampIntervalGraphHeight(panel.analysis.trackGraphHeight);
+    panel.analysis.trackGraphZoomScale = Number.isFinite(Number(panel.analysis.trackGraphZoomScale))
+      ? Number(panel.analysis.trackGraphZoomScale)
+      : 1;
+    panel.analysis.agreementGraphHeight = clampIntervalGraphHeight(panel.analysis.agreementGraphHeight);
+    panel.analysis.agreementGraphZoomScale = Number.isFinite(Number(panel.analysis.agreementGraphZoomScale))
+      ? Number(panel.analysis.agreementGraphZoomScale)
+      : 1;
+    panel.analysis.disagreementGraphHeight = clampIntervalGraphHeight(panel.analysis.disagreementGraphHeight);
+    panel.analysis.disagreementGraphZoomScale = Number.isFinite(Number(panel.analysis.disagreementGraphZoomScale))
+      ? Number(panel.analysis.disagreementGraphZoomScale)
+      : 1;
+    if (!Array.isArray(panel.analysis.selectedAgreementMetrics)) panel.analysis.selectedAgreementMetrics = [];
+    if (!Array.isArray(panel.analysis.selectedAgreementPointKeys)) panel.analysis.selectedAgreementPointKeys = [];
+    if (!Array.isArray(panel.analysis.selectedDisagreementKeys)) panel.analysis.selectedDisagreementKeys = [];
     if (!Array.isArray(panel.analysis.selectedIntervalKeys)) {
       panel.analysis.selectedIntervalKeys = Array.isArray(panel.analysis.selectedIntervals)
         ? panel.analysis.selectedIntervals.map(item => item?.intervalKey).filter(Boolean)
         : [];
     }
+    if (!Array.isArray(panel.analysis.selectedTrackKeys)) panel.analysis.selectedTrackKeys = [];
   }
 
   function analysisEventScoreTerms() {
@@ -2401,6 +2499,135 @@ d3.json("data.json").then(data => {
       if (Number(shapeBest.target_sheet_id) === Number(overlapBest.target_sheet_id)) agreements += 1;
     }
     return compared ? agreements / compared : 0;
+  }
+
+  function domainRangeDisagreementData() {
+    const cacheKey = "domain-range-disagreements";
+    if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
+
+    const examples = [];
+    const summary = [];
+    for (const shapePair of (Array.isArray(data.shape_pairs) ? data.shape_pairs : [])) {
+      const sourceIndex = Number(shapePair.source_timestep_index);
+      const targetIndex = Number(shapePair.target_timestep_index);
+      if (!Number.isFinite(sourceIndex) || !Number.isFinite(targetIndex)) continue;
+      const pairKey = `${sourceIndex}:${targetIndex}`;
+      const overlapPair = overlapPairLookup.get(pairKey);
+      if (!overlapPair) continue;
+
+      const shapeBySource = groupMatchesByField(shapePair.matches || [], "source_sheet_id");
+      const overlapBySource = groupMatchesByField(overlapPair.matches || [], "source_sheet_id");
+      let compared = 0;
+      let agreements = 0;
+      const pairExamples = [];
+
+      for (const [sourceSheetId, overlapMatches] of overlapBySource.entries()) {
+        const shapeMatches = shapeBySource.get(sourceSheetId) || [];
+        const shapeBest = bestAnalysisMatch(shapeMatches);
+        const overlapBest = bestOverlapMatch(overlapMatches || []);
+        if (!shapeBest || !overlapBest) continue;
+
+        compared += 1;
+        const shapeTarget = Number(shapeBest.target_sheet_id);
+        const overlapTarget = Number(overlapBest.target_sheet_id);
+        const shapeScore = analysisCombinedScore(shapeBest);
+        const overlapScore = overlapMaxPercent(overlapBest);
+        if (shapeTarget === overlapTarget) {
+          agreements += 1;
+          continue;
+        }
+
+        const shapeForDomainTarget = shapeMatches.find(match => Number(match.target_sheet_id) === overlapTarget) || null;
+        const overlapForRangeTarget = (overlapMatches || []).find(match => Number(match.target_sheet_id) === shapeTarget) || null;
+        const shapeScoreForDomainTarget = shapeForDomainTarget ? analysisCombinedScore(shapeForDomainTarget) : 0;
+        const overlapScoreForRangeTarget = overlapForRangeTarget ? overlapMaxPercent(overlapForRangeTarget) : 0;
+        const shapeLoss = Math.max(0, shapeScore - shapeScoreForDomainTarget);
+        const overlapLoss = Math.max(0, overlapScore - overlapScoreForRangeTarget);
+        const confidence = Math.min(shapeScore, overlapScore);
+        const disagreementScore = 0.5 * (shapeLoss + overlapLoss) * confidence;
+        const example = {
+          id: `disagreement:${sourceIndex}:${targetIndex}:${sourceSheetId}`,
+          source_timestep_index: sourceIndex,
+          target_timestep_index: targetIndex,
+          source_label: shapePair.source_label,
+          target_label: shapePair.target_label,
+          source_sheet_id: Number(sourceSheetId),
+          shape_target_sheet_id: shapeTarget,
+          overlap_target_sheet_id: overlapTarget,
+          shape_score: shapeScore,
+          overlap_max_percent: overlapScore,
+          shape_score_for_domain_target: shapeScoreForDomainTarget,
+          overlap_score_for_range_target: overlapScoreForRangeTarget,
+          shape_loss: shapeLoss,
+          overlap_loss: overlapLoss,
+          confidence,
+          disagreement_score: disagreementScore,
+          highlight: {
+            nodes: [
+              sheetKey(sourceIndex, sourceSheetId),
+              sheetKey(targetIndex, shapeTarget),
+              sheetKey(targetIndex, overlapTarget),
+            ],
+            links: [
+              linkKeyParts(sourceIndex, sourceSheetId, targetIndex, shapeTarget),
+              linkKeyParts(sourceIndex, sourceSheetId, targetIndex, overlapTarget),
+            ],
+          },
+        };
+        pairExamples.push(example);
+        examples.push(example);
+      }
+
+      pairExamples.sort((a, b) => Number(b.disagreement_score) - Number(a.disagreement_score));
+      const scores = pairExamples.map(item => Number(item.disagreement_score) || 0);
+      const shapeLosses = pairExamples.map(item => Number(item.shape_loss) || 0);
+      const overlapLosses = pairExamples.map(item => Number(item.overlap_loss) || 0);
+      if (!pairExamples.length) continue;
+      summary.push({
+        id: `disagreement_pair:${sourceIndex}:${targetIndex}`,
+        source_timestep_index: sourceIndex,
+        target_timestep_index: targetIndex,
+        source_label: shapePair.source_label,
+        target_label: shapePair.target_label,
+        pair_label: `${shapePair.source_label || sourceIndex}->${shapePair.target_label || targetIndex}`,
+        compared_sources: compared,
+        agreement_count: agreements,
+        disagreement_count: pairExamples.length,
+        agreement_fraction: compared ? agreements / compared : 0,
+        disagreement_fraction: compared ? pairExamples.length / compared : 0,
+        max_disagreement_score: scores.length ? Math.max(...scores) : 0,
+        mean_disagreement_score: meanNumber(scores),
+        max_shape_loss: shapeLosses.length ? Math.max(...shapeLosses) : 0,
+        mean_shape_loss: meanNumber(shapeLosses),
+        max_overlap_loss: overlapLosses.length ? Math.max(...overlapLosses) : 0,
+        mean_overlap_loss: meanNumber(overlapLosses),
+        strongest_disagreement: pairExamples[0] || null,
+      });
+    }
+
+    if (!summary.length && Array.isArray(analysisData?.domain_shape_disagreement_summary)) {
+      const embeddedSummary = analysisData.domain_shape_disagreement_summary.slice();
+      const embeddedExamples = Array.isArray(analysisData?.domain_shape_disagreements) ? analysisData.domain_shape_disagreements.slice() : [];
+      const result = {
+        examples: embeddedExamples,
+        summary: embeddedSummary.slice().sort((a, b) => Number(a.source_timestep_index) - Number(b.source_timestep_index)),
+        rankedSummary: embeddedSummary.slice().sort((a, b) => Number(b.max_disagreement_score || 0) - Number(a.max_disagreement_score || 0)),
+      };
+      analysisRuntimeCache.set(cacheKey, result);
+      return result;
+    }
+
+    const result = {
+      examples: examples.slice().sort((a, b) => Number(b.disagreement_score || 0) - Number(a.disagreement_score || 0)),
+      summary: summary.slice().sort((a, b) => Number(a.source_timestep_index) - Number(b.source_timestep_index) || Number(a.target_timestep_index) - Number(b.target_timestep_index)),
+      rankedSummary: summary.slice().sort((a, b) =>
+        Number(b.max_disagreement_score || 0) - Number(a.max_disagreement_score || 0) ||
+        Number(b.disagreement_fraction || 0) - Number(a.disagreement_fraction || 0) ||
+        Number(b.disagreement_count || 0) - Number(a.disagreement_count || 0)
+      ),
+    };
+    analysisRuntimeCache.set(cacheKey, result);
+    return result;
   }
 
   function computeRuntimeIntervals(panel) {
@@ -2761,50 +2988,95 @@ d3.json("data.json").then(data => {
       </div>`;
   }
 
-  function renderIntervalScoreGraph(container, panel, rows) {
+  function trackKeyFromItem(item) {
+    return String(item?.id || `track:${Number(item?.track_id)}:${Number(item?.start_timestep_index)}:${Number(item?.start_sheet_id)}`);
+  }
+
+  function trackHighlightPayload(item, panel) {
+    return {
+      id: item?.id || `track:${trackKeyFromItem(item)}`,
+      trackKey: trackKeyFromItem(item),
+      label: `Feature ${item?.track_id ?? ""}`,
+      nodes: item?.highlight?.nodes || [],
+      links: item?.highlight?.links || [],
+      start: Number(item?.start_timestep_index),
+      end: Number(item?.end_timestep_index),
+    };
+  }
+
+  function trackGraphTooltip(item, panel) {
+    const theta = panelTheta(panel);
+    return `
+      <strong>Feature ${escapeHtml(item.track_id)}: S${escapeHtml(item.start_sheet_id)} ${escapeHtml(item.start_label)} -> ${escapeHtml(item.end_label)}</strong>
+      <div class="tooltip-grid" style="margin-top:8px;">
+        <div>Length</div><div>${escapeHtml(item.length)}</div>
+        <div>Mean score</div><div>${escapeHtml(formatScore(item.mean_continuation_score))}</div>
+        <div>Min score</div><div>${escapeHtml(formatScore(item.min_continuation_score))}</div>
+        <div>Theta</div><div>${escapeHtml(formatScore(theta))}</div>
+        <div>Rank min/max</div><div>${escapeHtml(item.rank_min)} / ${escapeHtml(item.rank_max)}</div>
+        <div>Mean area</div><div>${escapeHtml(formatScore(item.area_mean))}</div>
+      </div>`;
+  }
+
+  function renderAnalysisPointGraph(container, panel, rows, options) {
     ensurePanelAnalysis(panel);
+    const keyFn = options.keyFn;
+    const xValue = options.xValue;
+    const yValue = options.yValue;
     const valid = (rows || [])
-      .filter(item => Number.isFinite(intervalTimeFs(item)) && Number.isFinite(Number(item.event_score)))
+      .filter(item => Number.isFinite(Number(xValue(item))) && Number.isFinite(Number(yValue(item))))
       .slice()
-      .sort((a, b) => intervalTimeFs(a) - intervalTimeFs(b));
+      .sort(options.sort || ((a, b) => Number(xValue(a)) - Number(xValue(b)) || Number(yValue(a)) - Number(yValue(b))));
     if (!valid.length) return;
 
+    const heightKey = options.heightKey;
+    const zoomKey = options.zoomKey;
+    const focusKey = options.focusKey;
+    const graphKeyField = options.graphKey;
+    const selectedKeysKey = options.selectedKeysKey;
     const width = 760;
-    const height = clampIntervalGraphHeight(panel.analysis.intervalGraphHeight);
-    panel.analysis.intervalGraphHeight = height;
+    const height = clampIntervalGraphHeight(panel.analysis[heightKey]);
+    panel.analysis[heightKey] = height;
     const margin = { top: 12, right: 18, bottom: 46, left: 46 };
     const innerWidth = width - margin.left - margin.right;
     const innerHeight = Math.max(1, height - margin.top - margin.bottom);
-    const xValue = item => intervalTimeFs(item);
-    const yValue = item => Number(item.event_score);
-    let xDomain = d3.extent(valid, xValue);
-    if (xDomain[0] === xDomain[1]) xDomain = [xDomain[0] - 1, xDomain[1] + 1];
-    const yMax = d3.max(valid, yValue) || 1;
-    const yDomain = [0, yMax * 1.05 || 1];
+    let xDomain = options.xDomain ? options.xDomain(valid) : d3.extent(valid, xValue);
+    if (!Array.isArray(xDomain) || xDomain.length !== 2 || !xDomain.every(Number.isFinite)) xDomain = [0, 1];
+    if (xDomain[0] === xDomain[1]) {
+      const pad = Number(options.xSingleValuePad ?? 1) || 1;
+      xDomain = [xDomain[0] - pad, xDomain[1] + pad];
+    }
+    let yDomain = options.yDomain ? options.yDomain(valid) : [0, (d3.max(valid, yValue) || 1) * 1.05 || 1];
+    if (!Array.isArray(yDomain) || yDomain.length !== 2 || !yDomain.every(Number.isFinite)) yDomain = [0, 1];
+    if (yDomain[0] === yDomain[1]) {
+      const pad = Number(options.ySingleValuePad ?? 1) || 1;
+      yDomain = [yDomain[0] - pad, yDomain[1] + pad];
+    }
     const xBase = d3.scaleLinear().domain(xDomain).range([0, innerWidth]);
     const yBase = d3.scaleLinear().domain(yDomain).range([innerHeight, 0]).nice();
-    const validIntervalKeys = new Set(valid.map(intervalKeyFromItem));
-    const selectedBeforePrune = panel.analysis.selectedIntervalKeys || [];
-    panel.analysis.selectedIntervalKeys = selectedBeforePrune.filter(key => validIntervalKeys.has(key));
-    if (panel.analysis.selectedIntervalKeys.length !== selectedBeforePrune.length) {
-      panel.analysis.highlight = aggregateSelectedIntervalHighlight(panel);
+    const validKeys = new Set(valid.map(keyFn));
+    const selectedBeforePrune = panel.analysis[selectedKeysKey] || [];
+    panel.analysis[selectedKeysKey] = selectedBeforePrune.filter(key => validKeys.has(key));
+    if (panel.analysis[selectedKeysKey].length !== selectedBeforePrune.length) {
+      panel.analysis.highlight = options.aggregateHighlight(panel);
     }
-    const clipId = `analysis-graph-clip-${String(panel.id).replace(/[^a-zA-Z0-9_-]/g, "")}`;
-    const graphKey = `${thresholdKey(panel.analysis.theta)}:${valid.map(intervalKeyFromItem).join("|")}`;
-    if (panel.analysis.intervalGraphKey !== graphKey) {
-      panel.analysis.intervalGraphKey = graphKey;
-      panel.analysis.intervalGraphZoomScale = 1;
-      panel.analysis.intervalGraphFocus = null;
+    const clipId = `analysis-graph-clip-${String(panel.id).replace(/[^a-zA-Z0-9_-]/g, "")}-${options.id}`;
+    const graphKey = `${options.id}:${thresholdKey(panel.analysis.theta)}:${valid.map(keyFn).join("|")}`;
+    if (panel.analysis[graphKeyField] !== graphKey) {
+      panel.analysis[graphKeyField] = graphKey;
+      panel.analysis[zoomKey] = 1;
+      panel.analysis[focusKey] = null;
     }
 
     const centerFocus = { x: innerWidth / 2, y: innerHeight / 2 };
-    const initialFocus = panel.analysis.intervalGraphFocus &&
-      Number.isFinite(Number(panel.analysis.intervalGraphFocus.x)) &&
-      Number.isFinite(Number(panel.analysis.intervalGraphFocus.y))
-        ? { x: Number(panel.analysis.intervalGraphFocus.x), y: Number(panel.analysis.intervalGraphFocus.y) }
+    const storedFocus = panel.analysis[focusKey];
+    const initialFocus = storedFocus &&
+      Number.isFinite(Number(storedFocus.x)) &&
+      Number.isFinite(Number(storedFocus.y))
+        ? { x: Number(storedFocus.x), y: Number(storedFocus.y) }
         : centerFocus;
-    const initialZoom = Number.isFinite(Number(panel.analysis.intervalGraphZoomScale))
-      ? Number(panel.analysis.intervalGraphZoomScale)
+    const initialZoom = Number.isFinite(Number(panel.analysis[zoomKey]))
+      ? Number(panel.analysis[zoomKey])
       : 1;
 
     const graph = container.append("div").attr("class", "analysis-graph");
@@ -2825,7 +3097,7 @@ d3.json("data.json").then(data => {
       .attr("transform", `translate(0,${innerHeight})`);
     const yAxis = g.append("g").attr("class", "analysis-graph-axis");
     const marks = g.append("g").attr("clip-path", `url(#${clipId})`);
-    const linePath = marks.append("path").attr("class", "analysis-graph-line");
+    const linePath = options.drawLine ? marks.append("path").attr("class", "analysis-graph-line") : null;
     const dotLayer = marks.append("g");
     const hitLayer = marks.append("g");
 
@@ -2834,7 +3106,7 @@ d3.json("data.json").then(data => {
       .attr("x", innerWidth / 2)
       .attr("y", innerHeight + 38)
       .attr("text-anchor", "middle")
-      .text("time (fs)");
+      .text(options.xLabel);
 
     g.append("text")
       .attr("class", "analysis-graph-label")
@@ -2842,7 +3114,7 @@ d3.json("data.json").then(data => {
       .attr("y", -34)
       .attr("text-anchor", "middle")
       .attr("transform", "rotate(-90)")
-      .text("event score");
+      .text(options.yLabel);
 
     g.insert("rect", ":first-child")
       .attr("class", "analysis-graph-zoom")
@@ -2864,7 +3136,7 @@ d3.json("data.json").then(data => {
     }
 
     function draw(next = null) {
-      const activeIntervalKeys = selectedIntervalKeySet(panel);
+      const activeKeys = options.selectedKeySet(panel);
       const stateForDraw = viewState(next);
       const visibleLeft = stateForDraw.focus.x - innerWidth / (2 * stateForDraw.zoomScale);
       const visibleRight = stateForDraw.focus.x + innerWidth / (2 * stateForDraw.zoomScale);
@@ -2878,35 +3150,37 @@ d3.json("data.json").then(data => {
         .range([innerHeight, 0]);
 
       grid.call(d3.axisLeft(yAxisScale).ticks(4).tickSize(-innerWidth).tickFormat(""));
-      xAxis.call(d3.axisBottom(xAxisScale).ticks(Math.min(8, valid.length)).tickFormat(value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits)));
-      yAxis.call(d3.axisLeft(yAxisScale).ticks(4));
+      xAxis.call(d3.axisBottom(xAxisScale).ticks(Math.min(8, valid.length)).tickFormat(options.xTickFormat || (value => Number(value).toFixed(2))));
+      yAxis.call(d3.axisLeft(yAxisScale).ticks(4).tickFormat(options.yTickFormat || undefined));
 
-      linePath.attr("d", d3.line()
-        .x(d => screenXFromWorld(xBase(xValue(d)), stateForDraw))
-        .y(d => screenYFromWorld(yBase(yValue(d)), stateForDraw))(valid));
+      if (linePath) {
+        linePath.attr("d", d3.line()
+          .x(d => screenXFromWorld(xBase(xValue(d)), stateForDraw))
+          .y(d => screenYFromWorld(yBase(yValue(d)), stateForDraw))(valid));
+      }
 
       dotLayer.selectAll("circle.analysis-graph-dot")
-        .data(valid, intervalKeyFromItem)
+        .data(valid, keyFn)
         .join("circle")
-        .attr("class", d => `analysis-graph-dot${activeIntervalKeys.has(intervalKeyFromItem(d)) ? " active" : ""}`)
+        .attr("class", d => `analysis-graph-dot${activeKeys.has(keyFn(d)) ? " active" : ""}`)
         .attr("cx", d => screenXFromWorld(xBase(xValue(d)), stateForDraw))
         .attr("cy", d => screenYFromWorld(yBase(yValue(d)), stateForDraw))
-        .attr("r", d => activeIntervalKeys.has(intervalKeyFromItem(d)) ? 4.8 : 3.7);
+        .attr("r", d => activeKeys.has(keyFn(d)) ? ANALYSIS_DOT_SELECTED_RADIUS : ANALYSIS_DOT_RADIUS);
 
       hitLayer.selectAll("circle.analysis-graph-hit")
-        .data(valid, intervalKeyFromItem)
+        .data(valid, keyFn)
         .join("circle")
         .attr("class", "analysis-graph-hit")
         .attr("cx", d => screenXFromWorld(xBase(xValue(d)), stateForDraw))
         .attr("cy", d => screenYFromWorld(yBase(yValue(d)), stateForDraw))
-        .attr("r", 8)
-        .on("mouseenter", (event, d) => updateTooltip(intervalGraphTooltip(d, panel), event.clientX, event.clientY))
-        .on("mousemove", (event, d) => updateTooltip(intervalGraphTooltip(d, panel), event.clientX, event.clientY))
+        .attr("r", ANALYSIS_DOT_HIT_RADIUS)
+        .on("mouseenter", (event, d) => updateTooltip(options.tooltip(d, panel), event.clientX, event.clientY))
+        .on("mousemove", (event, d) => updateTooltip(options.tooltip(d, panel), event.clientX, event.clientY))
         .on("mouseleave", hideTooltip)
         .on("click", (event, d) => {
           event.stopPropagation();
           hideTooltip();
-          toggleIntervalGraphSelection(panel, d);
+          options.onClick(panel, d);
         });
     }
 
@@ -2918,8 +3192,8 @@ d3.json("data.json").then(data => {
       initialZoomScale: initialZoom,
       initialViewFocus: initialFocus,
       applyTransform: next => {
-        panel.analysis.intervalGraphZoomScale = next.zoomScale;
-        panel.analysis.intervalGraphFocus = next.viewFocus
+        panel.analysis[zoomKey] = next.zoomScale;
+        panel.analysis[focusKey] = next.viewFocus
           ? { x: next.viewFocus.x, y: next.viewFocus.y }
           : null;
         draw(next);
@@ -2936,9 +3210,8 @@ d3.json("data.json").then(data => {
 
     const handle = container.append("div")
       .attr("class", "panel-resizer analysis-graph-resizer")
-      .attr("title", "Drag to resize interval plot");
+      .attr("title", options.resizeTitle || "Drag to resize plot");
     const handleNode = handle.node();
-    const svgNode = svg.node();
     let resizeState = null;
 
     const finishResize = event => {
@@ -2953,7 +3226,7 @@ d3.json("data.json").then(data => {
 
     handleNode.addEventListener("pointerdown", event => {
       if (event.button !== 0) return;
-      resizeState = { startY: event.clientY, startHeight: panel.analysis.intervalGraphHeight };
+      resizeState = { startY: event.clientY, startHeight: panel.analysis[heightKey] };
       handle.classed("active", true);
       handleNode.setPointerCapture(event.pointerId);
       event.preventDefault();
@@ -2962,11 +3235,638 @@ d3.json("data.json").then(data => {
     handleNode.addEventListener("pointermove", event => {
       if (!resizeState) return;
       const nextHeight = clampIntervalGraphHeight(resizeState.startHeight + event.clientY - resizeState.startY);
-      panel.analysis.intervalGraphHeight = nextHeight;
+      panel.analysis[heightKey] = nextHeight;
       svg.attr("viewBox", `0 0 ${width} ${nextHeight}`).style("height", `${nextHeight}px`);
       event.preventDefault();
     });
 
+    handleNode.addEventListener("pointerup", finishResize);
+    handleNode.addEventListener("pointercancel", finishResize);
+  }
+
+  function renderIntervalScoreGraph(container, panel, rows) {
+    renderAnalysisPointGraph(container, panel, rows, {
+      id: "intervals",
+      heightKey: "intervalGraphHeight",
+      zoomKey: "intervalGraphZoomScale",
+      focusKey: "intervalGraphFocus",
+      graphKey: "intervalGraphKey",
+      selectedKeysKey: "selectedIntervalKeys",
+      keyFn: intervalKeyFromItem,
+      xValue: intervalTimeFs,
+      yValue: item => Number(item.event_score),
+      sort: (a, b) => intervalTimeFs(a) - intervalTimeFs(b),
+      xLabel: "time (fs)",
+      yLabel: "event score",
+      xTickFormat: value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits),
+      drawLine: true,
+      tooltip: intervalGraphTooltip,
+      selectedKeySet: selectedIntervalKeySet,
+      aggregateHighlight: aggregateSelectedIntervalHighlight,
+      onClick: toggleIntervalGraphSelection,
+      resizeTitle: "Drag to resize interval plot"
+    });
+  }
+
+  function renderTrackScoreGraph(container, panel, rows) {
+    renderAnalysisPointGraph(container, panel, rows, {
+      id: "tracks",
+      heightKey: "trackGraphHeight",
+      zoomKey: "trackGraphZoomScale",
+      focusKey: "trackGraphFocus",
+      graphKey: "trackGraphKey",
+      selectedKeysKey: "selectedTrackKeys",
+      keyFn: trackKeyFromItem,
+      xValue: item => Number(item.length),
+      yValue: item => Number(item.mean_continuation_score),
+      sort: (a, b) => Number(a.length) - Number(b.length) || Number(b.mean_continuation_score) - Number(a.mean_continuation_score),
+      xDomain: valid => [0, (d3.max(valid, item => Number(item.length)) || 1) + 0.5],
+      yDomain: valid => [0, Math.max(1, d3.max(valid, item => Number(item.mean_continuation_score)) || 1) * 1.05],
+      xLabel: "feature length",
+      yLabel: "mean score",
+      xTickFormat: value => String(Math.round(Number(value))),
+      yTickFormat: value => formatScore(value),
+      drawLine: false,
+      tooltip: trackGraphTooltip,
+      selectedKeySet: selectedTrackKeySet,
+      aggregateHighlight: aggregateSelectedTrackHighlight,
+      onClick: toggleTrackGraphSelection,
+      resizeTitle: "Drag to resize continuing-feature plot"
+    });
+  }
+
+  function disagreementSummaryKey(item) {
+    return String(item?.id || `disagreement_pair:${Number(item?.source_timestep_index)}:${Number(item?.target_timestep_index)}`);
+  }
+
+  function disagreementHighlightPayload(item) {
+    const strongest = item?.strongest_disagreement || item;
+    return {
+      id: disagreementSummaryKey(item),
+      disagreementKey: disagreementSummaryKey(item),
+      label: "Domain/range disagreement",
+      nodes: strongest?.highlight?.nodes || item?.highlight?.nodes || [],
+      links: strongest?.highlight?.links || item?.highlight?.links || [],
+      start: Number(item?.source_timestep_index),
+      end: Number(item?.target_timestep_index),
+    };
+  }
+
+  function selectedDisagreementKeySet(panel) {
+    ensurePanelAnalysis(panel);
+    return new Set((panel.analysis.selectedDisagreementKeys || []).filter(Boolean));
+  }
+
+  function aggregateSelectedDisagreementHighlight(panel) {
+    ensurePanelAnalysis(panel);
+    const selectedKeys = selectedDisagreementKeySet(panel);
+    if (!selectedKeys.size) return null;
+    const selected = domainRangeDisagreementData().rankedSummary
+      .filter(item => selectedKeys.has(disagreementSummaryKey(item)))
+      .map(disagreementHighlightPayload);
+    if (!selected.length) return null;
+    const label = `${selected.length} selected domain/range disagreement${selected.length === 1 ? "" : "s"}`;
+    return {
+      ...combinedHighlight(selected, label),
+      id: "selected-domain-range-disagreements",
+      disagreementKeys: selected.map(item => item.disagreementKey).filter(Boolean),
+    };
+  }
+
+  function toggleDisagreementGraphSelection(panel, item) {
+    ensurePanelAnalysis(panel);
+    const payload = disagreementHighlightPayload(item);
+    const key = payload.disagreementKey;
+    if (!key) return;
+    const selected = panel.analysis.selectedDisagreementKeys || [];
+    const alreadySelected = selected.includes(key);
+    panel.analysis.selectedIntervalKeys = [];
+    panel.analysis.selectedTrackKeys = [];
+    panel.analysis.selectedAgreementPointKeys = [];
+    panel.analysis.selectedDisagreementKeys = alreadySelected ? [] : [key];
+    panel.analysis.highlight = aggregateSelectedDisagreementHighlight(panel);
+    if (!alreadySelected) queueAnalysisFocusPulse(panel, payload);
+    expandRangesForHighlight(panel.analysis.highlight);
+    renderAll();
+  }
+
+  function disagreementGraphTooltip(item) {
+    const strongest = item?.strongest_disagreement || {};
+    return `
+      <strong>${escapeHtml(intervalTimestepPrimary(item, "source"))} -> ${escapeHtml(intervalTimestepPrimary(item, "target"))}</strong>
+      <div class="tooltip-grid" style="margin-top:8px;">
+        <div>Time</div><div>${escapeHtml(formatIntervalFs(intervalTimeFs(item)))}</div>
+        <div>Max disagreement score</div><div>${escapeHtml(formatScore(item.max_disagreement_score))}</div>
+        <div>Mean disagreement score</div><div>${escapeHtml(formatScore(item.mean_disagreement_score))}</div>
+        <div>Disagreements / compared</div><div>${escapeHtml(item.disagreement_count)} / ${escapeHtml(item.compared_sources)}</div>
+        <div>Disagreement fraction</div><div>${escapeHtml(formatScore(100 * Number(item.disagreement_fraction || 0)))}%</div>
+        <div>Strongest source sheet</div><div>S${escapeHtml(strongest.source_sheet_id ?? "-")}</div>
+        <div>Range target</div><div>S${escapeHtml(strongest.shape_target_sheet_id ?? "-")} (${escapeHtml(formatScore(strongest.shape_score))})</div>
+        <div>Domain target</div><div>S${escapeHtml(strongest.overlap_target_sheet_id ?? "-")} (${escapeHtml(formatScore(strongest.overlap_max_percent))})</div>
+        <div>Shape / domain loss</div><div>${escapeHtml(formatScore(strongest.shape_loss))} / ${escapeHtml(formatScore(strongest.overlap_loss))}</div>
+      </div>`;
+  }
+
+  function renderDisagreementScoreGraph(container, panel, rows) {
+    renderAnalysisPointGraph(container, panel, rows, {
+      id: "domain-range-disagreement",
+      heightKey: "disagreementGraphHeight",
+      zoomKey: "disagreementGraphZoomScale",
+      focusKey: "disagreementGraphFocus",
+      graphKey: "disagreementGraphKey",
+      selectedKeysKey: "selectedDisagreementKeys",
+      keyFn: disagreementSummaryKey,
+      xValue: intervalTimeFs,
+      yValue: item => Number(item.max_disagreement_score),
+      sort: (a, b) => intervalTimeFs(a) - intervalTimeFs(b),
+      xLabel: "time (fs)",
+      yLabel: "max disagreement score",
+      xTickFormat: value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits),
+      yTickFormat: value => formatScore(value),
+      drawLine: false,
+      tooltip: disagreementGraphTooltip,
+      selectedKeySet: selectedDisagreementKeySet,
+      aggregateHighlight: aggregateSelectedDisagreementHighlight,
+      onClick: toggleDisagreementGraphSelection,
+      resizeTitle: "Drag to resize domain/range disagreement plot"
+    });
+  }
+
+  function agreementMetricKey(scope, metric) {
+    return `${scope}:${metric}`;
+  }
+
+  function agreementMetricOptions() {
+    const options = [{
+      key: agreementMetricKey("shape", "combined"),
+      scope: "shape",
+      metric: "combined",
+      label: metricLabel("shape", "combined"),
+    }];
+    options.push(...shapeScoreComponentIds
+      .filter(metricId => metricId !== "combined")
+      .map(metricId => ({
+        key: agreementMetricKey("shape", metricId),
+        scope: "shape",
+        metric: metricId,
+        label: metricLabel("shape", metricId),
+      })));
+    if (overlapMetricIds.includes("overlap_max_percent") || overlapPairLookup.size) {
+      options.push({
+        key: agreementMetricKey("overlap", "overlap_max_percent"),
+        scope: "overlap",
+        metric: "overlap_max_percent",
+        label: metricLabel("overlap", "overlap_max_percent"),
+      });
+    }
+    return options;
+  }
+
+  function agreementMetricInfo(metricKey) {
+    return agreementMetricOptions().find(option => option.key === metricKey) || null;
+  }
+
+  function agreementMetricColor(metricKey, index = 0) {
+    const options = agreementMetricOptions();
+    const optionIndex = options.findIndex(option => option.key === metricKey);
+    const colorIndex = optionIndex >= 0 ? optionIndex : index;
+    return AGREEMENT_SERIES_COLORS[colorIndex % AGREEMENT_SERIES_COLORS.length];
+  }
+
+  function bestByScore(rows, scoreFn) {
+    let best = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (const row of rows || []) {
+      const score = Number(scoreFn(row));
+      if (!Number.isFinite(score)) continue;
+      if (score > bestScore) {
+        best = row;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
+  function shapeMetricScore(match, metric) {
+    if (metric === "combined") return analysisCombinedScore(match);
+    const value = Number(match?.metrics?.[metric] ?? match?.[metric]);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function overlapMetricScore(match, metric) {
+    const metrics = match?.metrics || match || {};
+    const sourcePercent = Number(metrics.overlap_source_percent ?? match?.source_percent ?? 0) || 0;
+    const targetPercent = Number(metrics.overlap_target_percent ?? match?.target_percent ?? 0) || 0;
+    const fallback = Math.max(sourcePercent, targetPercent);
+    const value = Number(metrics[metric] ?? metrics.overlap_max_percent ?? fallback);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function meanOrZero(sum, count) {
+    return count > 0 ? sum / count : 0;
+  }
+
+  function metricAgreementRows(metricKey) {
+    const cacheKey = `agreement:${metricKey}`;
+    if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
+    const info = agreementMetricInfo(metricKey);
+    if (!info) return [];
+
+    const rows = [];
+    const shapePairs = Array.isArray(data.shape_pairs) ? data.shape_pairs : [];
+    for (const shapePair of shapePairs) {
+      const sourceIndex = Number(shapePair.source_timestep_index);
+      const targetIndex = Number(shapePair.target_timestep_index);
+      if (!Number.isFinite(sourceIndex) || !Number.isFinite(targetIndex)) continue;
+      const pairKey = `${sourceIndex}:${targetIndex}`;
+      const shapeGroups = groupMatchesByField(shapePair.matches || [], "source_sheet_id");
+      const overlapPair = overlapPairLookup.get(pairKey);
+      const overlapGroups = overlapPair ? groupMatchesByField(overlapPair.matches || [], "source_sheet_id") : new Map();
+
+      let compared = 0;
+      let agreements = 0;
+      let lossSum = 0;
+      let lossCount = 0;
+      let referenceBestSum = 0;
+      let candidateMetricBestSum = 0;
+      let candidateReferenceSum = 0;
+      let candidateReferenceCount = 0;
+
+      if (info.scope === "shape") {
+        for (const matches of shapeGroups.values()) {
+          const combinedBest = bestByScore(matches, match => shapeMetricScore(match, "combined"));
+          const metricBest = bestByScore(matches, match => shapeMetricScore(match, info.metric));
+          if (!combinedBest || !metricBest) continue;
+          compared += 1;
+          if (Number(combinedBest.target_sheet_id) === Number(metricBest.target_sheet_id)) agreements += 1;
+          const referenceScore = shapeMetricScore(combinedBest, "combined");
+          const candidateReferenceScore = shapeMetricScore(metricBest, "combined");
+          referenceBestSum += referenceScore;
+          candidateMetricBestSum += shapeMetricScore(metricBest, info.metric);
+          candidateReferenceSum += candidateReferenceScore;
+          candidateReferenceCount += 1;
+          lossSum += referenceScore - candidateReferenceScore;
+          lossCount += 1;
+        }
+      } else if (info.scope === "overlap") {
+        for (const [sourceSheetId, overlapMatches] of overlapGroups.entries()) {
+          const shapeMatches = shapeGroups.get(sourceSheetId) || [];
+          const combinedBest = bestByScore(shapeMatches, match => shapeMetricScore(match, "combined"));
+          const overlapBest = bestByScore(overlapMatches, match => overlapMetricScore(match, info.metric));
+          if (!combinedBest || !overlapBest) continue;
+          compared += 1;
+          if (Number(combinedBest.target_sheet_id) === Number(overlapBest.target_sheet_id)) agreements += 1;
+          const referenceScore = shapeMetricScore(combinedBest, "combined");
+          referenceBestSum += referenceScore;
+          candidateMetricBestSum += overlapMetricScore(overlapBest, info.metric);
+          const overlapTarget = Number(overlapBest.target_sheet_id);
+          const shapeForOverlapTarget = (shapeMatches || []).find(match => Number(match.target_sheet_id) === overlapTarget);
+          if (shapeForOverlapTarget) {
+            const candidateReferenceScore = shapeMetricScore(shapeForOverlapTarget, "combined");
+            candidateReferenceSum += candidateReferenceScore;
+            candidateReferenceCount += 1;
+            lossSum += referenceScore - candidateReferenceScore;
+            lossCount += 1;
+          }
+        }
+      }
+
+      if (!compared) continue;
+      rows.push({
+        metricKey,
+        candidate_scope: info.scope,
+        candidate_metric: info.metric,
+        label: info.label,
+        source_timestep_index: sourceIndex,
+        target_timestep_index: targetIndex,
+        source_label: shapePair.source_label || overlapPair?.source_label || String(sourceIndex),
+        target_label: shapePair.target_label || overlapPair?.target_label || String(targetIndex),
+        compared_sources: compared,
+        agreements,
+        agreement_fraction: agreements / compared,
+        mean_reference_loss_if_candidate_used: meanOrZero(lossSum, lossCount),
+        average_reference_best_score: meanOrZero(referenceBestSum, compared),
+        average_candidate_best_score: meanOrZero(candidateMetricBestSum, compared),
+        average_candidate_reference_score: meanOrZero(candidateReferenceSum, candidateReferenceCount),
+      });
+    }
+    rows.sort((a, b) => Number(a.source_timestep_index) - Number(b.source_timestep_index) || Number(a.target_timestep_index) - Number(b.target_timestep_index));
+    analysisRuntimeCache.set(cacheKey, rows);
+    return rows;
+  }
+
+  function agreementRowsInVisibleRange(metricKey) {
+    return metricAgreementRows(metricKey).filter(row => inRanges(Number(row.source_timestep_index)) && inRanges(Number(row.target_timestep_index)));
+  }
+
+  function summarizeAgreementRows(rows) {
+    let compared = 0;
+    let agreements = 0;
+    let weightedLoss = 0;
+    let weightedReferenceBest = 0;
+    let weightedCandidateBest = 0;
+    for (const row of rows || []) {
+      const count = Math.max(0, Number(row.compared_sources) || 0);
+      compared += count;
+      agreements += Math.max(0, Number(row.agreements) || 0);
+      weightedLoss += (Number(row.mean_reference_loss_if_candidate_used) || 0) * count;
+      weightedReferenceBest += (Number(row.average_reference_best_score) || 0) * count;
+      weightedCandidateBest += (Number(row.average_candidate_best_score) || 0) * count;
+    }
+    return {
+      compared_sources: compared,
+      agreements,
+      agreement_fraction: compared ? agreements / compared : 0,
+      mean_reference_loss_if_candidate_used: compared ? weightedLoss / compared : 0,
+      average_reference_best_score: compared ? weightedReferenceBest / compared : 0,
+      average_candidate_best_score: compared ? weightedCandidateBest / compared : 0,
+    };
+  }
+
+  function agreementTimeFs(row) {
+    const fsRaw = window.ReebViewerCommon.formatFsFromLabel(row?.source_label, TIMESTEP_LABEL_OPTIONS);
+    const fs = Number(fsRaw);
+    if (Number.isFinite(fs)) return fs;
+    return Number(row?.source_timestep_index) || 0;
+  }
+
+  function agreementPointKey(row) {
+    return `${row?.metricKey}:${Number(row?.source_timestep_index)}:${Number(row?.target_timestep_index)}`;
+  }
+
+  function selectedAgreementPointKeySet(panel) {
+    ensurePanelAnalysis(panel);
+    return new Set((panel.analysis.selectedAgreementPointKeys || []).filter(Boolean));
+  }
+
+  function toggleAgreementPointSelection(panel, row) {
+    ensurePanelAnalysis(panel);
+    const key = agreementPointKey(row);
+    if (!key) return;
+    panel.analysis.selectedIntervalKeys = [];
+    panel.analysis.selectedTrackKeys = [];
+    panel.analysis.selectedDisagreementKeys = [];
+    panel.analysis.highlight = null;
+    const selected = panel.analysis.selectedAgreementPointKeys || [];
+    const alreadySelected = selected.includes(key);
+    panel.analysis.selectedAgreementPointKeys = alreadySelected ? [] : [key];
+    if (!alreadySelected) queueAnalysisFocusPulse(panel, {
+      start: Number(row.source_timestep_index),
+      end: Number(row.target_timestep_index),
+    });
+    renderAll();
+  }
+
+  function agreementGraphTooltip(row) {
+    return `
+      <strong>${escapeHtml(row.label)}: ${escapeHtml(intervalTimestepPrimary(row, "source"))} -> ${escapeHtml(intervalTimestepPrimary(row, "target"))}</strong>
+      <div class="tooltip-grid" style="margin-top:8px;">
+        <div>Agreement</div><div>${escapeHtml(formatScore(100 * Number(row.agreement_fraction || 0)))}%</div>
+        <div>Compared sources</div><div>${escapeHtml(row.compared_sources)}</div>
+        <div>Agreements</div><div>${escapeHtml(row.agreements)}</div>
+        <div>Loss</div><div>${escapeHtml(formatScore(row.mean_reference_loss_if_candidate_used))}</div>
+        <div>Avg reference best</div><div>${escapeHtml(formatScore(row.average_reference_best_score))}</div>
+        <div>Avg candidate best</div><div>${escapeHtml(formatScore(row.average_candidate_best_score))}</div>
+        <div>Avg candidate combined</div><div>${escapeHtml(formatScore(row.average_candidate_reference_score))}</div>
+      </div>`;
+  }
+
+  function renderMetricAgreementSummaries(container, panel, selectedMetrics) {
+    const summary = container.append("div").attr("class", "analysis-metric-summary");
+    selectedMetrics.forEach((metricKey, index) => {
+      const info = agreementMetricInfo(metricKey);
+      if (!info) return;
+      const rows = agreementRowsInVisibleRange(metricKey);
+      const totals = summarizeAgreementRows(rows);
+      const card = summary.append("div").attr("class", "analysis-metric-card");
+      const header = card.append("header");
+      const title = header.append("span").attr("class", "analysis-metric-title");
+      title.append("span")
+        .attr("class", "analysis-metric-color")
+        .style("background", agreementMetricColor(metricKey, index));
+      title.append("span").text(info.label);
+      header.append("button")
+        .attr("type", "button")
+        .text("Remove")
+        .on("click", () => {
+          panel.analysis.selectedAgreementMetrics = (panel.analysis.selectedAgreementMetrics || []).filter(key => key !== metricKey);
+          panel.analysis.selectedAgreementPointKeys = (panel.analysis.selectedAgreementPointKeys || []).filter(key => !key.startsWith(`${metricKey}:`));
+          renderAll();
+        });
+      card.append("div").text(`agreement ${formatScore(100 * totals.agreement_fraction)}%`);
+      card.append("div").text(`loss ${formatScore(totals.mean_reference_loss_if_candidate_used)}`);
+      card.append("div").text(`compared sources ${totals.compared_sources}`);
+    });
+  }
+
+  function renderMetricAgreementGraph(container, panel, selectedMetrics) {
+    const series = selectedMetrics
+      .map((metricKey, index) => ({
+        metricKey,
+        info: agreementMetricInfo(metricKey),
+        color: agreementMetricColor(metricKey, index),
+        rows: agreementRowsInVisibleRange(metricKey),
+      }))
+      .filter(item => item.info && item.rows.length);
+    if (!series.length) {
+      container.append("div").attr("class", "analysis-hint").text("No metric agreement rows in the selected timestep range.");
+      return;
+    }
+
+    const allRows = series.flatMap(item => item.rows);
+    const visiblePointKeys = new Set(allRows.map(agreementPointKey));
+    panel.analysis.selectedAgreementPointKeys = (panel.analysis.selectedAgreementPointKeys || []).filter(key => visiblePointKeys.has(key));
+    const width = 760;
+    const height = clampIntervalGraphHeight(panel.analysis.agreementGraphHeight);
+    panel.analysis.agreementGraphHeight = height;
+    const margin = { top: 12, right: 18, bottom: 46, left: 46 };
+    const innerWidth = width - margin.left - margin.right;
+    const innerHeight = Math.max(1, height - margin.top - margin.bottom);
+    let xDomain = d3.extent(allRows, agreementTimeFs);
+    if (xDomain[0] === xDomain[1]) xDomain = [xDomain[0] - 1, xDomain[1] + 1];
+    const yDomain = [0, 100];
+    const xBase = d3.scaleLinear().domain(xDomain).range([0, innerWidth]);
+    const yBase = d3.scaleLinear().domain(yDomain).range([innerHeight, 0]);
+    const graphKey = `agreement:${selectedMetrics.join("|")}:${allRows.map(row => `${row.metricKey}:${row.source_timestep_index}:${row.target_timestep_index}`).join("|")}`;
+    if (panel.analysis.agreementGraphKey !== graphKey) {
+      panel.analysis.agreementGraphKey = graphKey;
+      panel.analysis.agreementGraphZoomScale = 1;
+      panel.analysis.agreementGraphFocus = null;
+    }
+    const centerFocus = { x: innerWidth / 2, y: innerHeight / 2 };
+    const initialFocus = panel.analysis.agreementGraphFocus &&
+      Number.isFinite(Number(panel.analysis.agreementGraphFocus.x)) &&
+      Number.isFinite(Number(panel.analysis.agreementGraphFocus.y))
+        ? { x: Number(panel.analysis.agreementGraphFocus.x), y: Number(panel.analysis.agreementGraphFocus.y) }
+        : centerFocus;
+    const initialZoom = Number.isFinite(Number(panel.analysis.agreementGraphZoomScale))
+      ? Number(panel.analysis.agreementGraphZoomScale)
+      : 1;
+
+    const graph = container.append("div").attr("class", "analysis-graph");
+    const svg = graph.append("svg")
+      .attr("viewBox", `0 0 ${width} ${height}`)
+      .style("height", `${height}px`);
+    const clipId = `analysis-agreement-clip-${String(panel.id).replace(/[^a-zA-Z0-9_-]/g, "")}`;
+    svg.append("defs")
+      .append("clipPath")
+      .attr("id", clipId)
+      .append("rect")
+      .attr("width", innerWidth)
+      .attr("height", innerHeight);
+    const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+    const grid = g.append("g").attr("class", "analysis-graph-grid");
+    const xAxis = g.append("g")
+      .attr("class", "analysis-graph-axis")
+      .attr("transform", `translate(0,${innerHeight})`);
+    const yAxis = g.append("g").attr("class", "analysis-graph-axis");
+    const marks = g.append("g").attr("clip-path", `url(#${clipId})`);
+    const lineLayer = marks.append("g");
+    const dotLayer = marks.append("g");
+    const hitLayer = marks.append("g");
+
+    g.append("text")
+      .attr("class", "analysis-graph-label")
+      .attr("x", innerWidth / 2)
+      .attr("y", innerHeight + 38)
+      .attr("text-anchor", "middle")
+      .text("time (fs)");
+    g.append("text")
+      .attr("class", "analysis-graph-label")
+      .attr("x", -innerHeight / 2)
+      .attr("y", -34)
+      .attr("text-anchor", "middle")
+      .attr("transform", "rotate(-90)")
+      .text("agreement (%)");
+    g.insert("rect", ":first-child")
+      .attr("class", "analysis-graph-zoom")
+      .attr("width", innerWidth)
+      .attr("height", innerHeight);
+
+    function viewState(next = null) {
+      const focus = next?.viewFocus || graphCamera?.getViewFocus?.() || centerFocus;
+      const zoomScale = Math.max(1e-6, Number(next?.zoomScale ?? graphCamera?.getZoomScale?.() ?? initialZoom) || 1);
+      return { focus, zoomScale };
+    }
+    function screenXFromWorld(worldX, stateForDraw) {
+      return innerWidth / 2 + (worldX - stateForDraw.focus.x) * stateForDraw.zoomScale;
+    }
+    function screenYFromWorld(worldY, stateForDraw) {
+      return innerHeight / 2 + (worldY - stateForDraw.focus.y) * stateForDraw.zoomScale;
+    }
+    function draw(next = null) {
+      const selectedPointKeys = selectedAgreementPointKeySet(panel);
+      const stateForDraw = viewState(next);
+      const visibleLeft = stateForDraw.focus.x - innerWidth / (2 * stateForDraw.zoomScale);
+      const visibleRight = stateForDraw.focus.x + innerWidth / (2 * stateForDraw.zoomScale);
+      const visibleTop = stateForDraw.focus.y - innerHeight / (2 * stateForDraw.zoomScale);
+      const visibleBottom = stateForDraw.focus.y + innerHeight / (2 * stateForDraw.zoomScale);
+      const xAxisScale = d3.scaleLinear()
+        .domain([xBase.invert(visibleLeft), xBase.invert(visibleRight)])
+        .range([0, innerWidth]);
+      const yAxisScale = d3.scaleLinear()
+        .domain([yBase.invert(visibleBottom), yBase.invert(visibleTop)])
+        .range([innerHeight, 0]);
+      grid.call(d3.axisLeft(yAxisScale).ticks(4).tickSize(-innerWidth).tickFormat(""));
+      xAxis.call(d3.axisBottom(xAxisScale).ticks(8).tickFormat(value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits)));
+      yAxis.call(d3.axisLeft(yAxisScale).ticks(5).tickFormat(value => `${formatScore(value)}%`));
+
+      lineLayer.selectAll("path.analysis-agreement-line")
+        .data(series, item => item.metricKey)
+        .join("path")
+        .attr("class", "analysis-agreement-line")
+        .attr("stroke", item => item.color)
+        .attr("opacity", 1)
+        .attr("stroke-opacity", 1)
+        .style("opacity", 1)
+        .style("stroke-opacity", 1)
+        .style("mix-blend-mode", "normal")
+        .attr("d", item => d3.line()
+          .x(row => screenXFromWorld(xBase(agreementTimeFs(row)), stateForDraw))
+          .y(row => screenYFromWorld(yBase(100 * Number(row.agreement_fraction || 0)), stateForDraw))(item.rows));
+
+      dotLayer.selectAll("circle.analysis-agreement-dot")
+        .data(allRows, agreementPointKey)
+        .join("circle")
+        .attr("class", row => `analysis-agreement-dot${selectedPointKeys.has(agreementPointKey(row)) ? " active" : ""}`)
+        .attr("fill", row => agreementMetricColor(row.metricKey))
+        .attr("opacity", 1)
+        .attr("fill-opacity", 1)
+        .style("opacity", 1)
+        .style("fill-opacity", 1)
+        .style("mix-blend-mode", "normal")
+        .attr("cx", row => screenXFromWorld(xBase(agreementTimeFs(row)), stateForDraw))
+        .attr("cy", row => screenYFromWorld(yBase(100 * Number(row.agreement_fraction || 0)), stateForDraw))
+        .attr("r", row => selectedPointKeys.has(agreementPointKey(row)) ? ANALYSIS_DOT_SELECTED_RADIUS : ANALYSIS_DOT_RADIUS);
+
+      hitLayer.selectAll("circle.analysis-agreement-hit")
+        .data(allRows, agreementPointKey)
+        .join("circle")
+        .attr("class", "analysis-agreement-hit")
+        .attr("cx", row => screenXFromWorld(xBase(agreementTimeFs(row)), stateForDraw))
+        .attr("cy", row => screenYFromWorld(yBase(100 * Number(row.agreement_fraction || 0)), stateForDraw))
+        .attr("r", ANALYSIS_DOT_HIT_RADIUS)
+        .on("mouseenter", (event, row) => updateTooltip(agreementGraphTooltip(row), event.clientX, event.clientY))
+        .on("mousemove", (event, row) => updateTooltip(agreementGraphTooltip(row), event.clientX, event.clientY))
+        .on("mouseleave", hideTooltip)
+        .on("click", (event, row) => {
+          event.stopPropagation();
+          hideTooltip();
+          toggleAgreementPointSelection(panel, row);
+        });
+    }
+
+    const graphCamera = window.ReebViewerCommon.createCameraController({
+      zoomMin: 0.1,
+      zoomMax: Math.max(20, Math.min(80, allRows.length * 2)),
+      zoomStep: ZOOM_STEP,
+      panDragThreshold: PAN_DRAG_THRESHOLD,
+      initialZoomScale: initialZoom,
+      initialViewFocus: initialFocus,
+      applyTransform: next => {
+        panel.analysis.agreementGraphZoomScale = next.zoomScale;
+        panel.analysis.agreementGraphFocus = next.viewFocus
+          ? { x: next.viewFocus.x, y: next.viewFocus.y }
+          : null;
+        draw(next);
+      }
+    });
+    draw({ zoomScale: graphCamera.getZoomScale(), viewFocus: graphCamera.getViewFocus() || centerFocus });
+    graphCamera.bindPanAndWheel(svg.node(), {
+      cursorTarget: svg.node(),
+      isPanTarget: target => !target.closest(".analysis-agreement-hit, .analysis-agreement-dot, button, input, select, label"),
+      ensureFocus: () => graphCamera.getViewFocus() || centerFocus,
+      onPanState: active => graph.classed("dragging", active)
+    });
+
+    const handle = container.append("div")
+      .attr("class", "panel-resizer analysis-graph-resizer")
+      .attr("title", "Drag to resize metric-agreement plot");
+    const handleNode = handle.node();
+    let resizeState = null;
+    const finishResize = event => {
+      if (!resizeState) return;
+      resizeState = null;
+      handle.classed("active", false);
+      try {
+        if (handleNode.hasPointerCapture(event.pointerId)) handleNode.releasePointerCapture(event.pointerId);
+      } catch (_) {}
+      renderAll();
+    };
+    handleNode.addEventListener("pointerdown", event => {
+      if (event.button !== 0) return;
+      resizeState = { startY: event.clientY, startHeight: panel.analysis.agreementGraphHeight };
+      handle.classed("active", true);
+      handleNode.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    handleNode.addEventListener("pointermove", event => {
+      if (!resizeState) return;
+      const nextHeight = clampIntervalGraphHeight(resizeState.startHeight + event.clientY - resizeState.startY);
+      panel.analysis.agreementGraphHeight = nextHeight;
+      svg.attr("viewBox", `0 0 ${width} ${nextHeight}`).style("height", `${nextHeight}px`);
+      event.preventDefault();
+    });
     handleNode.addEventListener("pointerup", finishResize);
     handleNode.addEventListener("pointercancel", finishResize);
   }
@@ -3006,6 +3906,11 @@ d3.json("data.json").then(data => {
     return new Set((panel.analysis.selectedIntervalKeys || []).filter(Boolean));
   }
 
+  function selectedTrackKeySet(panel) {
+    ensurePanelAnalysis(panel);
+    return new Set((panel.analysis.selectedTrackKeys || []).filter(Boolean));
+  }
+
   function aggregateSelectedIntervalHighlight(panel) {
     ensurePanelAnalysis(panel);
     const selectedKeys = selectedIntervalKeySet(panel);
@@ -3022,11 +3927,30 @@ d3.json("data.json").then(data => {
     };
   }
 
+  function aggregateSelectedTrackHighlight(panel) {
+    ensurePanelAnalysis(panel);
+    const selectedKeys = selectedTrackKeySet(panel);
+    if (!selectedKeys.size) return null;
+    const selected = analysisTracks(panel)
+      .filter(item => selectedKeys.has(trackKeyFromItem(item)))
+      .map(item => trackHighlightPayload(item, panel));
+    if (!selected.length) return null;
+    const label = `${selected.length} selected continuing feature${selected.length === 1 ? "" : "s"}`;
+    return {
+      ...combinedHighlight(selected, label),
+      id: "selected-tracks",
+      trackKeys: selected.map(item => item.trackKey).filter(Boolean),
+    };
+  }
+
   function toggleIntervalGraphSelection(panel, item) {
     ensurePanelAnalysis(panel);
     const payload = intervalHighlightPayload(item, panel);
     const key = payload.intervalKey;
     if (!key) return;
+    panel.analysis.selectedTrackKeys = [];
+    panel.analysis.selectedAgreementPointKeys = [];
+    panel.analysis.selectedDisagreementKeys = [];
     const selected = panel.analysis.selectedIntervalKeys || [];
     const alreadySelected = selected.includes(key);
     panel.analysis.selectedIntervalKeys = alreadySelected
@@ -3034,6 +3958,25 @@ d3.json("data.json").then(data => {
       : [...selected, key];
     panel.analysis.highlight = aggregateSelectedIntervalHighlight(panel);
     if (!alreadySelected) queueAnalysisFocusPulse(panel, payload);
+    expandRangesForHighlight(panel.analysis.highlight);
+    renderAll();
+  }
+
+  function toggleTrackGraphSelection(panel, item) {
+    ensurePanelAnalysis(panel);
+    const payload = trackHighlightPayload(item, panel);
+    const key = payload.trackKey;
+    if (!key) return;
+    panel.analysis.selectedIntervalKeys = [];
+    panel.analysis.selectedAgreementPointKeys = [];
+    panel.analysis.selectedDisagreementKeys = [];
+    const selected = panel.analysis.selectedTrackKeys || [];
+    const alreadySelected = selected.includes(key);
+    panel.analysis.selectedTrackKeys = alreadySelected
+      ? selected.filter(entry => entry !== key)
+      : [...selected, key];
+    panel.analysis.highlight = aggregateSelectedTrackHighlight(panel);
+    if (!alreadySelected) queueAnalysisFocusPulse(panel, { start: payload.start, end: payload.start });
     expandRangesForHighlight(panel.analysis.highlight);
     renderAll();
   }
@@ -3073,6 +4016,9 @@ d3.json("data.json").then(data => {
   function setAnalysisHighlight(panel, highlight, focusRange = true) {
     ensurePanelAnalysis(panel);
     panel.analysis.selectedIntervalKeys = [];
+    panel.analysis.selectedTrackKeys = [];
+    panel.analysis.selectedAgreementPointKeys = [];
+    panel.analysis.selectedDisagreementKeys = [];
     state.analysisFocusPulse = null;
     panel.analysis.highlight = highlight;
     if (focusRange && highlight && Number.isFinite(Number(highlight.start)) && Number.isFinite(Number(highlight.end))) {
@@ -3090,6 +4036,9 @@ d3.json("data.json").then(data => {
   function clearAnalysisHighlight(panel) {
     ensurePanelAnalysis(panel);
     panel.analysis.selectedIntervalKeys = [];
+    panel.analysis.selectedTrackKeys = [];
+    panel.analysis.selectedAgreementPointKeys = [];
+    panel.analysis.selectedDisagreementKeys = [];
     state.analysisFocusPulse = null;
     panel.analysis.highlight = null;
     renderAll();
@@ -3126,6 +4075,9 @@ d3.json("data.json").then(data => {
     theta.on("change", event => {
       panel.analysis.theta = Number(event.target.value);
       panel.analysis.selectedIntervalKeys = [];
+      panel.analysis.selectedTrackKeys = [];
+      panel.analysis.selectedAgreementPointKeys = [];
+      panel.analysis.selectedDisagreementKeys = [];
       state.analysisFocusPulse = null;
       panel.analysis.highlight = null;
       renderAll();
@@ -3150,6 +4102,16 @@ d3.json("data.json").then(data => {
         .attr("class", `analysis-tab${panel.analysis.tab === id ? " active" : ""}`)
         .text(label)
         .on("click", () => {
+          if (panel.analysis.tab !== id) {
+            panel.analysis.selectedAgreementPointKeys = [];
+            if (id !== "disagreement") panel.analysis.selectedDisagreementKeys = [];
+            if (id === "agreement" || id === "disagreement") {
+              panel.analysis.selectedIntervalKeys = [];
+              panel.analysis.selectedTrackKeys = [];
+              panel.analysis.highlight = null;
+            }
+            state.analysisFocusPulse = null;
+          }
           panel.analysis.tab = id;
           renderAll();
         });
@@ -3198,19 +4160,8 @@ d3.json("data.json").then(data => {
       controls.append("button").attr("type", "button").text("Highlight")
         .on("click", () => setAnalysisHighlight(panel, combinedHighlight(visibleRows, `Top ${visibleRows.length} continuing features`), false));
 
-      const list = content.append("div").attr("class", "analysis-list");
-      visibleRows.forEach((item, index) => {
-        const row = list.append("button").attr("type", "button").attr("class", "analysis-row");
-        row.append("strong").text(`${index + 1}. S${item.start_sheet_id} ${item.start_label} -> ${item.end_label}`);
-        row.append("span").text(`length ${item.length} | mean ${formatScore(item.mean_continuation_score)} | min ${formatScore(item.min_continuation_score)}`);
-        row.on("click", () => setAnalysisHighlight(panel, {
-          label: `Track ${item.track_id}`,
-          nodes: item.highlight?.nodes || [],
-          links: item.highlight?.links || [],
-          start: item.start_timestep_index,
-          end: item.end_timestep_index,
-        }, false));
-      });
+      renderTrackScoreGraph(content, panel, visibleRows);
+
       if (!rows.length) content.append("div").attr("class", "analysis-hint").text("No continuing-feature analysis for this theta.");
       return;
     }
@@ -3233,6 +4184,9 @@ d3.json("data.json").then(data => {
             panel.analysis.theta = Number(row.threshold);
             panel.analysis.tab = "intervals";
             panel.analysis.selectedIntervalKeys = [];
+            panel.analysis.selectedTrackKeys = [];
+            panel.analysis.selectedAgreementPointKeys = [];
+            panel.analysis.selectedDisagreementKeys = [];
             state.analysisFocusPulse = null;
             panel.analysis.highlight = null;
             renderAll();
@@ -3242,37 +4196,90 @@ d3.json("data.json").then(data => {
     }
 
     if (panel.analysis.tab === "agreement") {
-      const table = content.append("table").attr("class", "analysis-table");
-      const header = table.append("thead").append("tr");
-      ["scope", "metric", "reference", "agreement", "loss"].forEach(label => header.append("th").text(label));
-      const body = table.append("tbody");
-      (analysisData.best_target_agreement || []).forEach(row => {
-        const tr = body.append("tr");
-        tr.append("td").text(row.candidate_scope || "");
-        tr.append("td").text(row.candidate_metric || "");
-        tr.append("td").text(row.reference_metric || "");
-        tr.append("td").text(`${formatScore(100 * Number(row.agreement_fraction || 0))}%`);
-        tr.append("td").text(formatScore(row.mean_reference_loss_if_candidate_used));
+      const options = agreementMetricOptions();
+      const validKeys = new Set(options.map(option => option.key));
+      panel.analysis.selectedAgreementMetrics = (panel.analysis.selectedAgreementMetrics || []).filter(key => validKeys.has(key));
+
+      const controls = content.append("div").attr("class", "analysis-actions");
+      controls.append("span").attr("class", "analysis-hint").text("Add metrics to compare over the selected timestep range");
+      const metricSelect = controls.append("select");
+      options.forEach(option => {
+        metricSelect.append("option")
+          .attr("value", option.key)
+          .text(`${option.label} (${option.scope})`);
       });
+      controls.append("button")
+        .attr("type", "button")
+        .text("Add metric")
+        .on("click", () => {
+          const key = metricSelect.node()?.value;
+          if (!key) return;
+          if (!(panel.analysis.selectedAgreementMetrics || []).includes(key)) {
+            panel.analysis.selectedAgreementMetrics = [...(panel.analysis.selectedAgreementMetrics || []), key];
+          }
+          renderAll();
+        });
+      controls.append("button")
+        .attr("type", "button")
+        .text("Clear metrics")
+        .on("click", () => {
+          panel.analysis.selectedAgreementMetrics = [];
+          panel.analysis.selectedAgreementPointKeys = [];
+          panel.analysis.selectedDisagreementKeys = [];
+          renderAll();
+        });
+
+      const selected = panel.analysis.selectedAgreementMetrics || [];
+      if (!selected.length) {
+        content.append("div").attr("class", "analysis-hint").text("No metrics selected for plotting.");
+        return;
+      }
+      renderMetricAgreementSummaries(content, panel, selected);
+      renderMetricAgreementGraph(content, panel, selected);
       return;
     }
 
     if (panel.analysis.tab === "disagreement") {
-      const rows = analysisData.domain_shape_disagreements || [];
-      const list = content.append("div").attr("class", "analysis-list");
-      rows.slice(0, 80).forEach((item, index) => {
-        const row = list.append("button").attr("type", "button").attr("class", "analysis-row");
-        row.append("strong").text(`${index + 1}. ${item.source_label} -> ${item.target_label}, source S${item.source_sheet_id}`);
-        row.append("span").text(`range target S${item.shape_target_sheet_id} (${formatScore(item.shape_score)}), domain target S${item.overlap_target_sheet_id} (${formatScore(item.overlap_max_percent)})`);
-        row.on("click", () => setAnalysisHighlight(panel, {
-          label: "Domain/range disagreement",
-          nodes: item.highlight?.nodes || [],
-          links: item.highlight?.links || [],
-          start: item.source_timestep_index,
-          end: item.target_timestep_index,
-        }, false));
+      const disagreementData = domainRangeDisagreementData();
+      const rankedRows = disagreementData.rankedSummary || [];
+      const visibleRows = rankedRows.slice(0, Math.min(panel.analysis.topDisagreements, rankedRows.length));
+      const controls = content.append("div").attr("class", "analysis-actions");
+      controls.append("span").attr("class", "analysis-hint").text(`Show/highlight top disagreement timestep pairs out of ${rankedRows.length}`);
+      const countInput = controls.append("input")
+        .attr("type", "number")
+        .attr("min", 1)
+        .attr("max", Math.max(1, rankedRows.length))
+        .property("value", Math.min(panel.analysis.topDisagreements, Math.max(1, rankedRows.length)));
+      countInput.on("change", event => {
+        const maxCount = Math.max(1, rankedRows.length);
+        panel.analysis.topDisagreements = clamp(Math.floor(Number(event.target.value) || 1), 1, maxCount);
+        renderAll();
       });
-      if (!rows.length) content.append("div").attr("class", "analysis-hint").text("No domain/range disagreement examples were exported.");
+      controls.append("button")
+        .attr("type", "button")
+        .text("Highlight")
+        .on("click", () => setAnalysisHighlight(
+          panel,
+          combinedHighlight(visibleRows.map(disagreementHighlightPayload), `Top ${visibleRows.length} domain/range disagreement pairs`),
+          false
+        ));
+
+      renderDisagreementScoreGraph(content, panel, visibleRows);
+
+      if (!rankedRows.length) {
+        content.append("div").attr("class", "analysis-hint").text("No domain/range disagreement examples were found.");
+        return;
+      }
+
+      const list = content.append("div").attr("class", "analysis-list");
+      visibleRows.slice(0, 12).forEach((item, index) => {
+        const strongest = item.strongest_disagreement || {};
+        const row = list.append("button").attr("type", "button").attr("class", "analysis-row");
+        row.append("strong").text(`${index + 1}. ${item.source_label} -> ${item.target_label}: ${item.disagreement_count}/${item.compared_sources} disagree`);
+        row.append("span").text(`max score ${formatScore(item.max_disagreement_score)}, strongest S${strongest.source_sheet_id ?? "-"}: range S${strongest.shape_target_sheet_id ?? "-"}, domain S${strongest.overlap_target_sheet_id ?? "-"}`);
+        row.on("click", () => toggleDisagreementGraphSelection(panel, item));
+      });
+      return;
     }
   }
 
@@ -4825,7 +5832,6 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
 
     const activeLinkHighlights = highlightedLinkSet(panel);
     const activeNodeHighlights = highlightedNodeSet(panel);
-    drawQueuedAnalysisFocusPulse(panel, layout, root, layoutBounds);
 
     const linkSelection = root.append("g")
       .selectAll("path")
@@ -4881,6 +5887,8 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       .attr("y", d => d.y0 + Math.max(2, d.height) / 2)
       .attr("dominant-baseline", "middle")
       .text(d => `S${d.sheet_id} R${d.rank}`);
+
+    drawQueuedAnalysisFocusPulse(panel, layout, root, layoutBounds);
 
     const canvasNode = canvas.node();
     camera.bindPanAndWheel(canvasNode, {
@@ -5037,7 +6045,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       metricId: "combined",
       threshold: 0,
       shapeWeights: cloneDefaultShapeWeights(),
-      analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], highlight: null } : null,
+      analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], selectedTrackKeys: [], selectedAgreementPointKeys: [], selectedDisagreementKeys: [], highlight: null } : null,
       panelHeight: clampPanelHeight(activePanel?.panelHeight ?? PANEL_HEIGHT_DEFAULT)
     });
     renderAll();
