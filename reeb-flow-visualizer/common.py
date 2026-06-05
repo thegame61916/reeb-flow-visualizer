@@ -68,7 +68,7 @@ SHEET_RENDERER_GLOBAL_PADDING = 0.03
 # and unified viewer defaults.
 SHAPE_SCORE_DEFAULT_WEIGHTS = {
     "shape_iou": 0.6,
-    "area_ratio": 1.9,
+    "area_ratio": 0.1,
     "bbox_iou": 0.2,
     "centroid_similarity": 0.1,
 }

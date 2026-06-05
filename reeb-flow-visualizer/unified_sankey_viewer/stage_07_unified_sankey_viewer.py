@@ -577,6 +577,14 @@ def write_viewer_data_json(data: dict) -> Path:
 
 def apply_current_tracking_analysis_meta(data: dict) -> dict:
     meta = data.setdefault("meta", {})
+    meta["data_modes"] = DATA_MODES
+    meta["shape_score_components"] = list(SHAPE_SCORE_DEFAULT_WEIGHTS.keys())
+    meta["shape_score_default_weights"] = SHAPE_SCORE_DEFAULT_WEIGHTS
+    meta["hybrid_score_default_weights"] = HYBRID_SCORE_DEFAULT_WEIGHTS
+    meta["hybrid_vertex_metric_default"] = HYBRID_VERTEX_METRIC_DEFAULT
+    meta["centroid_color_corners"] = CENTROID_COLOR_CORNERS
+    meta["centroid_axis_diagonal_colors"] = CENTROID_AXIS_DIAGONAL_COLORS
+    meta["viewer_default_top_sheets"] = max(1, safe_int(VIEWER_DEFAULT_TOP_SHEETS, 10))
     meta["tracking_analysis_thresholds"] = list(TRACKING_ANALYSIS_THRESHOLDS)
     meta["tracking_analysis_preferred_threshold"] = TRACKING_ANALYSIS_PREFERRED_THRESHOLD
     meta["tracking_analysis_top_intervals"] = TRACKING_ANALYSIS_TOP_INTERVALS
@@ -2413,9 +2421,71 @@ d3.json("data.json").then(data => {
     }, 0);
   }
 
-  function analysisCacheKey(kind, panel) {
+  function analysisMetricKey(panel) {
+    const mode = panel?.dataMode || "shape";
+    const metric = panel?.metricId || "combined";
+    if (mode === "shape" && metric === "combined") return `${mode}:${metric}:stored`;
+    const shapeWeightKey = shapeScoreComponentIds
+      .map(metricId => `${metricId}:${formatWeight((panel?.shapeWeights || cloneDefaultShapeWeights())[metricId])}`)
+      .join(",");
+    if (mode === "hybrid") {
+      const hybridWeights = sanitizeHybridWeights(panel?.hybridWeights || cloneDefaultHybridWeights());
+      const hybridWeightKey = `vertex:${formatWeight(hybridWeights.vertex_overlap)},shape:${formatWeight(hybridWeights.shape_combined)}`;
+      return `${mode}:${metric}:overlap=${sanitizeHybridVertexMetric(panel?.hybridVertexMetric)}:${shapeWeightKey}:${hybridWeightKey}`;
+    }
+    if (mode === "shape") return `${mode}:${metric}`;
+    return `${mode}:${metric}`;
+  }
+
+  function analysisCacheKey(kind, panel, thetaOverride = null) {
     ensurePanelAnalysis(panel);
-    return `${kind}:${thresholdKey(panel.analysis.theta)}`;
+    const theta = thetaOverride === null || thetaOverride === undefined ? panel.analysis.theta : thetaOverride;
+    return `${kind}:${analysisMetricKey(panel)}:${thresholdKey(theta)}`;
+  }
+
+  function analysisMetricScale(panel) {
+    const mode = panel?.dataMode || "shape";
+    const metricId = panel?.metricId || "";
+    if (mode === "overlap") {
+      if (String(metricId).includes("percent")) return 100;
+      const maxValue = Number(metricMaxForPanel(panel, metricId));
+      return maxValue > 0 ? maxValue : 1;
+    }
+    return 1;
+  }
+
+  function panelAnalysisScore(match, panel) {
+    if (panel?.dataMode === "shape" && panel?.metricId === "combined") {
+      return analysisCombinedScore(match);
+    }
+    const raw = Number(metricValue(match, panel, panel?.metricId));
+    if (!Number.isFinite(raw)) return 0;
+    const scale = analysisMetricScale(panel);
+    return scale > 0 ? raw / scale : raw;
+  }
+
+  function bestPanelAnalysisMatch(matches, panel) {
+    let best = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (const match of matches || []) {
+      const score = panelAnalysisScore(match, panel);
+      if (score > bestScore) {
+        best = match;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
+  function selectedAnalysisPairs(panel) {
+    return pairsForMode(panel?.dataMode || "shape", panel) || [];
+  }
+
+  function selectedAnalysisPair(panel, sourceIndex, targetIndex) {
+    return selectedAnalysisPairs(panel).find(pair =>
+      Number(pair.source_timestep_index) === Number(sourceIndex) &&
+      Number(pair.target_timestep_index) === Number(targetIndex)
+    ) || null;
   }
 
   function meanNumber(values) {
@@ -2630,14 +2700,14 @@ d3.json("data.json").then(data => {
     return result;
   }
 
-  function computeRuntimeIntervals(panel) {
+  function computeRuntimeIntervals(panel, thetaOverride = null) {
     ensurePanelAnalysis(panel);
-    const theta = Number(panel.analysis.theta);
-    const cacheKey = analysisCacheKey("intervals", panel);
+    const theta = Number(thetaOverride === null || thetaOverride === undefined ? panel.analysis.theta : thetaOverride);
+    const cacheKey = analysisCacheKey("intervals", panel, theta);
     if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
 
     const rows = [];
-    for (const pair of (Array.isArray(data.shape_pairs) ? data.shape_pairs : [])) {
+    for (const pair of selectedAnalysisPairs(panel)) {
       const sourceIndex = Number(pair.source_timestep_index);
       const targetIndex = Number(pair.target_timestep_index);
       if (!Number.isFinite(sourceIndex) || !Number.isFinite(targetIndex)) continue;
@@ -2646,45 +2716,48 @@ d3.json("data.json").then(data => {
       const targetSheets = timestepByIndex.get(targetIndex)?.sheets || [];
       const bySource = groupMatchesByField(pair.matches || [], "source_sheet_id");
       const byTarget = groupMatchesByField(pair.matches || [], "target_sheet_id");
-      const bestSourceCombined = [];
-      const bestTargetCombined = [];
+      const bestSourceScores = [];
+      const bestTargetScores = [];
 
       for (const sheet of sourceSheets) {
-        const best = bestAnalysisMatch(bySource.get(Number(sheet.sheet_id)) || []);
-        bestSourceCombined.push(best ? analysisCombinedScore(best) : 0);
+        const best = bestPanelAnalysisMatch(bySource.get(Number(sheet.sheet_id)) || [], panel);
+        bestSourceScores.push(best ? panelAnalysisScore(best, panel) : 0);
       }
 
       for (const sheet of targetSheets) {
-        const best = bestAnalysisMatch(byTarget.get(Number(sheet.sheet_id)) || []);
-        bestTargetCombined.push(best ? analysisCombinedScore(best) : 0);
+        const best = bestPanelAnalysisMatch(byTarget.get(Number(sheet.sheet_id)) || [], panel);
+        bestTargetScores.push(best ? panelAnalysisScore(best, panel) : 0);
       }
 
-      const sourceWeakCount = bestSourceCombined.filter(value => value < theta).length;
-      const targetWeakCount = bestTargetCombined.filter(value => value < theta).length;
+      const sourceWeakCount = bestSourceScores.filter(value => value < theta).length;
+      const targetWeakCount = bestTargetScores.filter(value => value < theta).length;
       let possibleSplits = 0;
       for (const matches of bySource.values()) {
-        if ((matches || []).filter(match => analysisCombinedScore(match) >= theta).length >= 2) possibleSplits += 1;
+        if ((matches || []).filter(match => panelAnalysisScore(match, panel) >= theta).length >= 2) possibleSplits += 1;
       }
       let possibleMerges = 0;
       for (const matches of byTarget.values()) {
-        if ((matches || []).filter(match => analysisCombinedScore(match) >= theta).length >= 2) possibleMerges += 1;
+        if ((matches || []).filter(match => panelAnalysisScore(match, panel) >= theta).length >= 2) possibleMerges += 1;
       }
 
-      const meanBestCombined = meanNumber(bestSourceCombined);
-      const minBestCombined = bestSourceCombined.length ? Math.min(...bestSourceCombined) : 0;
+      const meanBestScore = meanNumber(bestSourceScores);
+      const minBestScore = bestSourceScores.length ? Math.min(...bestSourceScores) : 0;
       const sourceSheetCount = sourceSheets.length;
       const eventScoreComponents = {
         source_weak_count: sourceWeakCount,
         target_weak_count: targetWeakCount,
         possible_splits: possibleSplits,
         possible_merges: possibleMerges,
-        continuation_gap_source_count: (1 - meanBestCombined) * Math.max(sourceSheetCount, 1),
+        continuation_gap_source_count: (1 - meanBestScore) * Math.max(sourceSheetCount, 1),
       };
       const eventScore = analysisEventScore(eventScoreComponents);
 
       rows.push({
-        id: `interval_runtime:${thresholdKey(theta)}:${sourceIndex}:${targetIndex}`,
+        id: `interval_runtime:${analysisMetricKey(panel)}:${thresholdKey(theta)}:${sourceIndex}:${targetIndex}`,
         threshold: theta,
+        analysis_mode: panel.dataMode,
+        analysis_metric_id: panel.metricId,
+        analysis_metric_label: metricLabel(panel.dataMode, panel.metricId),
         source_timestep_index: sourceIndex,
         target_timestep_index: targetIndex,
         source_label: pair.source_label,
@@ -2695,8 +2768,10 @@ d3.json("data.json").then(data => {
         source_sheet_count: sourceSheetCount,
         target_sheet_count: targetSheets.length,
         candidate_match_count: Number(pair.pair_count ?? (pair.matches || []).length) || 0,
-        mean_best_combined: meanBestCombined,
-        min_best_combined: minBestCombined,
+        mean_best_score: meanBestScore,
+        min_best_score: minBestScore,
+        mean_best_combined: meanBestScore,
+        min_best_combined: minBestScore,
         source_weak_count: sourceWeakCount,
         target_weak_count: targetWeakCount,
         possible_splits: possibleSplits,
@@ -2719,10 +2794,10 @@ d3.json("data.json").then(data => {
     return computeRuntimeIntervals(panel).ranked;
   }
 
-  function computeRuntimeTracks(panel) {
+  function computeRuntimeTracks(panel, thetaOverride = null) {
     ensurePanelAnalysis(panel);
-    const theta = Number(panel.analysis.theta);
-    const cacheKey = analysisCacheKey("tracks", panel);
+    const theta = Number(thetaOverride === null || thetaOverride === undefined ? panel.analysis.theta : thetaOverride);
+    const cacheKey = analysisCacheKey("tracks", panel, theta);
     if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
 
     const nodeMeta = new Map();
@@ -2734,14 +2809,14 @@ d3.json("data.json").then(data => {
     }
 
     const edges = new Map();
-    for (const pair of (Array.isArray(data.shape_pairs) ? data.shape_pairs : [])) {
+    for (const pair of selectedAnalysisPairs(panel)) {
       const sourceIndex = Number(pair.source_timestep_index);
       const targetIndex = Number(pair.target_timestep_index);
       const bySource = groupMatchesByField(pair.matches || [], "source_sheet_id");
       for (const [sourceSheetId, matches] of bySource.entries()) {
-        const best = bestAnalysisMatch(matches || []);
+        const best = bestPanelAnalysisMatch(matches || [], panel);
         if (!best) continue;
-        const score = analysisCombinedScore(best);
+        const score = panelAnalysisScore(best, panel);
         if (score < theta) continue;
         const targetSheetId = Number(best.target_sheet_id);
         edges.set(sheetKey(sourceIndex, sourceSheetId), {
@@ -2799,8 +2874,11 @@ d3.json("data.json").then(data => {
       const lastTs = timestepByIndex.get(lastNode[0]);
 
       rows.push({
-        id: `track_runtime:${thresholdKey(theta)}:${trackId}`,
+        id: `track_runtime:${analysisMetricKey(panel)}:${thresholdKey(theta)}:${trackId}`,
         threshold: theta,
+        analysis_mode: panel.dataMode,
+        analysis_metric_id: panel.metricId,
+        analysis_metric_label: metricLabel(panel.dataMode, panel.metricId),
         track_id: trackId,
         length: nodes.length,
         start_timestep_index: firstNode[0],
@@ -2831,6 +2909,42 @@ d3.json("data.json").then(data => {
     return computeRuntimeTracks(panel);
   }
 
+  function quantileNumber(values, fraction) {
+    const cleaned = (values || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+    if (!cleaned.length) return 0;
+    const index = Math.max(0, Math.min(cleaned.length - 1, Math.round(fraction * (cleaned.length - 1))));
+    return cleaned[index];
+  }
+
+  function computeRuntimeSensitivity(panel) {
+    ensurePanelAnalysis(panel);
+    const cacheKey = `sensitivity:${analysisMetricKey(panel)}`;
+    if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
+    const rows = analysisThresholds.map(threshold => {
+      const intervalResult = computeRuntimeIntervals(panel, threshold);
+      const intervalRows = intervalResult.series || [];
+      const rankedIntervals = intervalResult.ranked || [];
+      const tracks = computeRuntimeTracks(panel, threshold);
+      const topEvent = rankedIntervals[0] || {};
+      const lengths = tracks.map(row => Number(row.length) || 0);
+      return {
+        threshold,
+        event_count: intervalRows.length,
+        mean_event_score: meanNumber(intervalRows.map(row => Number(row.event_score) || 0)),
+        max_event_score: Number(topEvent.event_score) || 0,
+        top_event_pair_label: topEvent.pair_label || "",
+        top_event_source_timestep_index: Number(topEvent.source_timestep_index),
+        top_event_target_timestep_index: Number(topEvent.target_timestep_index),
+        track_count: tracks.length,
+        max_lifetime: lengths.length ? Math.max(...lengths) : 0,
+        median_lifetime: quantileNumber(lengths, 0.5),
+        mean_lifetime: meanNumber(lengths),
+      };
+    });
+    analysisRuntimeCache.set(cacheKey, rows);
+    return rows;
+  }
+
   function intervalKeyFromItem(item) {
     return `${Number(item?.source_timestep_index)}:${Number(item?.target_timestep_index)}`;
   }
@@ -2839,7 +2953,7 @@ d3.json("data.json").then(data => {
     const sourceIndex = Number(item?.source_timestep_index);
     const targetIndex = Number(item?.target_timestep_index);
     const threshold = Number(item?.threshold ?? panel?.analysis?.theta ?? defaultAnalysisTheta());
-    const pair = shapePairLookup.get(`${sourceIndex}:${targetIndex}`);
+    const pair = selectedAnalysisPair(panel, sourceIndex, targetIndex);
     const highlightNodes = new Set();
     const highlightLinks = new Set();
     const weakSourceNodes = [];
@@ -2865,8 +2979,8 @@ d3.json("data.json").then(data => {
 
     for (const sheet of sourceSheets) {
       const sourceSheetId = Number(sheet.sheet_id);
-      const best = bestAnalysisMatch(bySource.get(sourceSheetId) || []);
-      const bestScore = best ? analysisCombinedScore(best) : 0;
+      const best = bestPanelAnalysisMatch(bySource.get(sourceSheetId) || [], panel);
+      const bestScore = best ? panelAnalysisScore(best, panel) : 0;
       if (bestScore < threshold) {
         const sourceKey = sheetKey(sourceIndex, sourceSheetId);
         weakSourceNodes.push(sourceKey);
@@ -2881,8 +2995,8 @@ d3.json("data.json").then(data => {
 
     for (const sheet of targetSheets) {
       const targetSheetId = Number(sheet.sheet_id);
-      const best = bestAnalysisMatch(byTarget.get(targetSheetId) || []);
-      const bestScore = best ? analysisCombinedScore(best) : 0;
+      const best = bestPanelAnalysisMatch(byTarget.get(targetSheetId) || [], panel);
+      const bestScore = best ? panelAnalysisScore(best, panel) : 0;
       if (bestScore < threshold) {
         const targetKey = sheetKey(targetIndex, targetSheetId);
         weakTargetNodes.push(targetKey);
@@ -2896,7 +3010,7 @@ d3.json("data.json").then(data => {
     }
 
     for (const [sourceSheetId, matches] of bySource.entries()) {
-      const above = (matches || []).filter(match => analysisCombinedScore(match) >= threshold);
+      const above = (matches || []).filter(match => panelAnalysisScore(match, panel) >= threshold);
       if (above.length >= 2) {
         const sourceKey = sheetKey(sourceIndex, sourceSheetId);
         splitSourceNodes.push(sourceKey);
@@ -2910,7 +3024,7 @@ d3.json("data.json").then(data => {
     }
 
     for (const [targetSheetId, matches] of byTarget.entries()) {
-      const above = (matches || []).filter(match => analysisCombinedScore(match) >= threshold);
+      const above = (matches || []).filter(match => panelAnalysisScore(match, panel) >= threshold);
       if (above.length >= 2) {
         const targetKey = sheetKey(targetIndex, targetSheetId);
         mergeTargetNodes.push(targetKey);
@@ -2979,11 +3093,12 @@ d3.json("data.json").then(data => {
       <div class="tooltip-grid" style="margin-top:8px;">
         <div>Time</div><div>${escapeHtml(formatIntervalFs(intervalTimeFs(item)))}</div>
         <div>Event score</div><div>${escapeHtml(formatScore(item.event_score))}</div>
+        <div>Analysis metric</div><div>${escapeHtml(item.analysis_metric_label || metricLabel(panel.dataMode, panel.metricId))}</div>
         <div>Theta</div><div>${escapeHtml(formatScore(theta))}</div>
         <div>Weak continuation source/target</div><div>${escapeHtml(item.source_weak_count)}/${escapeHtml(item.target_weak_count)}</div>
         <div>Splits / merges</div><div>${escapeHtml(item.possible_splits)} / ${escapeHtml(item.possible_merges)}</div>
-        <div>Mean continuation</div><div>${escapeHtml(formatScore(item.mean_best_combined))}</div>
-        <div>Min continuation</div><div>${escapeHtml(formatScore(item.min_best_combined))}</div>
+        <div>Mean continuation</div><div>${escapeHtml(formatScore(item.mean_best_score ?? item.mean_best_combined))}</div>
+        <div>Min continuation</div><div>${escapeHtml(formatScore(item.min_best_score ?? item.min_best_combined))}</div>
         <div>Domain/range agreement</div><div>${escapeHtml(formatScore(100 * Number(item.domain_shape_agreement_fraction || 0)))}%</div>
       </div>`;
   }
@@ -3010,6 +3125,7 @@ d3.json("data.json").then(data => {
       <strong>Feature ${escapeHtml(item.track_id)}: S${escapeHtml(item.start_sheet_id)} ${escapeHtml(item.start_label)} -> ${escapeHtml(item.end_label)}</strong>
       <div class="tooltip-grid" style="margin-top:8px;">
         <div>Length</div><div>${escapeHtml(item.length)}</div>
+        <div>Analysis metric</div><div>${escapeHtml(item.analysis_metric_label || metricLabel(panel.dataMode, panel.metricId))}</div>
         <div>Mean score</div><div>${escapeHtml(formatScore(item.mean_continuation_score))}</div>
         <div>Min score</div><div>${escapeHtml(formatScore(item.min_continuation_score))}</div>
         <div>Theta</div><div>${escapeHtml(formatScore(theta))}</div>
@@ -3061,7 +3177,8 @@ d3.json("data.json").then(data => {
       panel.analysis.highlight = options.aggregateHighlight(panel);
     }
     const clipId = `analysis-graph-clip-${String(panel.id).replace(/[^a-zA-Z0-9_-]/g, "")}-${options.id}`;
-    const graphKey = `${options.id}:${thresholdKey(panel.analysis.theta)}:${valid.map(keyFn).join("|")}`;
+    const graphStateKey = options.stateKey ? options.stateKey(panel) : thresholdKey(panel.analysis.theta);
+    const graphKey = `${options.id}:${graphStateKey}:${valid.map(keyFn).join("|")}`;
     if (panel.analysis[graphKeyField] !== graphKey) {
       panel.analysis[graphKeyField] = graphKey;
       panel.analysis[zoomKey] = 1;
@@ -3253,6 +3370,7 @@ d3.json("data.json").then(data => {
       graphKey: "intervalGraphKey",
       selectedKeysKey: "selectedIntervalKeys",
       keyFn: intervalKeyFromItem,
+      stateKey: panel => analysisCacheKey("interval-graph", panel),
       xValue: intervalTimeFs,
       yValue: item => Number(item.event_score),
       sort: (a, b) => intervalTimeFs(a) - intervalTimeFs(b),
@@ -3277,6 +3395,7 @@ d3.json("data.json").then(data => {
       graphKey: "trackGraphKey",
       selectedKeysKey: "selectedTrackKeys",
       keyFn: trackKeyFromItem,
+      stateKey: panel => analysisCacheKey("track-graph", panel),
       xValue: item => Number(item.length),
       yValue: item => Number(item.mean_continuation_score),
       sort: (a, b) => Number(a.length) - Number(b.length) || Number(b.mean_continuation_score) - Number(a.mean_continuation_score),
@@ -4013,6 +4132,16 @@ d3.json("data.json").then(data => {
     state.selectedRangeIndex = 0;
   }
 
+  function clearAnalysisSelectionsOnly(panel) {
+    if (!panel?.analysis) return;
+    panel.analysis.selectedIntervalKeys = [];
+    panel.analysis.selectedTrackKeys = [];
+    panel.analysis.selectedAgreementPointKeys = [];
+    panel.analysis.selectedDisagreementKeys = [];
+    panel.analysis.highlight = null;
+    if (state.analysisFocusPulse?.panelId === panel.id) state.analysisFocusPulse = null;
+  }
+
   function setAnalysisHighlight(panel, highlight, focusRange = true) {
     ensurePanelAnalysis(panel);
     panel.analysis.selectedIntervalKeys = [];
@@ -4167,11 +4296,15 @@ d3.json("data.json").then(data => {
     }
 
     if (panel.analysis.tab === "sensitivity") {
+      const sensitivityRows = computeRuntimeSensitivity(panel);
+      content.append("div")
+        .attr("class", "analysis-hint")
+        .text(`Sensitivity for ${modeLabel(panel.dataMode)} / ${metricLabel(panel.dataMode, panel.metricId)}`);
       const table = content.append("table").attr("class", "analysis-table");
       const header = table.append("thead").append("tr");
       ["theta", "mean event", "max event", "top interval", "max life", "median life", ""].forEach(label => header.append("th").text(label));
       const body = table.append("tbody");
-      (analysisData.sensitivity || []).forEach(row => {
+      sensitivityRows.forEach(row => {
         const tr = body.append("tr");
         tr.append("td").text(formatScore(row.threshold));
         tr.append("td").text(formatScore(row.mean_event_score));
@@ -5625,6 +5758,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     dataModeSelect.on("change", event => {
       panel.dataMode = event.target.value;
       ensurePanelMetric(panel);
+      clearAnalysisSelectionsOnly(panel);
       renderAll();
     });
 
@@ -5637,6 +5771,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     });
     metricSelect.on("change", event => {
       panel.metricId = event.target.value;
+      clearAnalysisSelectionsOnly(panel);
       renderAll();
     });
 
