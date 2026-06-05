@@ -1293,6 +1293,20 @@ svg.summary-chart {
   filter: brightness(0.8) saturate(1.05);
   opacity: 0.98;
 }
+.link.domain-support-strong {
+  stroke: rgba(21, 128, 61, 0.82);
+  stroke-width: 1.3px;
+}
+.link.domain-support-weak {
+  stroke: rgba(220, 38, 38, 0.72);
+  stroke-width: 1.2px;
+  stroke-dasharray: 5 4;
+}
+.link.domain-support-missing {
+  stroke: rgba(100, 116, 139, 0.68);
+  stroke-width: 1.1px;
+  stroke-dasharray: 2 4;
+}
 .panel-empty {
   padding: 18px;
   color: #6a7785;
@@ -1714,10 +1728,32 @@ d3.json("data.json").then(data => {
   const overlapPairLookup = new Map();
   const analysisRuntimeCache = new Map();
   const shapeMatchLookup = new Map();
+  const overlapMatchLookup = new Map();
   const shapeOutgoingByNode = new Map();
   const shapeIncomingByNode = new Map();
+  const overlapOutgoingByNode = new Map();
+  const overlapIncomingByNode = new Map();
   for (const pair of (Array.isArray(data.overlap_pairs) ? data.overlap_pairs : [])) {
     overlapPairLookup.set(`${pair.source_timestep_index}:${pair.target_timestep_index}`, pair);
+    for (const match of (pair.matches || [])) {
+      const key = `${pair.source_timestep_index}:${match.source_sheet_id}->${pair.target_timestep_index}:${match.target_sheet_id}`;
+      const enriched = {
+        ...match,
+        source_timestep_index: pair.source_timestep_index,
+        target_timestep_index: pair.target_timestep_index,
+        source_label: pair.source_label,
+        target_label: pair.target_label,
+        source_stem: pair.source_stem || "",
+        target_stem: pair.target_stem || "",
+      };
+      overlapMatchLookup.set(key, enriched);
+      const sourceKey = `${pair.source_timestep_index}:${match.source_sheet_id}`;
+      const targetKey = `${pair.target_timestep_index}:${match.target_sheet_id}`;
+      if (!overlapOutgoingByNode.has(sourceKey)) overlapOutgoingByNode.set(sourceKey, []);
+      if (!overlapIncomingByNode.has(targetKey)) overlapIncomingByNode.set(targetKey, []);
+      overlapOutgoingByNode.get(sourceKey).push(enriched);
+      overlapIncomingByNode.get(targetKey).push(enriched);
+    }
   }
 
   for (const pair of (Array.isArray(data.shape_pairs) ? data.shape_pairs : [])) {
@@ -2346,6 +2382,7 @@ d3.json("data.json").then(data => {
         theta: defaultAnalysisTheta(),
         topIntervals: Math.min(5, Math.max(1, Number(analysisData?.top_intervals) || 5)),
         topFeatures: Math.min(5, Math.max(1, Number(analysisData?.top_features) || 5)),
+        topDomainStability: Math.min(12, Math.max(1, Number(analysisData?.top_intervals) || 12)),
         topDisagreements: Math.min(12, Math.max(1, Number(analysisData?.top_disagreements ?? data.meta?.tracking_analysis_top_disagreements) || 12)),
         intervalGraphHeight: INTERVAL_GRAPH_HEIGHT_DEFAULT,
         intervalGraphZoomScale: 1,
@@ -2355,6 +2392,10 @@ d3.json("data.json").then(data => {
         trackGraphZoomScale: 1,
         trackGraphFocus: null,
         trackGraphKey: "",
+        domainStabilityGraphHeight: INTERVAL_GRAPH_HEIGHT_DEFAULT,
+        domainStabilityGraphZoomScale: 1,
+        domainStabilityGraphFocus: null,
+        domainStabilityGraphKey: "",
         agreementGraphHeight: INTERVAL_GRAPH_HEIGHT_DEFAULT,
         agreementGraphZoomScale: 1,
         agreementGraphFocus: null,
@@ -2366,6 +2407,7 @@ d3.json("data.json").then(data => {
         selectedAgreementMetrics: [],
         selectedAgreementPointKeys: [],
         selectedDisagreementKeys: [],
+        selectedDomainStabilityKeys: [],
         selectedIntervalKeys: [],
         selectedTrackKeys: [],
         highlight: null,
@@ -2376,6 +2418,7 @@ d3.json("data.json").then(data => {
     }
     panel.analysis.topIntervals = Math.max(1, Math.floor(Number(panel.analysis.topIntervals) || 1));
     panel.analysis.topFeatures = Math.max(1, Math.floor(Number(panel.analysis.topFeatures) || 1));
+    panel.analysis.topDomainStability = Math.max(1, Math.floor(Number(panel.analysis.topDomainStability) || 1));
     panel.analysis.topDisagreements = Math.max(1, Math.floor(Number(panel.analysis.topDisagreements) || 1));
     panel.analysis.intervalGraphHeight = clampIntervalGraphHeight(panel.analysis.intervalGraphHeight);
     panel.analysis.intervalGraphZoomScale = Number.isFinite(Number(panel.analysis.intervalGraphZoomScale))
@@ -2384,6 +2427,10 @@ d3.json("data.json").then(data => {
     panel.analysis.trackGraphHeight = clampIntervalGraphHeight(panel.analysis.trackGraphHeight);
     panel.analysis.trackGraphZoomScale = Number.isFinite(Number(panel.analysis.trackGraphZoomScale))
       ? Number(panel.analysis.trackGraphZoomScale)
+      : 1;
+    panel.analysis.domainStabilityGraphHeight = clampIntervalGraphHeight(panel.analysis.domainStabilityGraphHeight);
+    panel.analysis.domainStabilityGraphZoomScale = Number.isFinite(Number(panel.analysis.domainStabilityGraphZoomScale))
+      ? Number(panel.analysis.domainStabilityGraphZoomScale)
       : 1;
     panel.analysis.agreementGraphHeight = clampIntervalGraphHeight(panel.analysis.agreementGraphHeight);
     panel.analysis.agreementGraphZoomScale = Number.isFinite(Number(panel.analysis.agreementGraphZoomScale))
@@ -2396,6 +2443,7 @@ d3.json("data.json").then(data => {
     if (!Array.isArray(panel.analysis.selectedAgreementMetrics)) panel.analysis.selectedAgreementMetrics = [];
     if (!Array.isArray(panel.analysis.selectedAgreementPointKeys)) panel.analysis.selectedAgreementPointKeys = [];
     if (!Array.isArray(panel.analysis.selectedDisagreementKeys)) panel.analysis.selectedDisagreementKeys = [];
+    if (!Array.isArray(panel.analysis.selectedDomainStabilityKeys)) panel.analysis.selectedDomainStabilityKeys = [];
     if (!Array.isArray(panel.analysis.selectedIntervalKeys)) {
       panel.analysis.selectedIntervalKeys = Array.isArray(panel.analysis.selectedIntervals)
         ? panel.analysis.selectedIntervals.map(item => item?.intervalKey).filter(Boolean)
@@ -3414,6 +3462,253 @@ d3.json("data.json").then(data => {
     });
   }
 
+  function computeDomainStabilityRows(panel) {
+    ensurePanelAnalysis(panel);
+    const theta = panelTheta(panel);
+    const cacheKey = `domain-stability:${thresholdKey(theta)}`;
+    if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
+
+    const series = [];
+    for (const pair of (Array.isArray(data.overlap_pairs) ? data.overlap_pairs : [])) {
+      const sourceIndex = Number(pair.source_timestep_index);
+      const targetIndex = Number(pair.target_timestep_index);
+      if (!Number.isFinite(sourceIndex) || !Number.isFinite(targetIndex)) continue;
+
+      const sourceSheets = timestepByIndex.get(sourceIndex)?.sheets || [];
+      const targetSheets = timestepByIndex.get(targetIndex)?.sheets || [];
+      const bySource = groupMatchesByField(pair.matches || [], "source_sheet_id");
+      const byTarget = groupMatchesByField(pair.matches || [], "target_sheet_id");
+      const bestSourceRetentions = [];
+      const bestTargetInheritances = [];
+      const weakSourceNodes = [];
+      const weakTargetNodes = [];
+      const splitSourceNodes = [];
+      const mergeTargetNodes = [];
+      const highlightNodes = new Set();
+      const highlightLinks = new Set();
+
+      for (const sheet of sourceSheets) {
+        const sourceSheetId = Number(sheet.sheet_id);
+        const matches = bySource.get(sourceSheetId) || [];
+        const best = bestByScore(matches, overlapSourceRetention);
+        const score = best ? overlapSourceRetention(best) : 0;
+        bestSourceRetentions.push(score);
+        if (score < theta) {
+          const sourceKey = sheetKey(sourceIndex, sourceSheetId);
+          weakSourceNodes.push(sourceKey);
+          highlightNodes.add(sourceKey);
+          if (best) {
+            const targetSheetId = Number(best.target_sheet_id);
+            highlightNodes.add(sheetKey(targetIndex, targetSheetId));
+            highlightLinks.add(linkKeyParts(sourceIndex, sourceSheetId, targetIndex, targetSheetId));
+          }
+        }
+      }
+
+      for (const sheet of targetSheets) {
+        const targetSheetId = Number(sheet.sheet_id);
+        const matches = byTarget.get(targetSheetId) || [];
+        const best = bestByScore(matches, overlapTargetInheritance);
+        const score = best ? overlapTargetInheritance(best) : 0;
+        bestTargetInheritances.push(score);
+        if (score < theta) {
+          const targetKey = sheetKey(targetIndex, targetSheetId);
+          weakTargetNodes.push(targetKey);
+          highlightNodes.add(targetKey);
+          if (best) {
+            const sourceSheetId = Number(best.source_sheet_id);
+            highlightNodes.add(sheetKey(sourceIndex, sourceSheetId));
+            highlightLinks.add(linkKeyParts(sourceIndex, sourceSheetId, targetIndex, targetSheetId));
+          }
+        }
+      }
+
+      let domainSplits = 0;
+      for (const [sourceSheetId, matches] of bySource.entries()) {
+        const above = (matches || []).filter(match => overlapSourceRetention(match) >= theta);
+        if (above.length >= 2) {
+          domainSplits += 1;
+          const sourceKey = sheetKey(sourceIndex, sourceSheetId);
+          splitSourceNodes.push(sourceKey);
+          highlightNodes.add(sourceKey);
+          for (const match of above) {
+            const targetSheetId = Number(match.target_sheet_id);
+            highlightNodes.add(sheetKey(targetIndex, targetSheetId));
+            highlightLinks.add(linkKeyParts(sourceIndex, sourceSheetId, targetIndex, targetSheetId));
+          }
+        }
+      }
+
+      let domainMerges = 0;
+      for (const [targetSheetId, matches] of byTarget.entries()) {
+        const above = (matches || []).filter(match => overlapTargetInheritance(match) >= theta);
+        if (above.length >= 2) {
+          domainMerges += 1;
+          const targetKey = sheetKey(targetIndex, targetSheetId);
+          mergeTargetNodes.push(targetKey);
+          highlightNodes.add(targetKey);
+          for (const match of above) {
+            const sourceSheetId = Number(match.source_sheet_id);
+            highlightNodes.add(sheetKey(sourceIndex, sourceSheetId));
+            highlightLinks.add(linkKeyParts(sourceIndex, sourceSheetId, targetIndex, targetSheetId));
+          }
+        }
+      }
+
+      const meanSourceRetention = meanNumber(bestSourceRetentions);
+      const meanTargetInheritance = meanNumber(bestTargetInheritances);
+      const churnScore = clamp(1 - 0.5 * (meanSourceRetention + meanTargetInheritance), 0, 1);
+      const sourceWeakCount = bestSourceRetentions.filter(value => value < theta).length;
+      const targetWeakCount = bestTargetInheritances.filter(value => value < theta).length;
+      const domainChangeScore = sourceWeakCount + targetWeakCount + 0.5 * domainSplits + 0.5 * domainMerges + churnScore * Math.max(sourceSheets.length, 1);
+
+      series.push({
+        id: `domain_stability:${thresholdKey(theta)}:${sourceIndex}:${targetIndex}`,
+        threshold: theta,
+        source_timestep_index: sourceIndex,
+        target_timestep_index: targetIndex,
+        source_label: pair.source_label,
+        target_label: pair.target_label,
+        source_stem: pair.source_stem || "",
+        target_stem: pair.target_stem || "",
+        pair_label: `${pair.source_label || sourceIndex}->${pair.target_label || targetIndex}`,
+        source_sheet_count: sourceSheets.length,
+        target_sheet_count: targetSheets.length,
+        overlap_link_count: Number(pair.pair_count ?? (pair.matches || []).length) || 0,
+        mean_source_retention: meanSourceRetention,
+        mean_target_inheritance: meanTargetInheritance,
+        churn_score: churnScore,
+        domain_change_score: domainChangeScore,
+        source_weak_count: sourceWeakCount,
+        target_weak_count: targetWeakCount,
+        domain_splits: domainSplits,
+        domain_merges: domainMerges,
+        highlight: {
+          nodes: [...highlightNodes].sort(),
+          links: [...highlightLinks].sort(),
+          weak_source_nodes: weakSourceNodes,
+          weak_target_nodes: weakTargetNodes,
+          split_source_nodes: splitSourceNodes,
+          merge_target_nodes: mergeTargetNodes,
+        },
+      });
+    }
+
+    const result = {
+      series: series.slice().sort((a, b) => Number(a.source_timestep_index) - Number(b.source_timestep_index) || Number(a.target_timestep_index) - Number(b.target_timestep_index)),
+      ranked: series.slice().sort((a, b) =>
+        Number(b.domain_change_score || 0) - Number(a.domain_change_score || 0) ||
+        Number(b.churn_score || 0) - Number(a.churn_score || 0)
+      ),
+    };
+    analysisRuntimeCache.set(cacheKey, result);
+    return result;
+  }
+
+  function domainStabilityRows(panel) {
+    return computeDomainStabilityRows(panel).ranked;
+  }
+
+  function domainStabilityKeyFromItem(item) {
+    return String(item?.id || `domain_stability:${Number(item?.source_timestep_index)}:${Number(item?.target_timestep_index)}`);
+  }
+
+  function domainStabilityHighlightPayload(item) {
+    return {
+      id: item?.id || `domain-stability:${domainStabilityKeyFromItem(item)}`,
+      domainStabilityKey: domainStabilityKeyFromItem(item),
+      label: `Domain stability ${item?.source_label || item?.source_timestep_index} -> ${item?.target_label || item?.target_timestep_index}`,
+      nodes: item?.highlight?.nodes || [],
+      links: item?.highlight?.links || [],
+      start: Number(item?.source_timestep_index),
+      end: Number(item?.target_timestep_index),
+    };
+  }
+
+  function selectedDomainStabilityKeySet(panel) {
+    ensurePanelAnalysis(panel);
+    return new Set((panel.analysis.selectedDomainStabilityKeys || []).filter(Boolean));
+  }
+
+  function aggregateSelectedDomainStabilityHighlight(panel) {
+    ensurePanelAnalysis(panel);
+    const selectedKeys = selectedDomainStabilityKeySet(panel);
+    if (!selectedKeys.size) return null;
+    const selected = domainStabilityRows(panel)
+      .filter(item => selectedKeys.has(domainStabilityKeyFromItem(item)))
+      .map(domainStabilityHighlightPayload);
+    if (!selected.length) return null;
+    const label = `${selected.length} selected domain-change interval${selected.length === 1 ? "" : "s"}`;
+    return {
+      ...combinedHighlight(selected, label),
+      id: "selected-domain-stability",
+      domainStabilityKeys: selected.map(item => item.domainStabilityKey).filter(Boolean),
+    };
+  }
+
+  function toggleDomainStabilityGraphSelection(panel, item) {
+    ensurePanelAnalysis(panel);
+    const payload = domainStabilityHighlightPayload(item);
+    const key = payload.domainStabilityKey;
+    if (!key) return;
+    panel.analysis.selectedIntervalKeys = [];
+    panel.analysis.selectedTrackKeys = [];
+    panel.analysis.selectedAgreementPointKeys = [];
+    panel.analysis.selectedDisagreementKeys = [];
+    panel.analysis.selectedDomainStabilityKeys = [];
+    const selected = panel.analysis.selectedDomainStabilityKeys || [];
+    const alreadySelected = selected.includes(key);
+    panel.analysis.selectedDomainStabilityKeys = alreadySelected
+      ? selected.filter(entry => entry !== key)
+      : [...selected, key];
+    panel.analysis.highlight = aggregateSelectedDomainStabilityHighlight(panel);
+    if (!alreadySelected) queueAnalysisFocusPulse(panel, payload);
+    expandRangesForHighlight(panel.analysis.highlight);
+    renderAll();
+  }
+
+  function domainStabilityGraphTooltip(item, panel) {
+    const theta = panelTheta(panel);
+    return `
+      <strong>${escapeHtml(intervalTimestepPrimary(item, "source"))} -> ${escapeHtml(intervalTimestepPrimary(item, "target"))}</strong>
+      <div class="tooltip-grid" style="margin-top:8px;">
+        <div>Time</div><div>${escapeHtml(formatIntervalFs(intervalTimeFs(item)))}</div>
+        <div>Domain change score</div><div>${escapeHtml(formatScore(item.domain_change_score))}</div>
+        <div>Domain churn</div><div>${escapeHtml(formatScore(100 * Number(item.churn_score || 0)))}%</div>
+        <div>Mean source retention</div><div>${escapeHtml(formatScore(100 * Number(item.mean_source_retention || 0)))}%</div>
+        <div>Mean target inheritance</div><div>${escapeHtml(formatScore(100 * Number(item.mean_target_inheritance || 0)))}%</div>
+        <div>Weak source/target</div><div>${escapeHtml(item.source_weak_count)} / ${escapeHtml(item.target_weak_count)}</div>
+        <div>Domain splits / merges</div><div>${escapeHtml(item.domain_splits)} / ${escapeHtml(item.domain_merges)}</div>
+        <div>Theta</div><div>${escapeHtml(formatScore(theta))}</div>
+      </div>`;
+  }
+
+  function renderDomainStabilityGraph(container, panel, rows) {
+    renderAnalysisPointGraph(container, panel, rows, {
+      id: "domain-stability",
+      heightKey: "domainStabilityGraphHeight",
+      zoomKey: "domainStabilityGraphZoomScale",
+      focusKey: "domainStabilityGraphFocus",
+      graphKey: "domainStabilityGraphKey",
+      selectedKeysKey: "selectedDomainStabilityKeys",
+      keyFn: domainStabilityKeyFromItem,
+      stateKey: panel => `domain-stability:${thresholdKey(panelTheta(panel))}`,
+      xValue: intervalTimeFs,
+      yValue: item => Number(item.domain_change_score),
+      sort: (a, b) => intervalTimeFs(a) - intervalTimeFs(b),
+      xLabel: "time (fs)",
+      yLabel: "domain change score",
+      xTickFormat: value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits),
+      yTickFormat: value => formatScore(value),
+      drawLine: true,
+      tooltip: domainStabilityGraphTooltip,
+      selectedKeySet: selectedDomainStabilityKeySet,
+      aggregateHighlight: aggregateSelectedDomainStabilityHighlight,
+      onClick: toggleDomainStabilityGraphSelection,
+      resizeTitle: "Drag to resize domain-stability plot"
+    });
+  }
+
   function disagreementSummaryKey(item) {
     return String(item?.id || `disagreement_pair:${Number(item?.source_timestep_index)}:${Number(item?.target_timestep_index)}`);
   }
@@ -3462,6 +3757,7 @@ d3.json("data.json").then(data => {
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedTrackKeys = [];
     panel.analysis.selectedAgreementPointKeys = [];
+    panel.analysis.selectedDomainStabilityKeys = [];
     panel.analysis.selectedDisagreementKeys = alreadySelected ? [] : [key];
     panel.analysis.highlight = aggregateSelectedDisagreementHighlight(panel);
     if (!alreadySelected) queueAnalysisFocusPulse(panel, payload);
@@ -3579,6 +3875,50 @@ d3.json("data.json").then(data => {
     const fallback = Math.max(sourcePercent, targetPercent);
     const value = Number(metrics[metric] ?? metrics.overlap_max_percent ?? fallback);
     return Number.isFinite(value) ? value : 0;
+  }
+
+  function overlapSourceRetention(match) {
+    const metrics = match?.metrics || match || {};
+    const value = Number(metrics.overlap_source_percent ?? match?.source_percent ?? 0);
+    return Number.isFinite(value) ? clamp(value / 100, 0, 1) : 0;
+  }
+
+  function overlapTargetInheritance(match) {
+    const metrics = match?.metrics || match || {};
+    const value = Number(metrics.overlap_target_percent ?? match?.target_percent ?? 0);
+    return Number.isFinite(value) ? clamp(value / 100, 0, 1) : 0;
+  }
+
+  function domainSupportForKey(key) {
+    const match = overlapMatchLookup.get(key);
+    if (!match) {
+      return { match: null, sourceRetention: 0, targetInheritance: 0, bidirectional: 0, any: 0 };
+    }
+    const sourceRetention = overlapSourceRetention(match);
+    const targetInheritance = overlapTargetInheritance(match);
+    return {
+      match,
+      sourceRetention,
+      targetInheritance,
+      bidirectional: Math.min(sourceRetention, targetInheritance),
+      any: Math.max(sourceRetention, targetInheritance),
+    };
+  }
+
+  function domainSupportForLink(link) {
+    return domainSupportForKey(linkKeyFromDatum(link));
+  }
+
+  function domainSupportClass(link, panel) {
+    if (panel?.dataMode === "overlap") return "";
+    const support = domainSupportForLink(link);
+    if (!support.match) return "domain-support-missing";
+    return support.bidirectional >= panelTheta(panel) ? "domain-support-strong" : "domain-support-weak";
+  }
+
+  function formatDomainSupport(support) {
+    if (!support?.match) return "N/A";
+    return `source ${formatScore(100 * support.sourceRetention)}%, target ${formatScore(100 * support.targetInheritance)}%`;
   }
 
   function meanOrZero(sum, count) {
@@ -4070,6 +4410,7 @@ d3.json("data.json").then(data => {
     panel.analysis.selectedTrackKeys = [];
     panel.analysis.selectedAgreementPointKeys = [];
     panel.analysis.selectedDisagreementKeys = [];
+    panel.analysis.selectedDomainStabilityKeys = [];
     const selected = panel.analysis.selectedIntervalKeys || [];
     const alreadySelected = selected.includes(key);
     panel.analysis.selectedIntervalKeys = alreadySelected
@@ -4089,6 +4430,7 @@ d3.json("data.json").then(data => {
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedAgreementPointKeys = [];
     panel.analysis.selectedDisagreementKeys = [];
+    panel.analysis.selectedDomainStabilityKeys = [];
     const selected = panel.analysis.selectedTrackKeys || [];
     const alreadySelected = selected.includes(key);
     panel.analysis.selectedTrackKeys = alreadySelected
@@ -4138,6 +4480,7 @@ d3.json("data.json").then(data => {
     panel.analysis.selectedTrackKeys = [];
     panel.analysis.selectedAgreementPointKeys = [];
     panel.analysis.selectedDisagreementKeys = [];
+    panel.analysis.selectedDomainStabilityKeys = [];
     panel.analysis.highlight = null;
     if (state.analysisFocusPulse?.panelId === panel.id) state.analysisFocusPulse = null;
   }
@@ -4148,6 +4491,7 @@ d3.json("data.json").then(data => {
     panel.analysis.selectedTrackKeys = [];
     panel.analysis.selectedAgreementPointKeys = [];
     panel.analysis.selectedDisagreementKeys = [];
+    panel.analysis.selectedDomainStabilityKeys = [];
     state.analysisFocusPulse = null;
     panel.analysis.highlight = highlight;
     if (focusRange && highlight && Number.isFinite(Number(highlight.start)) && Number.isFinite(Number(highlight.end))) {
@@ -4168,6 +4512,7 @@ d3.json("data.json").then(data => {
     panel.analysis.selectedTrackKeys = [];
     panel.analysis.selectedAgreementPointKeys = [];
     panel.analysis.selectedDisagreementKeys = [];
+    panel.analysis.selectedDomainStabilityKeys = [];
     state.analysisFocusPulse = null;
     panel.analysis.highlight = null;
     renderAll();
@@ -4189,7 +4534,7 @@ d3.json("data.json").then(data => {
     const actions = toolbar.append("div").attr("class", "analysis-actions");
 
     if (!hasEmbeddedAnalysisData) {
-      box.append("div").attr("class", "analysis-hint").text("Runtime interval and continuing-feature analysis is available. Run Stage 5B to populate sensitivity and metric-agreement summaries.");
+      box.append("div").attr("class", "analysis-hint").text("Runtime interval, continuing-feature, and domain-stability analysis is available. Run Stage 5B to populate sensitivity and metric-agreement summaries.");
     }
 
     const thetaSelect = actions.append("label");
@@ -4207,6 +4552,7 @@ d3.json("data.json").then(data => {
       panel.analysis.selectedTrackKeys = [];
       panel.analysis.selectedAgreementPointKeys = [];
       panel.analysis.selectedDisagreementKeys = [];
+      panel.analysis.selectedDomainStabilityKeys = [];
       state.analysisFocusPulse = null;
       panel.analysis.highlight = null;
       renderAll();
@@ -4220,6 +4566,7 @@ d3.json("data.json").then(data => {
     const tabs = [
       ["intervals", "Intervals"],
       ["tracks", "Continuing features"],
+      ["domain", "Domain stability"],
       ["sensitivity", "Sensitivity"],
       ["agreement", "Metric agreement"],
       ["disagreement", "Domain/range disagreement"],
@@ -4237,6 +4584,7 @@ d3.json("data.json").then(data => {
             if (id === "agreement" || id === "disagreement") {
               panel.analysis.selectedIntervalKeys = [];
               panel.analysis.selectedTrackKeys = [];
+              panel.analysis.selectedDomainStabilityKeys = [];
               panel.analysis.highlight = null;
             }
             state.analysisFocusPulse = null;
@@ -4295,6 +4643,30 @@ d3.json("data.json").then(data => {
       return;
     }
 
+    if (panel.analysis.tab === "domain") {
+      const rows = domainStabilityRows(panel);
+      const visibleRows = rows.slice(0, Math.min(panel.analysis.topDomainStability, rows.length));
+      const controls = content.append("div").attr("class", "analysis-actions");
+      controls.append("span").attr("class", "analysis-hint").text(`Show/highlight top domain-change intervals out of ${rows.length}`);
+      const countInput = controls.append("input")
+        .attr("type", "number")
+        .attr("min", 1)
+        .attr("max", Math.max(1, rows.length))
+        .property("value", Math.min(panel.analysis.topDomainStability, Math.max(1, rows.length)));
+      countInput.on("change", event => {
+        const maxCount = Math.max(1, rows.length);
+        panel.analysis.topDomainStability = clamp(Math.floor(Number(event.target.value) || 1), 1, maxCount);
+        renderAll();
+      });
+      controls.append("button").attr("type", "button").text("Highlight")
+        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(visibleRows.map(domainStabilityHighlightPayload), `Top ${visibleRows.length} domain-change intervals`), false));
+
+      renderDomainStabilityGraph(content, panel, visibleRows);
+
+      if (!rows.length) content.append("div").attr("class", "analysis-hint").text("No domain-stability analysis for this theta.");
+      return;
+    }
+
     if (panel.analysis.tab === "sensitivity") {
       const sensitivityRows = computeRuntimeSensitivity(panel);
       content.append("div")
@@ -4320,6 +4692,7 @@ d3.json("data.json").then(data => {
             panel.analysis.selectedTrackKeys = [];
             panel.analysis.selectedAgreementPointKeys = [];
             panel.analysis.selectedDisagreementKeys = [];
+            panel.analysis.selectedDomainStabilityKeys = [];
             state.analysisFocusPulse = null;
             panel.analysis.highlight = null;
             renderAll();
@@ -4359,6 +4732,7 @@ d3.json("data.json").then(data => {
           panel.analysis.selectedAgreementMetrics = [];
           panel.analysis.selectedAgreementPointKeys = [];
           panel.analysis.selectedDisagreementKeys = [];
+          panel.analysis.selectedDomainStabilityKeys = [];
           renderAll();
         });
 
@@ -4424,9 +4798,46 @@ d3.json("data.json").then(data => {
     return Number.isFinite(theta) ? theta : defaultAnalysisTheta();
   }
 
+  function panelMatchForKey(key, panel) {
+    const mode = panel?.dataMode || "shape";
+    if (mode === "overlap") return overlapMatchLookup.get(key) || null;
+    if (mode === "hybrid") {
+      const overlapMatch = overlapMatchLookup.get(key) || null;
+      const shapeMatch = shapeMatchLookup.get(key) || null;
+      if (!overlapMatch && !shapeMatch) return null;
+      return {
+        ...(overlapMatch || shapeMatch),
+        metrics: {
+          ...((overlapMatch || {}).metrics || {}),
+          ...((shapeMatch || {}).metrics || {}),
+        },
+      };
+    }
+    return shapeMatchLookup.get(key) || null;
+  }
+
+  function panelMatchesForNode(node, direction, panel) {
+    const key = nodeKeyFromDatum(node);
+    const mode = panel?.dataMode || "shape";
+    if (mode === "overlap") {
+      return direction === "incoming"
+        ? (overlapIncomingByNode.get(key) || [])
+        : (overlapOutgoingByNode.get(key) || []);
+    }
+    if (mode === "hybrid") {
+      const base = direction === "incoming"
+        ? (overlapIncomingByNode.get(key) || [])
+        : (overlapOutgoingByNode.get(key) || []);
+      return base.map(match => panelMatchForKey(linkKeyFromDatum(match), panel)).filter(Boolean);
+    }
+    return direction === "incoming"
+      ? (shapeIncomingByNode.get(key) || [])
+      : (shapeOutgoingByNode.get(key) || []);
+  }
+
   function continuationScore(match, panel) {
     if (!match) return null;
-    return combinedShapeScore(match.metrics || {}, panel?.shapeWeights || cloneDefaultShapeWeights());
+    return panelAnalysisScore(match, panel);
   }
 
   function continuationStatus(score, theta) {
@@ -4441,7 +4852,7 @@ d3.json("data.json").then(data => {
 
   function continuationLinkInfo(link, panel) {
     const key = linkKeyFromDatum(link);
-    const match = shapeMatchLookup.get(key) || (link?.metrics?.shape_iou !== undefined ? link : null);
+    const match = panelMatchForKey(key, panel) || link;
     const theta = panelTheta(panel);
     const score = continuationScore(match, panel);
     return {
@@ -4454,10 +4865,7 @@ d3.json("data.json").then(data => {
 
   function bestContinuationForNode(node, direction, panel) {
     if (!node) return { theta: panelTheta(panel), score: null, text: "N/A" };
-    const key = nodeKeyFromDatum(node);
-    const matches = direction === "incoming"
-      ? (shapeIncomingByNode.get(key) || [])
-      : (shapeOutgoingByNode.get(key) || []);
+    const matches = panelMatchesForNode(node, direction, panel);
     const theta = panelTheta(panel);
     let best = null;
     let bestScore = null;
@@ -4767,6 +5175,7 @@ d3.json("data.json").then(data => {
         <div>Target RSI JSON</div><div>${escapeHtml(targetRsijson)}</div>
         <div>${escapeHtml(metricLabel(panel.dataMode, panel.metricId))}</div><div>${escapeHtml(formatScore(metricValueNow))}</div>
         <div>Continuation score</div><div>${escapeHtml(continuation.text)}</div>
+        <div>Domain support</div><div>${escapeHtml(formatDomainSupport(domainSupportForLink(link)))}</div>
         <div>Normalized</div><div>${escapeHtml(formatScore(metricRatio * 100))}%</div>
       </div>
       <div class="tooltip-grid" style="margin-top:10px;">
@@ -4852,6 +5261,7 @@ d3.json("data.json").then(data => {
     const selectedMetricLabel = metricLabel(panel.dataMode, panel.metricId);
     const selectedMetricValue = metricValue(link, panel, panel.metricId);
     const continuation = continuationLinkInfo(link, panel);
+    const domainSupport = domainSupportForLink(link);
     const sourceImageFile = sourceNode?.thumbnail ? imageFilename(sourceNode.thumbnail) : "N/A";
     const targetImageFile = targetNode?.thumbnail ? imageFilename(targetNode.thumbnail) : "N/A";
     const sourceFiberImageFile = sourceNode?.fiber_surface_image ? imageFilename(sourceNode.fiber_surface_image) : "N/A";
@@ -4898,6 +5308,9 @@ d3.json("data.json").then(data => {
       analysis_theta: continuation.theta,
       continuation_score: continuation.score,
       continuation_status: continuation.status,
+      domain_source_retention: domainSupport.match ? 100 * domainSupport.sourceRetention : null,
+      domain_target_inheritance: domainSupport.match ? 100 * domainSupport.targetInheritance : null,
+      domain_bidirectional_support: domainSupport.match ? 100 * domainSupport.bidirectional : null,
       width: link.width,
       opacity: link.opacity,
       score: link.score
@@ -4916,6 +5329,7 @@ d3.json("data.json").then(data => {
         <div>Target fiber image file</div><div>${escapeHtml(targetFiberImageFile)}</div>
         <div>${escapeHtml(selectedMetricLabel)}</div><div>${escapeHtml(formatScore(selectedMetricValue))}</div>
         <div>Continuation score</div><div>${escapeHtml(continuation.text)}</div>
+        <div>Domain support</div><div>${escapeHtml(formatDomainSupport(domainSupport))}</div>
       </div>
       <div class="thumb-row link-media-row">
         <div>${sourceImage}</div>
@@ -5974,6 +6388,9 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       .join("path")
       .attr("class", "link global-link")
       .classed("analysis-highlight", d => activeLinkHighlights.has(linkKeyFromDatum(d)))
+      .classed("domain-support-strong", d => domainSupportClass(d, panel) === "domain-support-strong")
+      .classed("domain-support-weak", d => domainSupportClass(d, panel) === "domain-support-weak")
+      .classed("domain-support-missing", d => domainSupportClass(d, panel) === "domain-support-missing")
       .attr("d", ribbonPath)
       .attr("fill", d => linkFillColor(d.opacity, false))
       .on("mouseenter", function(event, d) {
@@ -6180,7 +6597,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       metricId: "combined",
       threshold: 0,
       shapeWeights: cloneDefaultShapeWeights(),
-      analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], selectedTrackKeys: [], selectedAgreementPointKeys: [], selectedDisagreementKeys: [], highlight: null } : null,
+      analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], selectedTrackKeys: [], selectedAgreementPointKeys: [], selectedDisagreementKeys: [], selectedDomainStabilityKeys: [], highlight: null } : null,
       panelHeight: clampPanelHeight(activePanel?.panelHeight ?? PANEL_HEIGHT_DEFAULT)
     });
     renderAll();
