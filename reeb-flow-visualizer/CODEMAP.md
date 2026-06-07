@@ -55,8 +55,6 @@ active code path.
 - `VIEWER_DEFAULT_TOP_SHEETS`
 - `SHAPE_SCORE_DEFAULT_WEIGHTS`
 - `RANGE_SCORE_DEFAULT_WEIGHTS`
-- `HYBRID_SCORE_DEFAULT_WEIGHTS`
-- `HYBRID_VERTEX_METRIC_DEFAULT`
 
 Runtime library paths are also derived here for VTK/TTK/FV99.
 
@@ -114,13 +112,13 @@ Important outputs:
 - `cache/matches/*.json`
 - `cache/vtp/*.sheets.vtp`
 
-Shape matching exports sheet geometry by running `fv99 --headless` through
+Range matching exports sheet geometry by running `fv99 --headless` through
 `SheetRenderer/render_rs_sheets.py`. That export also sets `OMP_NUM_THREADS`
 from `FV99_OMP_THREADS`, matching stage 1. If a timestep cannot export a VTP,
 the cache build fails for that timestep; `main` does not synthesize fallback
-shape metrics from `.rsi` alone.
+range metrics from `.rsi` alone.
 
-Per-link shape metrics include:
+Per-link range metrics include:
 
 - `final_score`
 - `shape_iou`
@@ -142,7 +140,7 @@ The output is:
 
 `BASE_DIR/sankey/sheet_overlaps.json`
 
-This file also stores range/shape metrics from the shape-match cache when a
+This file also stores range metrics from the range-match cache when a
 matching sheet pair exists.
 
 ### Stage 4A: Sheet Rendering
@@ -190,9 +188,8 @@ No parent redirect or wrapper dashboard is generated.
 
 The unified viewer supports:
 
-- vertex-overlap mode
-- shape-metric mode
-- hybrid mode
+- domain-overlap mode
+- range-metric mode
 - multiple Sankey panels
 - range selection and range deletion
 - synchronized top range bar

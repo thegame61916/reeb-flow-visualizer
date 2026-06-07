@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Build a unified Sankey dashboard for overlap and shape metrics."""
+"""Build a unified Sankey dashboard for domain and range metrics."""
 
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ from common import (
     CENTROID_AXIS_DIAGONAL_COLORS,
     CENTROID_COLOR_CORNERS,
     FIBER_SURFACE_IMAGE_DIR,
-    HYBRID_SCORE_DEFAULT_WEIGHTS,
-    HYBRID_VERTEX_METRIC_DEFAULT,
     OUTPUT_DIR,
     OVERLAP_FILE,
     SHEET_IMAGE_DIR,
@@ -45,45 +43,35 @@ MATCHES_FILE = STORAGE_ROOT / "results" / "sheet_shape_matches.json"
 UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
 
 SHAPE_METRICS = [
-    {"id": "combined", "label": "combined", "field": "final_score"},
-    {"id": "shape_iou", "label": "shape IoU", "field": "shape_iou"},
-    {"id": "area_ratio", "label": "area ratio", "field": "area_ratio"},
-    {"id": "bbox_iou", "label": "bbox IoU", "field": "bbox_iou"},
-    {"id": "centroid_similarity", "label": "centroid similarity", "field": "centroid_similarity"},
+    {"id": "combined", "label": "range score", "field": "final_score"},
+    {"id": "shape_iou", "label": "range IoU", "field": "shape_iou"},
+    {"id": "area_ratio", "label": "range area ratio", "field": "area_ratio"},
+    {"id": "bbox_iou", "label": "range bbox IoU", "field": "bbox_iou"},
+    {"id": "centroid_similarity", "label": "range centroid similarity", "field": "centroid_similarity"},
 ]
 
 OVERLAP_METRICS = [
-    {"id": "overlap_vertices", "label": "overlap vertices", "field": "overlap_vertices"},
-    {"id": "overlap_source_percent", "label": "source overlap %", "field": "source_percent"},
-    {"id": "overlap_target_percent", "label": "target overlap %", "field": "target_percent"},
-    {"id": "overlap_max_percent", "label": "max overlap %", "field": "max_percent"},
+    {"id": "overlap_vertices", "label": "domain overlap vertices", "field": "overlap_vertices"},
+    {"id": "overlap_source_percent", "label": "source domain %", "field": "source_percent"},
+    {"id": "overlap_target_percent", "label": "target domain %", "field": "target_percent"},
+    {"id": "overlap_max_percent", "label": "max domain %", "field": "max_percent"},
 ]
 
-HYBRID_METRICS = [
-    {"id": "hybrid_combined", "label": "hybrid combined", "field": "hybrid_combined"},
-]
 
 DATA_MODES = [
     {
         "id": "overlap",
-        "label": "Vertex overlap",
+        "label": "Domain overlap",
         "pair_field": "overlap_pairs",
         "default_metric": "overlap_max_percent",
         "metrics": OVERLAP_METRICS,
     },
     {
         "id": "shape",
-        "label": "Shape metrics",
+        "label": "Range metrics",
         "pair_field": "shape_pairs",
         "default_metric": "combined",
         "metrics": SHAPE_METRICS,
-    },
-    {
-        "id": "hybrid",
-        "label": "Hybrid metrics",
-        "pair_field": "",
-        "default_metric": "hybrid_combined",
-        "metrics": HYBRID_METRICS,
     },
 ]
 
@@ -527,8 +515,6 @@ def prepare_data(viewer_dir: Path) -> dict:
             "metric_maxima": metric_maxima,
             "shape_score_components": list(SHAPE_SCORE_DEFAULT_WEIGHTS.keys()),
             "shape_score_default_weights": SHAPE_SCORE_DEFAULT_WEIGHTS,
-            "hybrid_score_default_weights": HYBRID_SCORE_DEFAULT_WEIGHTS,
-            "hybrid_vertex_metric_default": HYBRID_VERTEX_METRIC_DEFAULT,
             "tracking_analysis_thresholds": list(TRACKING_ANALYSIS_THRESHOLDS),
             "tracking_analysis_preferred_threshold": TRACKING_ANALYSIS_PREFERRED_THRESHOLD,
             "tracking_analysis_top_intervals": TRACKING_ANALYSIS_TOP_INTERVALS,
@@ -580,8 +566,8 @@ def apply_current_tracking_analysis_meta(data: dict) -> dict:
     meta["data_modes"] = DATA_MODES
     meta["shape_score_components"] = list(SHAPE_SCORE_DEFAULT_WEIGHTS.keys())
     meta["shape_score_default_weights"] = SHAPE_SCORE_DEFAULT_WEIGHTS
-    meta["hybrid_score_default_weights"] = HYBRID_SCORE_DEFAULT_WEIGHTS
-    meta["hybrid_vertex_metric_default"] = HYBRID_VERTEX_METRIC_DEFAULT
+    for removed_key in ("hybrid_score_default_weights", "hybrid_vertex_metric_default"):
+        meta.pop(removed_key, None)
     meta["centroid_color_corners"] = CENTROID_COLOR_CORNERS
     meta["centroid_axis_diagonal_colors"] = CENTROID_AXIS_DIAGONAL_COLORS
     meta["viewer_default_top_sheets"] = max(1, safe_int(VIEWER_DEFAULT_TOP_SHEETS, 10))
@@ -635,7 +621,7 @@ def write_index_html() -> Path:
   <header>
     <div class="title-block">
       <h1>Reeb Flow Visualizer</h1>
-      <p>Compare vertex-overlap and shape metrics in synchronized Sankey panels.</p>
+      <p>Compare domain-overlap and range metrics in synchronized Sankey panels.</p>
     </div>
     <div class="header-actions">
       <button id="zoomOut">Zoom out</button>
@@ -668,13 +654,13 @@ def write_index_html() -> Path:
           <select id="orderingMode">
             <option value="crossings" selected>crossing-minimized</option>
             <option value="area">sheet area</option>
-            <option value="vertices">vertex count</option>
+            <option value="vertices">domain vertex count</option>
           </select>
         </label>
         <label>
           Node Height Basis
           <select id="nodeSizeMode">
-            <option value="vertices" selected>vertex count</option>
+            <option value="vertices" selected>domain vertex count</option>
           </select>
         </label>
         <label>
@@ -686,7 +672,7 @@ def write_index_html() -> Path:
           <select id="nodeColorMode">
             <option value="solid" selected>solid</option>
             <option value="area">sheet area</option>
-            <option value="vertices">vertex count</option>
+            <option value="vertices">domain vertex count</option>
             <option value="centroid_position">centroid corners</option>
             <option value="centroid_axis_diagonal">centroid red/blue axes</option>
           </select>
@@ -1140,24 +1126,6 @@ h2 {
   height: 26px;
   min-width: 0;
 }
-.hybrid-controls {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(88px, 1fr));
-  gap: 6px;
-  width: 100%;
-  flex-basis: 100%;
-}
-.hybrid-item {
-  display: grid;
-  gap: 3px;
-  font-size: 11px;
-  color: #556371;
-}
-.hybrid-item input,
-.hybrid-item select {
-  height: 26px;
-  min-width: 0;
-}
 label.inline {
   display: flex;
   align-items: center;
@@ -1406,60 +1374,6 @@ svg.summary-chart {
   fill: transparent;
   cursor: pointer;
 }
-.analysis-agreement-line {
-  fill: none;
-  opacity: 1;
-  stroke-opacity: 1;
-  stroke-width: 2.2px;
-}
-.analysis-agreement-dot {
-  stroke: #fff;
-  stroke-width: 1.4px;
-}
-.analysis-agreement-dot.active {
-  stroke: #111827;
-  stroke-width: 2px;
-}
-.analysis-agreement-hit {
-  fill: transparent;
-  cursor: pointer;
-}
-.analysis-metric-summary {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 6px;
-  margin: 7px 0 4px;
-}
-.analysis-metric-card {
-  border: 1px solid #d9e2ec;
-  border-radius: 5px;
-  background: #fff;
-  padding: 6px 8px;
-  font-size: 12px;
-}
-.analysis-metric-card header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-.analysis-metric-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 700;
-  color: #233040;
-}
-.analysis-metric-color {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  display: inline-block;
-}
-.analysis-metric-card button {
-  padding: 2px 6px;
-}
 .analysis-graph-resizer {
   margin: 4px 0 8px;
 }
@@ -1668,6 +1582,9 @@ d3.json("data.json").then(data => {
   const analysisThresholds = Array.isArray(analysisData?.thresholds) && analysisData.thresholds.length
     ? analysisData.thresholds.map(Number).filter(Number.isFinite)
     : [0.5];
+  const VERTEX_THETA_QUANTILE = 0.5;
+  const VERTEX_THETA_OPTION_QUANTILES = [0.25, 0.5, 0.75, 0.9];
+  const vertexThetaCache = new Map();
   const dataModes = data.meta.data_modes || [];
   const modeById = new Map(dataModes.map(mode => [mode.id, mode]));
   const metricMaxima = data.meta.metric_maxima || {};
@@ -1682,10 +1599,9 @@ d3.json("data.json").then(data => {
   );
   if (!shapeScoreComponentIds.length) shapeScoreComponentIds.push(...shapeScoreComponentFallback);
   const shapeScoreDefaultWeightsRaw = data.meta.shape_score_default_weights || {};
-  const hybridScoreDefaultWeightsRaw = data.meta.hybrid_score_default_weights || {};
-  const hybridVertexMetricDefault = overlapMetricIds.includes(data.meta.hybrid_vertex_metric_default)
-    ? data.meta.hybrid_vertex_metric_default
-    : (overlapMetricIds.includes("overlap_max_percent") ? "overlap_max_percent" : (overlapMetricIds[0] || "overlap_max_percent"));
+  const vertexMetricDefault = overlapMetricIds.includes("overlap_max_percent")
+    ? "overlap_max_percent"
+    : (overlapMetricIds[0] || "overlap_max_percent");
   const areaMax = data.meta.global_area_max || 1;
   const vertexMax = data.meta.global_vertex_max || 1;
   const centroidColorBounds = Array.isArray(data.meta.centroid_color_bounds) && data.meta.centroid_color_bounds.length === 4
@@ -2145,20 +2061,10 @@ d3.json("data.json").then(data => {
     legend.hidden = !["centroid_position", "centroid_axis_diagonal"].includes(state.layoutControls.nodeColorMode);
   }
 
-  function sanitizeShapeWeights(weights) {
+  function sanitizeShapeWeights(_weights) {
     const next = {};
-    let anyPositive = false;
     for (const metricId of shapeScoreComponentIds) {
-      const fallback = Math.max(0, Number(shapeScoreDefaultWeightsRaw?.[metricId]) || 0);
-      const raw = Number(weights?.[metricId]);
-      const value = Number.isFinite(raw) && raw >= 0 ? raw : fallback;
-      next[metricId] = value;
-      anyPositive = anyPositive || value > 0;
-    }
-    if (!anyPositive) {
-      for (const metricId of shapeScoreComponentIds) {
-        next[metricId] = Math.max(0, Number(shapeScoreDefaultWeightsRaw?.[metricId]) || 0);
-      }
+      next[metricId] = metricId === "shape_iou" ? 1 : 0;
     }
     return next;
   }
@@ -2167,38 +2073,9 @@ d3.json("data.json").then(data => {
     return sanitizeShapeWeights(shapeScoreDefaultWeightsRaw);
   }
 
-  function sanitizeHybridWeights(weights) {
-    const fallbackVertex = Math.max(0, Number(hybridScoreDefaultWeightsRaw?.vertex_overlap) || 0);
-    const fallbackShape = Math.max(0, Number(hybridScoreDefaultWeightsRaw?.shape_combined) || 0);
-    const vertexRaw = Number(weights?.vertex_overlap);
-    const shapeRaw = Number(weights?.shape_combined);
-    const vertex = Number.isFinite(vertexRaw) && vertexRaw >= 0 ? vertexRaw : fallbackVertex;
-    const shape = Number.isFinite(shapeRaw) && shapeRaw >= 0 ? shapeRaw : fallbackShape;
-    if (vertex > 0 || shape > 0) {
-      return { vertex_overlap: vertex, shape_combined: shape };
-    }
-    return { vertex_overlap: fallbackVertex, shape_combined: fallbackShape };
-  }
-
-  function cloneDefaultHybridWeights() {
-    return sanitizeHybridWeights(hybridScoreDefaultWeightsRaw);
-  }
-
-  function sanitizeHybridVertexMetric(metricId) {
-    const id = String(metricId || "");
-    if (overlapMetricIds.includes(id)) return id;
-    return hybridVertexMetricDefault;
-  }
-
   function ensurePanelShapeWeights(panel) {
-    if (!panel || (panel.dataMode !== "shape" && panel.dataMode !== "hybrid")) return;
-    panel.shapeWeights = sanitizeShapeWeights(panel.shapeWeights || cloneDefaultShapeWeights());
-  }
-
-  function ensurePanelHybridConfig(panel) {
-    if (!panel || panel.dataMode !== "hybrid") return;
-    panel.hybridWeights = sanitizeHybridWeights(panel.hybridWeights || cloneDefaultHybridWeights());
-    panel.hybridVertexMetric = sanitizeHybridVertexMetric(panel.hybridVertexMetric);
+    if (!panel || panel.dataMode !== "shape") return;
+    panel.shapeWeights = cloneDefaultShapeWeights();
   }
 
   function combinedShapeScore(metrics, weights) {
@@ -2218,18 +2095,6 @@ d3.json("data.json").then(data => {
     if (panel?.dataMode === "shape" && id === "combined") {
       return combinedShapeScore(link.metrics || {}, panel.shapeWeights || cloneDefaultShapeWeights());
     }
-    if (panel?.dataMode === "hybrid" && id === "hybrid_combined") {
-      const weights = sanitizeHybridWeights(panel.hybridWeights || cloneDefaultHybridWeights());
-      const overlapMetricId = sanitizeHybridVertexMetric(panel.hybridVertexMetric);
-      const overlapRaw = Math.max(0, Number(link.metrics?.[overlapMetricId]) || 0);
-      const overlapMax = Math.max(1e-12, Number(metricMaxima?.[overlapMetricId]) || 0);
-      const overlapNorm = overlapMax > 0 ? clamp(overlapRaw / overlapMax, 0, 1) : 0;
-      const shapeNorm = combinedShapeScore(link.metrics || {}, panel.shapeWeights || cloneDefaultShapeWeights());
-      const wVertex = Math.max(0, Number(weights.vertex_overlap) || 0);
-      const wShape = Math.max(0, Number(weights.shape_combined) || 0);
-      const denom = wVertex + wShape;
-      return denom > 0 ? ((wVertex * overlapNorm + wShape * shapeNorm) / denom) : 0;
-    }
     return Number(link.metrics?.[id] ?? 0);
   }
 
@@ -2245,10 +2110,74 @@ d3.json("data.json").then(data => {
       }
       return maxValue > 0 ? maxValue : 1;
     }
-    if (panel?.dataMode === "hybrid" && id === "hybrid_combined") {
-      return 1;
-    }
     return metricMaxima[id] || 1;
+  }
+
+  function bestByScore(rows, scoreFn) {
+    let best = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (const row of rows || []) {
+      const score = Number(scoreFn(row));
+      if (!Number.isFinite(score)) continue;
+      if (score > bestScore) {
+        best = row;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
+  function overlapSourceRetention(match) {
+    const metrics = match?.metrics || match || {};
+    const value = Number(metrics.overlap_source_percent ?? match?.source_percent ?? 0);
+    return Number.isFinite(value) ? clamp(value / 100, 0, 1) : 0;
+  }
+
+  function overlapTargetInheritance(match) {
+    const metrics = match?.metrics || match || {};
+    const value = Number(metrics.overlap_target_percent ?? match?.target_percent ?? 0);
+    return Number.isFinite(value) ? clamp(value / 100, 0, 1) : 0;
+  }
+
+  function bidirectionalDomainSupport(match) {
+    return Math.min(overlapSourceRetention(match), overlapTargetInheritance(match));
+  }
+
+  function domainSupportForKey(key) {
+    const match = overlapMatchLookup.get(key);
+    if (!match) {
+      return { match: null, sourceRetention: 0, targetInheritance: 0, bidirectional: 0, any: 0 };
+    }
+    const sourceRetention = overlapSourceRetention(match);
+    const targetInheritance = overlapTargetInheritance(match);
+    return {
+      match,
+      sourceRetention,
+      targetInheritance,
+      bidirectional: Math.min(sourceRetention, targetInheritance),
+      any: Math.max(sourceRetention, targetInheritance),
+    };
+  }
+
+  function domainSupportForLink(link) {
+    return domainSupportForKey(linkKeyFromDatum(link));
+  }
+
+  function domainSupportClass(link, panel) {
+    if (panel?.dataMode === "overlap") return "";
+    const support = domainSupportForLink(link);
+    if (!support.match) {
+      return state.layoutControls.showMissingDomainSupport ? "domain-support-missing" : "";
+    }
+    if (support.bidirectional >= panelTheta(panel)) {
+      return state.layoutControls.showStrongDomainSupport ? "domain-support-strong" : "";
+    }
+    return state.layoutControls.showWeakDomainSupport ? "domain-support-weak" : "";
+  }
+
+  function formatDomainSupport(support) {
+    if (!support?.match) return "N/A";
+    return `source ${formatScore(100 * support.sourceRetention)}%, target ${formatScore(100 * support.targetInheritance)}%`;
   }
 
   function applyRangeAction(action) {
@@ -2312,37 +2241,7 @@ d3.json("data.json").then(data => {
     return modeById.get(modeId)?.pair_field || "";
   }
 
-  function buildHybridPairsForPanel(panel) {
-    const overlapPairs = Array.isArray(data.overlap_pairs) ? data.overlap_pairs : [];
-    const hybridPairs = [];
-    for (const pair of overlapPairs) {
-      const matches = [];
-      for (const overlapMatch of (pair.matches || [])) {
-        const key = `${pair.source_timestep_index}:${overlapMatch.source_sheet_id}->${pair.target_timestep_index}:${overlapMatch.target_sheet_id}`;
-        const shapeMatch = shapeMatchLookup.get(key) || null;
-        const shapeMetrics = shapeMatch?.metrics || {};
-        const mergedMetrics = {
-          ...(overlapMatch.metrics || {}),
-          ...(shapeMetrics || {}),
-        };
-        matches.push({
-          ...overlapMatch,
-          metrics: mergedMetrics,
-        });
-      }
-      hybridPairs.push({
-        ...pair,
-        matches,
-      });
-    }
-    return hybridPairs;
-  }
-
-  function pairsForMode(modeId, panel = null) {
-    if (modeId === "hybrid") {
-      if (!panel) return Array.isArray(data.overlap_pairs) ? data.overlap_pairs : [];
-      return buildHybridPairsForPanel(panel);
-    }
+  function pairsForMode(modeId, _panel = null) {
     const field = pairFieldForMode(modeId);
     if (!field) return [];
     return Array.isArray(data[field]) ? data[field] : [];
@@ -2354,22 +2253,66 @@ d3.json("data.json").then(data => {
 
 
   function thresholdKey(value) {
-    if (!analysisThresholds.length) return String(value ?? "");
     const numeric = Number(value);
-    const selected = Number.isFinite(numeric) ? numeric : analysisThresholds[0];
-    let best = analysisThresholds[0];
-    let bestDelta = Math.abs(best - selected);
-    for (const threshold of analysisThresholds) {
-      const delta = Math.abs(threshold - selected);
-      if (delta < bestDelta) {
-        best = threshold;
-        bestDelta = delta;
-      }
-    }
-    return String(best);
+    if (!Number.isFinite(numeric)) return String(value ?? "");
+    return numeric.toFixed(6).replace(/0+$/, "").replace(/[.]$/, "");
   }
 
-  function defaultAnalysisTheta() {
+  function overlapScoreForTheta(match, metricId) {
+    const metrics = match?.metrics || match || {};
+    const sourcePercent = Number(metrics.overlap_source_percent ?? match?.source_percent ?? 0) || 0;
+    const targetPercent = Number(metrics.overlap_target_percent ?? match?.target_percent ?? 0) || 0;
+    const fallback = Math.max(sourcePercent, targetPercent);
+    const raw = Number(metrics[metricId] ?? metrics.overlap_max_percent ?? fallback);
+    if (!Number.isFinite(raw)) return 0;
+    if (String(metricId).includes("percent")) return clamp(raw / 100, 0, 1);
+    const maxValue = Math.max(1e-12, Number(metricMaxima?.[metricId]) || 0);
+    return maxValue > 0 ? clamp(raw / maxValue, 0, 1) : raw;
+  }
+
+  function vertexThetaStats(metricId = vertexMetricDefault) {
+    const id = overlapMetricIds.includes(metricId) ? metricId : vertexMetricDefault;
+    if (vertexThetaCache.has(id)) return vertexThetaCache.get(id);
+    const scores = [];
+    for (const pair of (Array.isArray(data.overlap_pairs) ? data.overlap_pairs : [])) {
+      const sourceIndex = Number(pair.source_timestep_index);
+      const sourceSheets = timestepByIndex.get(sourceIndex)?.sheets || [];
+      const bySource = groupMatchesByField(pair.matches || [], "source_sheet_id");
+      for (const sheet of sourceSheets) {
+        const matches = bySource.get(Number(sheet.sheet_id)) || [];
+        let best = 0;
+        for (const match of matches) best = Math.max(best, overlapScoreForTheta(match, id));
+        scores.push(best);
+      }
+    }
+    const sorted = scores.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+    const quantile = fraction => {
+      if (!sorted.length) return 0.5;
+      const index = Math.max(0, Math.min(sorted.length - 1, Math.round(fraction * (sorted.length - 1))));
+      return sorted[index];
+    };
+    const options = VERTEX_THETA_OPTION_QUANTILES
+      .map(quantile)
+      .filter(Number.isFinite)
+      .filter((value, index, values) => values.findIndex(other => Math.abs(other - value) < 1e-6) === index)
+      .sort((a, b) => a - b);
+    const result = {
+      metricId: id,
+      count: sorted.length,
+      defaultTheta: quantile(VERTEX_THETA_QUANTILE),
+      options: options.length ? options : [0.5],
+    };
+    vertexThetaCache.set(id, result);
+    return result;
+  }
+
+  function analysisThresholdOptions(panel) {
+    if (panel?.dataMode === "overlap") return vertexThetaStats(panel.metricId || vertexMetricDefault).options;
+    return analysisThresholds.length ? analysisThresholds : [0.5];
+  }
+
+  function defaultAnalysisTheta(panel = null) {
+    if (panel?.dataMode === "overlap") return vertexThetaStats(panel.metricId || vertexMetricDefault).defaultTheta;
     const preferred = Number(analysisData?.preferred_threshold);
     if (Number.isFinite(preferred)) return preferred;
     return analysisThresholds.length ? analysisThresholds[0] : 0.5;
@@ -2379,7 +2322,7 @@ d3.json("data.json").then(data => {
     if (!panel.analysis) {
       panel.analysis = {
         tab: "intervals",
-        theta: defaultAnalysisTheta(),
+        theta: defaultAnalysisTheta(panel),
         topIntervals: Math.min(5, Math.max(1, Number(analysisData?.top_intervals) || 5)),
         topFeatures: Math.min(5, Math.max(1, Number(analysisData?.top_features) || 5)),
         topDomainStability: Math.min(12, Math.max(1, Number(analysisData?.top_intervals) || 12)),
@@ -2396,16 +2339,10 @@ d3.json("data.json").then(data => {
         domainStabilityGraphZoomScale: 1,
         domainStabilityGraphFocus: null,
         domainStabilityGraphKey: "",
-        agreementGraphHeight: INTERVAL_GRAPH_HEIGHT_DEFAULT,
-        agreementGraphZoomScale: 1,
-        agreementGraphFocus: null,
-        agreementGraphKey: "",
         disagreementGraphHeight: INTERVAL_GRAPH_HEIGHT_DEFAULT,
         disagreementGraphZoomScale: 1,
         disagreementGraphFocus: null,
         disagreementGraphKey: "",
-        selectedAgreementMetrics: [],
-        selectedAgreementPointKeys: [],
         selectedDisagreementKeys: [],
         selectedDomainStabilityKeys: [],
         selectedIntervalKeys: [],
@@ -2413,8 +2350,9 @@ d3.json("data.json").then(data => {
         highlight: null,
       };
     }
-    if (!analysisThresholds.includes(Number(panel.analysis.theta)) && analysisThresholds.length) {
-      panel.analysis.theta = defaultAnalysisTheta();
+    const thetaOptions = analysisThresholdOptions(panel);
+    if (!thetaOptions.some(value => Math.abs(value - Number(panel.analysis.theta)) < 1e-6)) {
+      panel.analysis.theta = defaultAnalysisTheta(panel);
     }
     panel.analysis.topIntervals = Math.max(1, Math.floor(Number(panel.analysis.topIntervals) || 1));
     panel.analysis.topFeatures = Math.max(1, Math.floor(Number(panel.analysis.topFeatures) || 1));
@@ -2432,16 +2370,10 @@ d3.json("data.json").then(data => {
     panel.analysis.domainStabilityGraphZoomScale = Number.isFinite(Number(panel.analysis.domainStabilityGraphZoomScale))
       ? Number(panel.analysis.domainStabilityGraphZoomScale)
       : 1;
-    panel.analysis.agreementGraphHeight = clampIntervalGraphHeight(panel.analysis.agreementGraphHeight);
-    panel.analysis.agreementGraphZoomScale = Number.isFinite(Number(panel.analysis.agreementGraphZoomScale))
-      ? Number(panel.analysis.agreementGraphZoomScale)
-      : 1;
     panel.analysis.disagreementGraphHeight = clampIntervalGraphHeight(panel.analysis.disagreementGraphHeight);
     panel.analysis.disagreementGraphZoomScale = Number.isFinite(Number(panel.analysis.disagreementGraphZoomScale))
       ? Number(panel.analysis.disagreementGraphZoomScale)
       : 1;
-    if (!Array.isArray(panel.analysis.selectedAgreementMetrics)) panel.analysis.selectedAgreementMetrics = [];
-    if (!Array.isArray(panel.analysis.selectedAgreementPointKeys)) panel.analysis.selectedAgreementPointKeys = [];
     if (!Array.isArray(panel.analysis.selectedDisagreementKeys)) panel.analysis.selectedDisagreementKeys = [];
     if (!Array.isArray(panel.analysis.selectedDomainStabilityKeys)) panel.analysis.selectedDomainStabilityKeys = [];
     if (!Array.isArray(panel.analysis.selectedIntervalKeys)) {
@@ -2472,16 +2404,7 @@ d3.json("data.json").then(data => {
   function analysisMetricKey(panel) {
     const mode = panel?.dataMode || "shape";
     const metric = panel?.metricId || "combined";
-    if (mode === "shape" && metric === "combined") return `${mode}:${metric}:stored`;
-    const shapeWeightKey = shapeScoreComponentIds
-      .map(metricId => `${metricId}:${formatWeight((panel?.shapeWeights || cloneDefaultShapeWeights())[metricId])}`)
-      .join(",");
-    if (mode === "hybrid") {
-      const hybridWeights = sanitizeHybridWeights(panel?.hybridWeights || cloneDefaultHybridWeights());
-      const hybridWeightKey = `vertex:${formatWeight(hybridWeights.vertex_overlap)},shape:${formatWeight(hybridWeights.shape_combined)}`;
-      return `${mode}:${metric}:overlap=${sanitizeHybridVertexMetric(panel?.hybridVertexMetric)}:${shapeWeightKey}:${hybridWeightKey}`;
-    }
-    if (mode === "shape") return `${mode}:${metric}`;
+    if (mode === "shape" && metric === "combined") return `${mode}:${metric}:shape_iou`;
     return `${mode}:${metric}`;
   }
 
@@ -2562,8 +2485,7 @@ d3.json("data.json").then(data => {
 
   function analysisCombinedScore(match) {
     const metrics = match?.metrics || match || {};
-    const value = Number(metrics.combined ?? metrics.final_score);
-    return Number.isFinite(value) ? value : 0;
+    return combinedShapeScore(metrics, cloneDefaultShapeWeights());
   }
 
   function bestAnalysisMatch(matches) {
@@ -2620,7 +2542,7 @@ d3.json("data.json").then(data => {
   }
 
   function domainRangeDisagreementData() {
-    const cacheKey = "domain-range-disagreements";
+    const cacheKey = "domain-range-complementarity";
     if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
 
     const examples = [];
@@ -2968,7 +2890,7 @@ d3.json("data.json").then(data => {
     ensurePanelAnalysis(panel);
     const cacheKey = `sensitivity:${analysisMetricKey(panel)}`;
     if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
-    const rows = analysisThresholds.map(threshold => {
+    const rows = analysisThresholdOptions(panel).map(threshold => {
       const intervalResult = computeRuntimeIntervals(panel, threshold);
       const intervalRows = intervalResult.series || [];
       const rankedIntervals = intervalResult.ranked || [];
@@ -3653,7 +3575,6 @@ d3.json("data.json").then(data => {
     if (!key) return;
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedTrackKeys = [];
-    panel.analysis.selectedAgreementPointKeys = [];
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
     const selected = panel.analysis.selectedDomainStabilityKeys || [];
@@ -3718,7 +3639,7 @@ d3.json("data.json").then(data => {
     return {
       id: disagreementSummaryKey(item),
       disagreementKey: disagreementSummaryKey(item),
-      label: "Domain/range disagreement",
+      label: "Domain/range complementarity",
       nodes: strongest?.highlight?.nodes || item?.highlight?.nodes || [],
       links: strongest?.highlight?.links || item?.highlight?.links || [],
       start: Number(item?.source_timestep_index),
@@ -3739,10 +3660,10 @@ d3.json("data.json").then(data => {
       .filter(item => selectedKeys.has(disagreementSummaryKey(item)))
       .map(disagreementHighlightPayload);
     if (!selected.length) return null;
-    const label = `${selected.length} selected domain/range disagreement${selected.length === 1 ? "" : "s"}`;
+    const label = `${selected.length} selected domain/range complementarity${selected.length === 1 ? "" : "s"}`;
     return {
       ...combinedHighlight(selected, label),
-      id: "selected-domain-range-disagreements",
+      id: "selected-domain-range-complementarity",
       disagreementKeys: selected.map(item => item.disagreementKey).filter(Boolean),
     };
   }
@@ -3756,7 +3677,6 @@ d3.json("data.json").then(data => {
     const alreadySelected = selected.includes(key);
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedTrackKeys = [];
-    panel.analysis.selectedAgreementPointKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
     panel.analysis.selectedDisagreementKeys = alreadySelected ? [] : [key];
     panel.analysis.highlight = aggregateSelectedDisagreementHighlight(panel);
@@ -3778,13 +3698,13 @@ d3.json("data.json").then(data => {
         <div>Strongest source sheet</div><div>S${escapeHtml(strongest.source_sheet_id ?? "-")}</div>
         <div>Range target</div><div>S${escapeHtml(strongest.shape_target_sheet_id ?? "-")} (${escapeHtml(formatScore(strongest.shape_score))})</div>
         <div>Domain target</div><div>S${escapeHtml(strongest.overlap_target_sheet_id ?? "-")} (${escapeHtml(formatScore(strongest.overlap_max_percent))})</div>
-        <div>Shape / domain loss</div><div>${escapeHtml(formatScore(strongest.shape_loss))} / ${escapeHtml(formatScore(strongest.overlap_loss))}</div>
+        <div>Range / domain loss</div><div>${escapeHtml(formatScore(strongest.shape_loss))} / ${escapeHtml(formatScore(strongest.overlap_loss))}</div>
       </div>`;
   }
 
   function renderDisagreementScoreGraph(container, panel, rows) {
     renderAnalysisPointGraph(container, panel, rows, {
-      id: "domain-range-disagreement",
+      id: "domain-range-complementarity",
       heightKey: "disagreementGraphHeight",
       zoomKey: "disagreementGraphZoomScale",
       focusKey: "disagreementGraphFocus",
@@ -3795,7 +3715,7 @@ d3.json("data.json").then(data => {
       yValue: item => Number(item.max_disagreement_score),
       sort: (a, b) => intervalTimeFs(a) - intervalTimeFs(b),
       xLabel: "time (fs)",
-      yLabel: "max disagreement score",
+      yLabel: "max complementarity score",
       xTickFormat: value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits),
       yTickFormat: value => formatScore(value),
       drawLine: false,
@@ -3803,531 +3723,8 @@ d3.json("data.json").then(data => {
       selectedKeySet: selectedDisagreementKeySet,
       aggregateHighlight: aggregateSelectedDisagreementHighlight,
       onClick: toggleDisagreementGraphSelection,
-      resizeTitle: "Drag to resize domain/range disagreement plot"
+      resizeTitle: "Drag to resize domain/range complementarity plot"
     });
-  }
-
-  function agreementMetricKey(scope, metric) {
-    return `${scope}:${metric}`;
-  }
-
-  function agreementMetricOptions() {
-    const options = [{
-      key: agreementMetricKey("shape", "combined"),
-      scope: "shape",
-      metric: "combined",
-      label: metricLabel("shape", "combined"),
-    }];
-    options.push(...shapeScoreComponentIds
-      .filter(metricId => metricId !== "combined")
-      .map(metricId => ({
-        key: agreementMetricKey("shape", metricId),
-        scope: "shape",
-        metric: metricId,
-        label: metricLabel("shape", metricId),
-      })));
-    if (overlapMetricIds.includes("overlap_max_percent") || overlapPairLookup.size) {
-      options.push({
-        key: agreementMetricKey("overlap", "overlap_max_percent"),
-        scope: "overlap",
-        metric: "overlap_max_percent",
-        label: metricLabel("overlap", "overlap_max_percent"),
-      });
-    }
-    return options;
-  }
-
-  function agreementMetricInfo(metricKey) {
-    return agreementMetricOptions().find(option => option.key === metricKey) || null;
-  }
-
-  function agreementMetricColor(metricKey, index = 0) {
-    const options = agreementMetricOptions();
-    const optionIndex = options.findIndex(option => option.key === metricKey);
-    const colorIndex = optionIndex >= 0 ? optionIndex : index;
-    return AGREEMENT_SERIES_COLORS[colorIndex % AGREEMENT_SERIES_COLORS.length];
-  }
-
-  function bestByScore(rows, scoreFn) {
-    let best = null;
-    let bestScore = Number.NEGATIVE_INFINITY;
-    for (const row of rows || []) {
-      const score = Number(scoreFn(row));
-      if (!Number.isFinite(score)) continue;
-      if (score > bestScore) {
-        best = row;
-        bestScore = score;
-      }
-    }
-    return best;
-  }
-
-  function shapeMetricScore(match, metric) {
-    if (metric === "combined") return analysisCombinedScore(match);
-    const value = Number(match?.metrics?.[metric] ?? match?.[metric]);
-    return Number.isFinite(value) ? value : 0;
-  }
-
-  function overlapMetricScore(match, metric) {
-    const metrics = match?.metrics || match || {};
-    const sourcePercent = Number(metrics.overlap_source_percent ?? match?.source_percent ?? 0) || 0;
-    const targetPercent = Number(metrics.overlap_target_percent ?? match?.target_percent ?? 0) || 0;
-    const fallback = Math.max(sourcePercent, targetPercent);
-    const value = Number(metrics[metric] ?? metrics.overlap_max_percent ?? fallback);
-    return Number.isFinite(value) ? value : 0;
-  }
-
-  function overlapSourceRetention(match) {
-    const metrics = match?.metrics || match || {};
-    const value = Number(metrics.overlap_source_percent ?? match?.source_percent ?? 0);
-    return Number.isFinite(value) ? clamp(value / 100, 0, 1) : 0;
-  }
-
-  function overlapTargetInheritance(match) {
-    const metrics = match?.metrics || match || {};
-    const value = Number(metrics.overlap_target_percent ?? match?.target_percent ?? 0);
-    return Number.isFinite(value) ? clamp(value / 100, 0, 1) : 0;
-  }
-
-  function domainSupportForKey(key) {
-    const match = overlapMatchLookup.get(key);
-    if (!match) {
-      return { match: null, sourceRetention: 0, targetInheritance: 0, bidirectional: 0, any: 0 };
-    }
-    const sourceRetention = overlapSourceRetention(match);
-    const targetInheritance = overlapTargetInheritance(match);
-    return {
-      match,
-      sourceRetention,
-      targetInheritance,
-      bidirectional: Math.min(sourceRetention, targetInheritance),
-      any: Math.max(sourceRetention, targetInheritance),
-    };
-  }
-
-  function domainSupportForLink(link) {
-    return domainSupportForKey(linkKeyFromDatum(link));
-  }
-
-  function domainSupportClass(link, panel) {
-    if (panel?.dataMode === "overlap") return "";
-    const support = domainSupportForLink(link);
-    if (!support.match) return "domain-support-missing";
-    return support.bidirectional >= panelTheta(panel) ? "domain-support-strong" : "domain-support-weak";
-  }
-
-  function formatDomainSupport(support) {
-    if (!support?.match) return "N/A";
-    return `source ${formatScore(100 * support.sourceRetention)}%, target ${formatScore(100 * support.targetInheritance)}%`;
-  }
-
-  function meanOrZero(sum, count) {
-    return count > 0 ? sum / count : 0;
-  }
-
-  function metricAgreementRows(metricKey) {
-    const cacheKey = `agreement:${metricKey}`;
-    if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
-    const info = agreementMetricInfo(metricKey);
-    if (!info) return [];
-
-    const rows = [];
-    const shapePairs = Array.isArray(data.shape_pairs) ? data.shape_pairs : [];
-    for (const shapePair of shapePairs) {
-      const sourceIndex = Number(shapePair.source_timestep_index);
-      const targetIndex = Number(shapePair.target_timestep_index);
-      if (!Number.isFinite(sourceIndex) || !Number.isFinite(targetIndex)) continue;
-      const pairKey = `${sourceIndex}:${targetIndex}`;
-      const shapeGroups = groupMatchesByField(shapePair.matches || [], "source_sheet_id");
-      const overlapPair = overlapPairLookup.get(pairKey);
-      const overlapGroups = overlapPair ? groupMatchesByField(overlapPair.matches || [], "source_sheet_id") : new Map();
-
-      let compared = 0;
-      let agreements = 0;
-      let lossSum = 0;
-      let lossCount = 0;
-      let referenceBestSum = 0;
-      let candidateMetricBestSum = 0;
-      let candidateReferenceSum = 0;
-      let candidateReferenceCount = 0;
-
-      if (info.scope === "shape") {
-        for (const matches of shapeGroups.values()) {
-          const combinedBest = bestByScore(matches, match => shapeMetricScore(match, "combined"));
-          const metricBest = bestByScore(matches, match => shapeMetricScore(match, info.metric));
-          if (!combinedBest || !metricBest) continue;
-          compared += 1;
-          if (Number(combinedBest.target_sheet_id) === Number(metricBest.target_sheet_id)) agreements += 1;
-          const referenceScore = shapeMetricScore(combinedBest, "combined");
-          const candidateReferenceScore = shapeMetricScore(metricBest, "combined");
-          referenceBestSum += referenceScore;
-          candidateMetricBestSum += shapeMetricScore(metricBest, info.metric);
-          candidateReferenceSum += candidateReferenceScore;
-          candidateReferenceCount += 1;
-          lossSum += referenceScore - candidateReferenceScore;
-          lossCount += 1;
-        }
-      } else if (info.scope === "overlap") {
-        for (const [sourceSheetId, overlapMatches] of overlapGroups.entries()) {
-          const shapeMatches = shapeGroups.get(sourceSheetId) || [];
-          const combinedBest = bestByScore(shapeMatches, match => shapeMetricScore(match, "combined"));
-          const overlapBest = bestByScore(overlapMatches, match => overlapMetricScore(match, info.metric));
-          if (!combinedBest || !overlapBest) continue;
-          compared += 1;
-          if (Number(combinedBest.target_sheet_id) === Number(overlapBest.target_sheet_id)) agreements += 1;
-          const referenceScore = shapeMetricScore(combinedBest, "combined");
-          referenceBestSum += referenceScore;
-          candidateMetricBestSum += overlapMetricScore(overlapBest, info.metric);
-          const overlapTarget = Number(overlapBest.target_sheet_id);
-          const shapeForOverlapTarget = (shapeMatches || []).find(match => Number(match.target_sheet_id) === overlapTarget);
-          if (shapeForOverlapTarget) {
-            const candidateReferenceScore = shapeMetricScore(shapeForOverlapTarget, "combined");
-            candidateReferenceSum += candidateReferenceScore;
-            candidateReferenceCount += 1;
-            lossSum += referenceScore - candidateReferenceScore;
-            lossCount += 1;
-          }
-        }
-      }
-
-      if (!compared) continue;
-      rows.push({
-        metricKey,
-        candidate_scope: info.scope,
-        candidate_metric: info.metric,
-        label: info.label,
-        source_timestep_index: sourceIndex,
-        target_timestep_index: targetIndex,
-        source_label: shapePair.source_label || overlapPair?.source_label || String(sourceIndex),
-        target_label: shapePair.target_label || overlapPair?.target_label || String(targetIndex),
-        compared_sources: compared,
-        agreements,
-        agreement_fraction: agreements / compared,
-        mean_reference_loss_if_candidate_used: meanOrZero(lossSum, lossCount),
-        average_reference_best_score: meanOrZero(referenceBestSum, compared),
-        average_candidate_best_score: meanOrZero(candidateMetricBestSum, compared),
-        average_candidate_reference_score: meanOrZero(candidateReferenceSum, candidateReferenceCount),
-      });
-    }
-    rows.sort((a, b) => Number(a.source_timestep_index) - Number(b.source_timestep_index) || Number(a.target_timestep_index) - Number(b.target_timestep_index));
-    analysisRuntimeCache.set(cacheKey, rows);
-    return rows;
-  }
-
-  function agreementRowsInVisibleRange(metricKey) {
-    return metricAgreementRows(metricKey).filter(row => inRanges(Number(row.source_timestep_index)) && inRanges(Number(row.target_timestep_index)));
-  }
-
-  function summarizeAgreementRows(rows) {
-    let compared = 0;
-    let agreements = 0;
-    let weightedLoss = 0;
-    let weightedReferenceBest = 0;
-    let weightedCandidateBest = 0;
-    for (const row of rows || []) {
-      const count = Math.max(0, Number(row.compared_sources) || 0);
-      compared += count;
-      agreements += Math.max(0, Number(row.agreements) || 0);
-      weightedLoss += (Number(row.mean_reference_loss_if_candidate_used) || 0) * count;
-      weightedReferenceBest += (Number(row.average_reference_best_score) || 0) * count;
-      weightedCandidateBest += (Number(row.average_candidate_best_score) || 0) * count;
-    }
-    return {
-      compared_sources: compared,
-      agreements,
-      agreement_fraction: compared ? agreements / compared : 0,
-      mean_reference_loss_if_candidate_used: compared ? weightedLoss / compared : 0,
-      average_reference_best_score: compared ? weightedReferenceBest / compared : 0,
-      average_candidate_best_score: compared ? weightedCandidateBest / compared : 0,
-    };
-  }
-
-  function agreementTimeFs(row) {
-    const fsRaw = window.ReebViewerCommon.formatFsFromLabel(row?.source_label, TIMESTEP_LABEL_OPTIONS);
-    const fs = Number(fsRaw);
-    if (Number.isFinite(fs)) return fs;
-    return Number(row?.source_timestep_index) || 0;
-  }
-
-  function agreementPointKey(row) {
-    return `${row?.metricKey}:${Number(row?.source_timestep_index)}:${Number(row?.target_timestep_index)}`;
-  }
-
-  function selectedAgreementPointKeySet(panel) {
-    ensurePanelAnalysis(panel);
-    return new Set((panel.analysis.selectedAgreementPointKeys || []).filter(Boolean));
-  }
-
-  function toggleAgreementPointSelection(panel, row) {
-    ensurePanelAnalysis(panel);
-    const key = agreementPointKey(row);
-    if (!key) return;
-    panel.analysis.selectedIntervalKeys = [];
-    panel.analysis.selectedTrackKeys = [];
-    panel.analysis.selectedDisagreementKeys = [];
-    panel.analysis.highlight = null;
-    const selected = panel.analysis.selectedAgreementPointKeys || [];
-    const alreadySelected = selected.includes(key);
-    panel.analysis.selectedAgreementPointKeys = alreadySelected ? [] : [key];
-    if (!alreadySelected) queueAnalysisFocusPulse(panel, {
-      start: Number(row.source_timestep_index),
-      end: Number(row.target_timestep_index),
-    });
-    renderAll();
-  }
-
-  function agreementGraphTooltip(row) {
-    return `
-      <strong>${escapeHtml(row.label)}: ${escapeHtml(intervalTimestepPrimary(row, "source"))} -> ${escapeHtml(intervalTimestepPrimary(row, "target"))}</strong>
-      <div class="tooltip-grid" style="margin-top:8px;">
-        <div>Agreement</div><div>${escapeHtml(formatScore(100 * Number(row.agreement_fraction || 0)))}%</div>
-        <div>Compared sources</div><div>${escapeHtml(row.compared_sources)}</div>
-        <div>Agreements</div><div>${escapeHtml(row.agreements)}</div>
-        <div>Loss</div><div>${escapeHtml(formatScore(row.mean_reference_loss_if_candidate_used))}</div>
-        <div>Avg reference best</div><div>${escapeHtml(formatScore(row.average_reference_best_score))}</div>
-        <div>Avg candidate best</div><div>${escapeHtml(formatScore(row.average_candidate_best_score))}</div>
-        <div>Avg candidate combined</div><div>${escapeHtml(formatScore(row.average_candidate_reference_score))}</div>
-      </div>`;
-  }
-
-  function renderMetricAgreementSummaries(container, panel, selectedMetrics) {
-    const summary = container.append("div").attr("class", "analysis-metric-summary");
-    selectedMetrics.forEach((metricKey, index) => {
-      const info = agreementMetricInfo(metricKey);
-      if (!info) return;
-      const rows = agreementRowsInVisibleRange(metricKey);
-      const totals = summarizeAgreementRows(rows);
-      const card = summary.append("div").attr("class", "analysis-metric-card");
-      const header = card.append("header");
-      const title = header.append("span").attr("class", "analysis-metric-title");
-      title.append("span")
-        .attr("class", "analysis-metric-color")
-        .style("background", agreementMetricColor(metricKey, index));
-      title.append("span").text(info.label);
-      header.append("button")
-        .attr("type", "button")
-        .text("Remove")
-        .on("click", () => {
-          panel.analysis.selectedAgreementMetrics = (panel.analysis.selectedAgreementMetrics || []).filter(key => key !== metricKey);
-          panel.analysis.selectedAgreementPointKeys = (panel.analysis.selectedAgreementPointKeys || []).filter(key => !key.startsWith(`${metricKey}:`));
-          renderAll();
-        });
-      card.append("div").text(`agreement ${formatScore(100 * totals.agreement_fraction)}%`);
-      card.append("div").text(`loss ${formatScore(totals.mean_reference_loss_if_candidate_used)}`);
-      card.append("div").text(`compared sources ${totals.compared_sources}`);
-    });
-  }
-
-  function renderMetricAgreementGraph(container, panel, selectedMetrics) {
-    const series = selectedMetrics
-      .map((metricKey, index) => ({
-        metricKey,
-        info: agreementMetricInfo(metricKey),
-        color: agreementMetricColor(metricKey, index),
-        rows: agreementRowsInVisibleRange(metricKey),
-      }))
-      .filter(item => item.info && item.rows.length);
-    if (!series.length) {
-      container.append("div").attr("class", "analysis-hint").text("No metric agreement rows in the selected timestep range.");
-      return;
-    }
-
-    const allRows = series.flatMap(item => item.rows);
-    const visiblePointKeys = new Set(allRows.map(agreementPointKey));
-    panel.analysis.selectedAgreementPointKeys = (panel.analysis.selectedAgreementPointKeys || []).filter(key => visiblePointKeys.has(key));
-    const width = 760;
-    const height = clampIntervalGraphHeight(panel.analysis.agreementGraphHeight);
-    panel.analysis.agreementGraphHeight = height;
-    const margin = { top: 12, right: 18, bottom: 46, left: 46 };
-    const innerWidth = width - margin.left - margin.right;
-    const innerHeight = Math.max(1, height - margin.top - margin.bottom);
-    let xDomain = d3.extent(allRows, agreementTimeFs);
-    if (xDomain[0] === xDomain[1]) xDomain = [xDomain[0] - 1, xDomain[1] + 1];
-    const yDomain = [0, 100];
-    const xBase = d3.scaleLinear().domain(xDomain).range([0, innerWidth]);
-    const yBase = d3.scaleLinear().domain(yDomain).range([innerHeight, 0]);
-    const graphKey = `agreement:${selectedMetrics.join("|")}:${allRows.map(row => `${row.metricKey}:${row.source_timestep_index}:${row.target_timestep_index}`).join("|")}`;
-    if (panel.analysis.agreementGraphKey !== graphKey) {
-      panel.analysis.agreementGraphKey = graphKey;
-      panel.analysis.agreementGraphZoomScale = 1;
-      panel.analysis.agreementGraphFocus = null;
-    }
-    const centerFocus = { x: innerWidth / 2, y: innerHeight / 2 };
-    const initialFocus = panel.analysis.agreementGraphFocus &&
-      Number.isFinite(Number(panel.analysis.agreementGraphFocus.x)) &&
-      Number.isFinite(Number(panel.analysis.agreementGraphFocus.y))
-        ? { x: Number(panel.analysis.agreementGraphFocus.x), y: Number(panel.analysis.agreementGraphFocus.y) }
-        : centerFocus;
-    const initialZoom = Number.isFinite(Number(panel.analysis.agreementGraphZoomScale))
-      ? Number(panel.analysis.agreementGraphZoomScale)
-      : 1;
-
-    const graph = container.append("div").attr("class", "analysis-graph");
-    const svg = graph.append("svg")
-      .attr("viewBox", `0 0 ${width} ${height}`)
-      .style("height", `${height}px`);
-    const clipId = `analysis-agreement-clip-${String(panel.id).replace(/[^a-zA-Z0-9_-]/g, "")}`;
-    svg.append("defs")
-      .append("clipPath")
-      .attr("id", clipId)
-      .append("rect")
-      .attr("width", innerWidth)
-      .attr("height", innerHeight);
-    const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
-    const grid = g.append("g").attr("class", "analysis-graph-grid");
-    const xAxis = g.append("g")
-      .attr("class", "analysis-graph-axis")
-      .attr("transform", `translate(0,${innerHeight})`);
-    const yAxis = g.append("g").attr("class", "analysis-graph-axis");
-    const marks = g.append("g").attr("clip-path", `url(#${clipId})`);
-    const lineLayer = marks.append("g");
-    const dotLayer = marks.append("g");
-    const hitLayer = marks.append("g");
-
-    g.append("text")
-      .attr("class", "analysis-graph-label")
-      .attr("x", innerWidth / 2)
-      .attr("y", innerHeight + 38)
-      .attr("text-anchor", "middle")
-      .text("time (fs)");
-    g.append("text")
-      .attr("class", "analysis-graph-label")
-      .attr("x", -innerHeight / 2)
-      .attr("y", -34)
-      .attr("text-anchor", "middle")
-      .attr("transform", "rotate(-90)")
-      .text("agreement (%)");
-    g.insert("rect", ":first-child")
-      .attr("class", "analysis-graph-zoom")
-      .attr("width", innerWidth)
-      .attr("height", innerHeight);
-
-    function viewState(next = null) {
-      const focus = next?.viewFocus || graphCamera?.getViewFocus?.() || centerFocus;
-      const zoomScale = Math.max(1e-6, Number(next?.zoomScale ?? graphCamera?.getZoomScale?.() ?? initialZoom) || 1);
-      return { focus, zoomScale };
-    }
-    function screenXFromWorld(worldX, stateForDraw) {
-      return innerWidth / 2 + (worldX - stateForDraw.focus.x) * stateForDraw.zoomScale;
-    }
-    function screenYFromWorld(worldY, stateForDraw) {
-      return innerHeight / 2 + (worldY - stateForDraw.focus.y) * stateForDraw.zoomScale;
-    }
-    function draw(next = null) {
-      const selectedPointKeys = selectedAgreementPointKeySet(panel);
-      const stateForDraw = viewState(next);
-      const visibleLeft = stateForDraw.focus.x - innerWidth / (2 * stateForDraw.zoomScale);
-      const visibleRight = stateForDraw.focus.x + innerWidth / (2 * stateForDraw.zoomScale);
-      const visibleTop = stateForDraw.focus.y - innerHeight / (2 * stateForDraw.zoomScale);
-      const visibleBottom = stateForDraw.focus.y + innerHeight / (2 * stateForDraw.zoomScale);
-      const xAxisScale = d3.scaleLinear()
-        .domain([xBase.invert(visibleLeft), xBase.invert(visibleRight)])
-        .range([0, innerWidth]);
-      const yAxisScale = d3.scaleLinear()
-        .domain([yBase.invert(visibleBottom), yBase.invert(visibleTop)])
-        .range([innerHeight, 0]);
-      grid.call(d3.axisLeft(yAxisScale).ticks(4).tickSize(-innerWidth).tickFormat(""));
-      xAxis.call(d3.axisBottom(xAxisScale).ticks(8).tickFormat(value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits)));
-      yAxis.call(d3.axisLeft(yAxisScale).ticks(5).tickFormat(value => `${formatScore(value)}%`));
-
-      lineLayer.selectAll("path.analysis-agreement-line")
-        .data(series, item => item.metricKey)
-        .join("path")
-        .attr("class", "analysis-agreement-line")
-        .attr("stroke", item => item.color)
-        .attr("opacity", 1)
-        .attr("stroke-opacity", 1)
-        .style("opacity", 1)
-        .style("stroke-opacity", 1)
-        .style("mix-blend-mode", "normal")
-        .attr("d", item => d3.line()
-          .x(row => screenXFromWorld(xBase(agreementTimeFs(row)), stateForDraw))
-          .y(row => screenYFromWorld(yBase(100 * Number(row.agreement_fraction || 0)), stateForDraw))(item.rows));
-
-      dotLayer.selectAll("circle.analysis-agreement-dot")
-        .data(allRows, agreementPointKey)
-        .join("circle")
-        .attr("class", row => `analysis-agreement-dot${selectedPointKeys.has(agreementPointKey(row)) ? " active" : ""}`)
-        .attr("fill", row => agreementMetricColor(row.metricKey))
-        .attr("opacity", 1)
-        .attr("fill-opacity", 1)
-        .style("opacity", 1)
-        .style("fill-opacity", 1)
-        .style("mix-blend-mode", "normal")
-        .attr("cx", row => screenXFromWorld(xBase(agreementTimeFs(row)), stateForDraw))
-        .attr("cy", row => screenYFromWorld(yBase(100 * Number(row.agreement_fraction || 0)), stateForDraw))
-        .attr("r", row => selectedPointKeys.has(agreementPointKey(row)) ? ANALYSIS_DOT_SELECTED_RADIUS : ANALYSIS_DOT_RADIUS);
-
-      hitLayer.selectAll("circle.analysis-agreement-hit")
-        .data(allRows, agreementPointKey)
-        .join("circle")
-        .attr("class", "analysis-agreement-hit")
-        .attr("cx", row => screenXFromWorld(xBase(agreementTimeFs(row)), stateForDraw))
-        .attr("cy", row => screenYFromWorld(yBase(100 * Number(row.agreement_fraction || 0)), stateForDraw))
-        .attr("r", ANALYSIS_DOT_HIT_RADIUS)
-        .on("mouseenter", (event, row) => updateTooltip(agreementGraphTooltip(row), event.clientX, event.clientY))
-        .on("mousemove", (event, row) => updateTooltip(agreementGraphTooltip(row), event.clientX, event.clientY))
-        .on("mouseleave", hideTooltip)
-        .on("click", (event, row) => {
-          event.stopPropagation();
-          hideTooltip();
-          toggleAgreementPointSelection(panel, row);
-        });
-    }
-
-    const graphCamera = window.ReebViewerCommon.createCameraController({
-      zoomMin: 0.1,
-      zoomMax: Math.max(20, Math.min(80, allRows.length * 2)),
-      zoomStep: ZOOM_STEP,
-      panDragThreshold: PAN_DRAG_THRESHOLD,
-      initialZoomScale: initialZoom,
-      initialViewFocus: initialFocus,
-      applyTransform: next => {
-        panel.analysis.agreementGraphZoomScale = next.zoomScale;
-        panel.analysis.agreementGraphFocus = next.viewFocus
-          ? { x: next.viewFocus.x, y: next.viewFocus.y }
-          : null;
-        draw(next);
-      }
-    });
-    draw({ zoomScale: graphCamera.getZoomScale(), viewFocus: graphCamera.getViewFocus() || centerFocus });
-    graphCamera.bindPanAndWheel(svg.node(), {
-      cursorTarget: svg.node(),
-      isPanTarget: target => !target.closest(".analysis-agreement-hit, .analysis-agreement-dot, button, input, select, label"),
-      ensureFocus: () => graphCamera.getViewFocus() || centerFocus,
-      onPanState: active => graph.classed("dragging", active)
-    });
-
-    const handle = container.append("div")
-      .attr("class", "panel-resizer analysis-graph-resizer")
-      .attr("title", "Drag to resize metric-agreement plot");
-    const handleNode = handle.node();
-    let resizeState = null;
-    const finishResize = event => {
-      if (!resizeState) return;
-      resizeState = null;
-      handle.classed("active", false);
-      try {
-        if (handleNode.hasPointerCapture(event.pointerId)) handleNode.releasePointerCapture(event.pointerId);
-      } catch (_) {}
-      renderAll();
-    };
-    handleNode.addEventListener("pointerdown", event => {
-      if (event.button !== 0) return;
-      resizeState = { startY: event.clientY, startHeight: panel.analysis.agreementGraphHeight };
-      handle.classed("active", true);
-      handleNode.setPointerCapture(event.pointerId);
-      event.preventDefault();
-    });
-    handleNode.addEventListener("pointermove", event => {
-      if (!resizeState) return;
-      const nextHeight = clampIntervalGraphHeight(resizeState.startHeight + event.clientY - resizeState.startY);
-      panel.analysis.agreementGraphHeight = nextHeight;
-      svg.attr("viewBox", `0 0 ${width} ${nextHeight}`).style("height", `${nextHeight}px`);
-      event.preventDefault();
-    });
-    handleNode.addEventListener("pointerup", finishResize);
-    handleNode.addEventListener("pointercancel", finishResize);
   }
 
   function nodeKeyFromDatum(d) {
@@ -4408,7 +3805,6 @@ d3.json("data.json").then(data => {
     const key = payload.intervalKey;
     if (!key) return;
     panel.analysis.selectedTrackKeys = [];
-    panel.analysis.selectedAgreementPointKeys = [];
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
     const selected = panel.analysis.selectedIntervalKeys || [];
@@ -4428,7 +3824,6 @@ d3.json("data.json").then(data => {
     const key = payload.trackKey;
     if (!key) return;
     panel.analysis.selectedIntervalKeys = [];
-    panel.analysis.selectedAgreementPointKeys = [];
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
     const selected = panel.analysis.selectedTrackKeys || [];
@@ -4478,7 +3873,6 @@ d3.json("data.json").then(data => {
     if (!panel?.analysis) return;
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedTrackKeys = [];
-    panel.analysis.selectedAgreementPointKeys = [];
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
     panel.analysis.highlight = null;
@@ -4489,7 +3883,6 @@ d3.json("data.json").then(data => {
     ensurePanelAnalysis(panel);
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedTrackKeys = [];
-    panel.analysis.selectedAgreementPointKeys = [];
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
     state.analysisFocusPulse = null;
@@ -4510,7 +3903,6 @@ d3.json("data.json").then(data => {
     ensurePanelAnalysis(panel);
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedTrackKeys = [];
-    panel.analysis.selectedAgreementPointKeys = [];
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
     state.analysisFocusPulse = null;
@@ -4534,13 +3926,14 @@ d3.json("data.json").then(data => {
     const actions = toolbar.append("div").attr("class", "analysis-actions");
 
     if (!hasEmbeddedAnalysisData) {
-      box.append("div").attr("class", "analysis-hint").text("Runtime interval, continuing-feature, and domain-stability analysis is available. Run Stage 5B to populate sensitivity and metric-agreement summaries.");
+      box.append("div").attr("class", "analysis-hint").text("Runtime interval, continuing-feature, sensitivity, and domain/range complementarity analysis is available.");
     }
 
     const thetaSelect = actions.append("label");
     thetaSelect.append("span").text("theta ");
     const theta = thetaSelect.append("select");
-    analysisThresholds.forEach(value => {
+    const thetaOptions = analysisThresholdOptions(panel);
+    thetaOptions.forEach(value => {
       theta.append("option")
         .attr("value", value)
         .property("selected", Math.abs(Number(value) - Number(panel.analysis.theta)) < 1e-12)
@@ -4550,7 +3943,6 @@ d3.json("data.json").then(data => {
       panel.analysis.theta = Number(event.target.value);
       panel.analysis.selectedIntervalKeys = [];
       panel.analysis.selectedTrackKeys = [];
-      panel.analysis.selectedAgreementPointKeys = [];
       panel.analysis.selectedDisagreementKeys = [];
       panel.analysis.selectedDomainStabilityKeys = [];
       state.analysisFocusPulse = null;
@@ -4563,14 +3955,23 @@ d3.json("data.json").then(data => {
       .text("Clear highlight")
       .on("click", () => clearAnalysisHighlight(panel));
 
-    const tabs = [
-      ["intervals", "Intervals"],
-      ["tracks", "Continuing features"],
-      ["domain", "Domain stability"],
-      ["sensitivity", "Sensitivity"],
-      ["agreement", "Metric agreement"],
-      ["disagreement", "Domain/range disagreement"],
-    ];
+    const tabs = panel.dataMode === "overlap"
+      ? [
+          ["intervals", "Domain intervals"],
+          ["tracks", "Domain continuing features"],
+          ["sensitivity", "Domain sensitivity"],
+          ["disagreement", "Domain/range complementarity"],
+        ]
+      : [
+          ["intervals", "Range intervals"],
+          ["tracks", "Range continuing features"],
+          ["sensitivity", "Range sensitivity"],
+          ["disagreement", "Domain/range complementarity"],
+        ];
+    if (!tabs.some(([id]) => id === panel.analysis.tab)) {
+      clearAnalysisSelectionsOnly(panel);
+      panel.analysis.tab = tabs[0][0];
+    }
     const tabRow = box.append("div").attr("class", "analysis-tabs");
     tabs.forEach(([id, label]) => {
       tabRow.append("button")
@@ -4579,9 +3980,8 @@ d3.json("data.json").then(data => {
         .text(label)
         .on("click", () => {
           if (panel.analysis.tab !== id) {
-            panel.analysis.selectedAgreementPointKeys = [];
             if (id !== "disagreement") panel.analysis.selectedDisagreementKeys = [];
-            if (id === "agreement" || id === "disagreement") {
+            if (id === "disagreement") {
               panel.analysis.selectedIntervalKeys = [];
               panel.analysis.selectedTrackKeys = [];
               panel.analysis.selectedDomainStabilityKeys = [];
@@ -4690,8 +4090,7 @@ d3.json("data.json").then(data => {
             panel.analysis.tab = "intervals";
             panel.analysis.selectedIntervalKeys = [];
             panel.analysis.selectedTrackKeys = [];
-            panel.analysis.selectedAgreementPointKeys = [];
-            panel.analysis.selectedDisagreementKeys = [];
+                    panel.analysis.selectedDisagreementKeys = [];
             panel.analysis.selectedDomainStabilityKeys = [];
             state.analysisFocusPulse = null;
             panel.analysis.highlight = null;
@@ -4701,50 +4100,6 @@ d3.json("data.json").then(data => {
       return;
     }
 
-    if (panel.analysis.tab === "agreement") {
-      const options = agreementMetricOptions();
-      const validKeys = new Set(options.map(option => option.key));
-      panel.analysis.selectedAgreementMetrics = (panel.analysis.selectedAgreementMetrics || []).filter(key => validKeys.has(key));
-
-      const controls = content.append("div").attr("class", "analysis-actions");
-      controls.append("span").attr("class", "analysis-hint").text("Add metrics to compare over the selected timestep range");
-      const metricSelect = controls.append("select");
-      options.forEach(option => {
-        metricSelect.append("option")
-          .attr("value", option.key)
-          .text(`${option.label} (${option.scope})`);
-      });
-      controls.append("button")
-        .attr("type", "button")
-        .text("Add metric")
-        .on("click", () => {
-          const key = metricSelect.node()?.value;
-          if (!key) return;
-          if (!(panel.analysis.selectedAgreementMetrics || []).includes(key)) {
-            panel.analysis.selectedAgreementMetrics = [...(panel.analysis.selectedAgreementMetrics || []), key];
-          }
-          renderAll();
-        });
-      controls.append("button")
-        .attr("type", "button")
-        .text("Clear metrics")
-        .on("click", () => {
-          panel.analysis.selectedAgreementMetrics = [];
-          panel.analysis.selectedAgreementPointKeys = [];
-          panel.analysis.selectedDisagreementKeys = [];
-          panel.analysis.selectedDomainStabilityKeys = [];
-          renderAll();
-        });
-
-      const selected = panel.analysis.selectedAgreementMetrics || [];
-      if (!selected.length) {
-        content.append("div").attr("class", "analysis-hint").text("No metrics selected for plotting.");
-        return;
-      }
-      renderMetricAgreementSummaries(content, panel, selected);
-      renderMetricAgreementGraph(content, panel, selected);
-      return;
-    }
 
     if (panel.analysis.tab === "disagreement") {
       const disagreementData = domainRangeDisagreementData();
@@ -4767,14 +4122,14 @@ d3.json("data.json").then(data => {
         .text("Highlight")
         .on("click", () => setAnalysisHighlight(
           panel,
-          combinedHighlight(visibleRows.map(disagreementHighlightPayload), `Top ${visibleRows.length} domain/range disagreement pairs`),
+          combinedHighlight(visibleRows.map(disagreementHighlightPayload), `Top ${visibleRows.length} domain/range complementarity pairs`),
           false
         ));
 
       renderDisagreementScoreGraph(content, panel, visibleRows);
 
       if (!rankedRows.length) {
-        content.append("div").attr("class", "analysis-hint").text("No domain/range disagreement examples were found.");
+        content.append("div").attr("class", "analysis-hint").text("No domain/range complementarity examples were found.");
         return;
       }
 
@@ -4782,7 +4137,7 @@ d3.json("data.json").then(data => {
       visibleRows.slice(0, 12).forEach((item, index) => {
         const strongest = item.strongest_disagreement || {};
         const row = list.append("button").attr("type", "button").attr("class", "analysis-row");
-        row.append("strong").text(`${index + 1}. ${item.source_label} -> ${item.target_label}: ${item.disagreement_count}/${item.compared_sources} disagree`);
+        row.append("strong").text(`${index + 1}. ${item.source_label} -> ${item.target_label}: ${item.disagreement_count}/${item.compared_sources} differ`);
         row.append("span").text(`max score ${formatScore(item.max_disagreement_score)}, strongest S${strongest.source_sheet_id ?? "-"}: range S${strongest.shape_target_sheet_id ?? "-"}, domain S${strongest.overlap_target_sheet_id ?? "-"}`);
         row.on("click", () => toggleDisagreementGraphSelection(panel, item));
       });
@@ -4795,24 +4150,12 @@ d3.json("data.json").then(data => {
   function panelTheta(panel) {
     ensurePanelAnalysis(panel);
     const theta = Number(panel?.analysis?.theta);
-    return Number.isFinite(theta) ? theta : defaultAnalysisTheta();
+    return Number.isFinite(theta) ? theta : defaultAnalysisTheta(panel);
   }
 
   function panelMatchForKey(key, panel) {
     const mode = panel?.dataMode || "shape";
     if (mode === "overlap") return overlapMatchLookup.get(key) || null;
-    if (mode === "hybrid") {
-      const overlapMatch = overlapMatchLookup.get(key) || null;
-      const shapeMatch = shapeMatchLookup.get(key) || null;
-      if (!overlapMatch && !shapeMatch) return null;
-      return {
-        ...(overlapMatch || shapeMatch),
-        metrics: {
-          ...((overlapMatch || {}).metrics || {}),
-          ...((shapeMatch || {}).metrics || {}),
-        },
-      };
-    }
     return shapeMatchLookup.get(key) || null;
   }
 
@@ -4823,12 +4166,6 @@ d3.json("data.json").then(data => {
       return direction === "incoming"
         ? (overlapIncomingByNode.get(key) || [])
         : (overlapOutgoingByNode.get(key) || []);
-    }
-    if (mode === "hybrid") {
-      const base = direction === "incoming"
-        ? (overlapIncomingByNode.get(key) || [])
-        : (overlapOutgoingByNode.get(key) || []);
-      return base.map(match => panelMatchForKey(linkKeyFromDatum(match), panel)).filter(Boolean);
     }
     return direction === "incoming"
       ? (shapeIncomingByNode.get(key) || [])
@@ -4891,7 +4228,6 @@ d3.json("data.json").then(data => {
 
   function ensurePanelMetric(panel) {
     ensurePanelShapeWeights(panel);
-    ensurePanelHybridConfig(panel);
     panel.panelHeight = clampPanelHeight(panel.panelHeight);
     const metrics = metricsForMode(panel.dataMode);
     if (!metrics.length) {
@@ -4967,7 +4303,7 @@ d3.json("data.json").then(data => {
 
   function shapeWeightLabel(metricId) {
     const labels = {
-      shape_iou: "Shape",
+      shape_iou: "Range",
       area_ratio: "Area",
       bbox_iou: "BBox",
       centroid_similarity: "Center"
@@ -5133,7 +4469,7 @@ d3.json("data.json").then(data => {
         <div>Node ID</div><div>${escapeHtml(node.node_id || "N/A")}</div>
         <div>Rank</div><div>${escapeHtml(node.rank)}</div>
         <div>Area</div><div>${escapeHtml(formatScore(node.area))}</div>
-        <div>Vertices</div><div>${escapeHtml(node.num_vertices)}</div>
+        <div>Domain vertices</div><div>${escapeHtml(node.num_vertices)}</div>
         <div>Best incoming continuation</div><div>${escapeHtml(incoming.text)}</div>
         <div>Best outgoing continuation</div><div>${escapeHtml(outgoing.text)}</div>
         <div>Centroid color</div><div>${colorSwatch(node.centroid_color)}</div>
@@ -5238,7 +4574,7 @@ d3.json("data.json").then(data => {
         <div>Node ID</div><div>${escapeHtml(node.node_id || "N/A")}</div>
         <div>Rank</div><div>${escapeHtml(node.rank)}</div>
         <div>Area</div><div>${escapeHtml(formatScore(node.area))}</div>
-        <div>Vertices</div><div>${escapeHtml(node.num_vertices)}</div>
+        <div>Domain vertices</div><div>${escapeHtml(node.num_vertices)}</div>
         <div>Best incoming continuation</div><div>${escapeHtml(incoming.text)}</div>
         <div>Best outgoing continuation</div><div>${escapeHtml(outgoing.text)}</div>
         <div>Centroid color</div><div>${colorSwatch(node.centroid_color)}</div>
@@ -6219,88 +5555,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       }
     });
 
-    if (panel.dataMode === "shape" || panel.dataMode === "hybrid") {
-      ensurePanelShapeWeights(panel);
-      const weightControls = controls.append("div").attr("class", "shape-weight-controls");
-      shapeScoreComponentIds.forEach((metricId, metricIndex) => {
-        const item = weightControls.append("label").attr("class", "shape-weight-item");
-        const labelText = panel.dataMode === "hybrid" && metricIndex === 0
-          ? `Shape metric: combined | ${shapeWeightLabel(metricId)}`
-          : shapeWeightLabel(metricId);
-        item.append("span").text(labelText);
-        const input = item.append("input")
-          .attr("type", "number")
-          .attr("min", 0)
-          .attr("step", 0.01)
-          .property("value", formatWeight(panel.shapeWeights[metricId]));
-        window.ReebViewerCommon.bindCommittedNumberInput(input.node(), raw => {
-          const value = Number(raw);
-          if (!Number.isFinite(value) || value < 0) {
-            input.property("value", formatWeight(panel.shapeWeights[metricId]));
-            return;
-          }
-          panel.shapeWeights[metricId] = value;
-          panel.shapeWeights = sanitizeShapeWeights(panel.shapeWeights);
-          renderAll();
-        });
-      });
-    }
 
-    if (panel.dataMode === "hybrid") {
-      ensurePanelShapeWeights(panel);
-      ensurePanelHybridConfig(panel);
-      const hybridControls = controls.append("div").attr("class", "hybrid-controls");
-
-      const overlapMetricItem = hybridControls.append("label").attr("class", "hybrid-item");
-      overlapMetricItem.append("span").text("Vertex overlap metric");
-      const overlapMetricSelect = overlapMetricItem.append("select");
-      overlapMetricIds.forEach(metricId => {
-        overlapMetricSelect.append("option")
-          .attr("value", metricId)
-          .property("selected", metricId === panel.hybridVertexMetric)
-          .text(metricLabel("overlap", metricId));
-      });
-      overlapMetricSelect.on("change", event => {
-        panel.hybridVertexMetric = sanitizeHybridVertexMetric(event.target.value);
-        renderAll();
-      });
-
-      const vertexWeightItem = hybridControls.append("label").attr("class", "hybrid-item");
-      vertexWeightItem.append("span").text("Vertex overlap weight");
-      const vertexWeightInput = vertexWeightItem.append("input")
-        .attr("type", "number")
-        .attr("min", 0)
-        .attr("step", 0.01)
-        .property("value", formatWeight(panel.hybridWeights.vertex_overlap));
-      window.ReebViewerCommon.bindCommittedNumberInput(vertexWeightInput.node(), raw => {
-        const value = Number(raw);
-        if (!Number.isFinite(value) || value < 0) {
-          vertexWeightInput.property("value", formatWeight(panel.hybridWeights.vertex_overlap));
-          return;
-        }
-        panel.hybridWeights.vertex_overlap = value;
-        panel.hybridWeights = sanitizeHybridWeights(panel.hybridWeights);
-        renderAll();
-      });
-
-      const shapeWeightItem = hybridControls.append("label").attr("class", "hybrid-item");
-      shapeWeightItem.append("span").text("Shape combined weight");
-      const shapeWeightInput = shapeWeightItem.append("input")
-        .attr("type", "number")
-        .attr("min", 0)
-        .attr("step", 0.01)
-        .property("value", formatWeight(panel.hybridWeights.shape_combined));
-      window.ReebViewerCommon.bindCommittedNumberInput(shapeWeightInput.node(), raw => {
-        const value = Number(raw);
-        if (!Number.isFinite(value) || value < 0) {
-          shapeWeightInput.property("value", formatWeight(panel.hybridWeights.shape_combined));
-          return;
-        }
-        panel.hybridWeights.shape_combined = value;
-        panel.hybridWeights = sanitizeHybridWeights(panel.hybridWeights);
-        renderAll();
-      });
-    }
 
     renderAnalysisPanel(container, panel);
 
@@ -6597,7 +5852,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       metricId: "combined",
       threshold: 0,
       shapeWeights: cloneDefaultShapeWeights(),
-      analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], selectedTrackKeys: [], selectedAgreementPointKeys: [], selectedDisagreementKeys: [], selectedDomainStabilityKeys: [], highlight: null } : null,
+      analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], selectedTrackKeys: [], selectedDisagreementKeys: [], selectedDomainStabilityKeys: [], highlight: null } : null,
       panelHeight: clampPanelHeight(activePanel?.panelHeight ?? PANEL_HEIGHT_DEFAULT)
     });
     renderAll();

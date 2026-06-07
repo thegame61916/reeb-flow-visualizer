@@ -63,14 +63,14 @@ SHEET_RENDERER_USE_GLOBAL_BOUNDS = True
 SHEET_RENDERER_IMAGE_SIZE = (1600, 1600)
 SHEET_RENDERER_GLOBAL_PADDING = 0.03
 
-# Default weights for combined shape score.
+# Default weights for combined range score.
 # These are used by compareSheetShapes, overlap attachment metadata,
-# and unified viewer defaults.
+# and unified viewer range-score defaults.
 SHAPE_SCORE_DEFAULT_WEIGHTS = {
-    "shape_iou": 0.6,
-    "area_ratio": 0.1,
-    "bbox_iou": 0.2,
-    "centroid_similarity": 0.1,
+    "shape_iou": 1.0,
+    "area_ratio": 0.0,
+    "bbox_iou": 0.0,
+    "centroid_similarity": 0.0,
 }
 
 # Same weights with stage_03 range-metric key prefix.
@@ -79,14 +79,6 @@ RANGE_SCORE_DEFAULT_WEIGHTS = {
     for metric, weight in SHAPE_SCORE_DEFAULT_WEIGHTS.items()
 }
 
-# Default weights for hybrid score in unified viewer.
-HYBRID_SCORE_DEFAULT_WEIGHTS = {
-    "vertex_overlap": 0.50,
-    "shape_combined": 0.50,
-}
-
-# Default overlap metric used as vertex component in hybrid mode.
-HYBRID_VERTEX_METRIC_DEFAULT = "overlap_max_percent"
 
 # Analysis thresholds used by the tracking diagnostics stage. The preferred
 # threshold is used for ranked interval JSON and plots; all thresholds are
