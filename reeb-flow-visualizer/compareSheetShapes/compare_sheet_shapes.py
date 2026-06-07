@@ -60,6 +60,7 @@ from common import (
     RSI_DIR,
     RS_DIR,
     SHAPE_SCORE_DEFAULT_WEIGHTS,
+    SHAPE_MATCHING_SKIPPED_LOG_FILE,
     TOP_N_SHEETS,
     TTK_BUILD_LIB_DIR,
     TTK_INSTALL_LIB_DIR,
@@ -82,6 +83,7 @@ RESULTS_DIR = STORAGE_ROOT / "results"
 
 RSI_JSON_CACHE_DIR = CACHE_DIR / "rsi_json"
 VTP_CACHE_DIR = CACHE_DIR / "vtp"
+VTP_EXPORT_LOG_DIR = CACHE_DIR / "vtp_export_logs"
 TIMESTEP_CACHE_DIR = CACHE_DIR / "timesteps"
 MATCH_CACHE_DIR = CACHE_DIR / "matches"
 
@@ -137,6 +139,7 @@ def ensure_dirs() -> None:
         RESULTS_DIR,
         RSI_JSON_CACHE_DIR,
         VTP_CACHE_DIR,
+        VTP_EXPORT_LOG_DIR,
         TIMESTEP_CACHE_DIR,
         MATCH_CACHE_DIR,
     ):
@@ -252,13 +255,168 @@ def make_library_path(extra: str | None = None) -> str:
     return os.pathsep.join(parts)
 
 
-def export_geometry_if_needed(timestep: TimestepInput, library_path: str) -> Path:
-    out_vtp = VTP_CACHE_DIR / f"{timestep.stem}.sheets.vtp"
+def vtp_export_log_path(timestep: TimestepInput) -> Path:
+    return VTP_EXPORT_LOG_DIR / f"{timestep.stem}.export.log"
+
+
+def cached_vtp_path(timestep: TimestepInput) -> Path:
+    return VTP_CACHE_DIR / f"{timestep.stem}.sheets.vtp"
+
+
+def export_geometry_if_needed(
+    timestep: TimestepInput,
+    library_path: str,
+    log_path: Path | None = None,
+) -> Path:
+    out_vtp = cached_vtp_path(timestep)
     if out_vtp.exists():
         return out_vtp
 
-    export_sheet_vtp(FV99, timestep.vtu, timestep.rs, out_vtp, library_path)
+    tmp_vtp = out_vtp.with_name(f"{out_vtp.stem}.tmp{out_vtp.suffix}")
+    if tmp_vtp.exists():
+        tmp_vtp.unlink()
+    try:
+        export_sheet_vtp(FV99, timestep.vtu, timestep.rs, tmp_vtp, library_path, log_path=log_path)
+        tmp_vtp.replace(out_vtp)
+    except Exception:
+        if tmp_vtp.exists():
+            tmp_vtp.unlink()
+        raise
     return out_vtp
+
+
+def export_failure_details(exc: Exception) -> tuple[str, str]:
+    returncode = getattr(exc, "returncode", None)
+    if isinstance(returncode, int):
+        if returncode < 0:
+            status = f"returncode={returncode} signal={-returncode}"
+        else:
+            status = f"returncode={returncode}"
+    else:
+        status = f"error_type={type(exc).__name__}"
+    command = getattr(exc, "cmd", None)
+    command_text = " ".join(str(part) for part in command) if command else "-"
+    return status, command_text
+
+
+def exportable_timestep_worker(timestep: TimestepInput, library_path: str) -> dict:
+    log_path = vtp_export_log_path(timestep)
+    try:
+        vtp_path = export_geometry_if_needed(timestep, library_path, log_path=log_path)
+        sheet_polygons = read_sheet_vtp(vtp_path)
+        return {
+            "ok": True,
+            "stem": timestep.stem,
+            "point_count": len(sheet_polygons.points),
+            "polygon_count": len(sheet_polygons.polygons),
+            "vtp": str(vtp_path),
+        }
+    except Exception as exc:
+        bad_vtp = cached_vtp_path(timestep)
+        if bad_vtp.exists():
+            try:
+                bad_vtp.unlink()
+            except OSError:
+                pass
+        status, command_text = export_failure_details(exc)
+        return {
+            "ok": False,
+            "stem": timestep.stem,
+            "status": status,
+            "error": str(exc),
+            "command": command_text,
+            "log": str(log_path),
+        }
+
+
+def write_skipped_timesteps_log(skipped: list[dict]) -> None:
+    SHAPE_MATCHING_SKIPPED_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if not skipped:
+        write_text_atomic(SHAPE_MATCHING_SKIPPED_LOG_FILE, "# No timesteps skipped by compare-sheets VTP export.\n")
+        return
+
+    lines = [
+        "# Timesteps skipped because fv99 could not export sheet geometry for compare-sheets.\n",
+        "# Skipped timesteps are removed before adjacent range-shape matches are built.\n",
+    ]
+    for item in skipped:
+        lines.append(
+            "\t".join(
+                [
+                    str(item["vtu"]),
+                    "status=skipped_vtp_export_failed",
+                    str(item.get("failure_status", "-")),
+                    f"rs={item['rs']}",
+                    f"log={item.get('log', '-')}",
+                    f"error={item.get('error', '-')}",
+                ]
+            )
+            + "\n"
+        )
+    write_text_atomic(SHAPE_MATCHING_SKIPPED_LOG_FILE, "".join(lines))
+
+
+def filter_exportable_timesteps(
+    timesteps: list[TimestepInput],
+    library_path: str,
+    workers: int,
+) -> list[TimestepInput]:
+    if not timesteps:
+        write_skipped_timesteps_log([])
+        return []
+
+    by_stem = {timestep.stem: timestep for timestep in timesteps}
+    valid: list[TimestepInput] = []
+    skipped: list[dict] = []
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(exportable_timestep_worker, timestep, library_path): timestep
+            for timestep in timesteps
+        }
+        for i, future in enumerate(as_completed(futures), start=1):
+            timestep = futures[future]
+            try:
+                result = future.result()
+            except Exception as exc:
+                status, command_text = export_failure_details(exc)
+                result = {
+                    "ok": False,
+                    "stem": timestep.stem,
+                    "status": status,
+                    "error": str(exc),
+                    "command": command_text,
+                    "log": str(vtp_export_log_path(timestep)),
+                }
+
+            if result.get("ok"):
+                valid.append(by_stem[str(result["stem"])])
+                print(
+                    f"[shape export {i}/{len(futures)}] ok polygons={result['polygon_count']}: {result['stem']}",
+                    flush=True,
+                )
+            else:
+                skipped.append(
+                    {
+                        "stem": timestep.stem,
+                        "vtu": timestep.vtu,
+                        "rs": timestep.rs,
+                        "failure_status": result.get("status", "-"),
+                        "error": result.get("error", "-"),
+                        "command": result.get("command", "-"),
+                        "log": result.get("log", str(vtp_export_log_path(timestep))),
+                    }
+                )
+                print(
+                    f"[shape export {i}/{len(futures)}] skipped {result.get('status', '-')}: {timestep.stem}",
+                    flush=True,
+                )
+
+    valid.sort(key=lambda timestep: timestep.index)
+    skipped.sort(key=lambda item: timestep_sort_key(Path(str(item["vtu"]))))
+    write_skipped_timesteps_log(skipped)
+    if skipped:
+        print(f"Skipped {len(skipped)} timestep(s); see {SHAPE_MATCHING_SKIPPED_LOG_FILE}", flush=True)
+    return valid
 
 
 def centroid_and_bbox(points: Iterable[tuple[float, float]]) -> tuple[tuple[float, float], tuple[float, float, float, float]]:
@@ -491,7 +649,18 @@ def load_timestep_cache(stem: str) -> tuple[TimestepDescriptors, dict[int, np.nd
     return descriptors, mask_map
 
 
-def timestep_cache_is_valid(stem: str) -> bool:
+def bounds_are_close(a: Iterable[float], b: Iterable[float]) -> bool:
+    a_values = list(a)
+    b_values = list(b)
+    if len(a_values) != len(b_values):
+        return False
+    return all(
+        math.isclose(float(x), float(y), rel_tol=0.0, abs_tol=1e-12)
+        for x, y in zip(a_values, b_values)
+    )
+
+
+def timestep_cache_is_valid(stem: str, global_bounds: tuple[float, float, float, float] | None = None) -> bool:
     cache_json = TIMESTEP_CACHE_DIR / f"{stem}.json"
     cache_npz = TIMESTEP_CACHE_DIR / f"{stem}.npz"
     if not cache_json.exists() or not cache_npz.exists():
@@ -500,11 +669,15 @@ def timestep_cache_is_valid(stem: str) -> bool:
         data = json.loads(cache_json.read_text())
     except Exception:
         return False
-    return (
+    if not (
         data.get("grid_size") == GRID_SIZE
         and data.get("top_n_sheets") == TOP_N_SHEETS
         and data.get("stem") == stem
-    )
+    ):
+        return False
+    if global_bounds is not None and not bounds_are_close(data.get("global_bounds", []), global_bounds):
+        return False
+    return True
 
 
 def pair_cache_path(source_stem: str, target_stem: str) -> Path:
@@ -618,8 +791,8 @@ def build_masks_for_timestep(
     return timestep, timestep_desc, masks
 
 
-def build_cache(timesteps: list[TimestepInput], workers: int, library_path: str) -> tuple[tuple[float, float, float, float], list[TimestepDescriptors]]:
-    cached_bounds = load_global_bounds()
+def build_cache(timesteps: list[TimestepInput], workers: int, library_path: str, recompute_bounds: bool = False) -> tuple[tuple[float, float, float, float], list[TimestepDescriptors]]:
+    cached_bounds = None if recompute_bounds else load_global_bounds()
     if cached_bounds is None:
         bounds = collect_global_bounds(timesteps, library_path, workers)
         save_global_bounds(bounds)
@@ -630,7 +803,7 @@ def build_cache(timesteps: list[TimestepInput], workers: int, library_path: str)
     missing_timesteps: list[TimestepInput] = []
 
     for timestep in timesteps:
-        if timestep_cache_is_valid(timestep.stem):
+        if timestep_cache_is_valid(timestep.stem, bounds):
             descriptors, _masks = load_timestep_cache(timestep.stem)
             results.append(descriptors)
             print(f"[cache existing] {descriptors.stem}", flush=True)
@@ -770,6 +943,20 @@ def compare_pair(
     }
 
 
+def manifest_matches_timesteps(timesteps: list[TimestepInput]) -> bool:
+    if not MANIFEST_FILE.exists():
+        return False
+    try:
+        manifest = json.loads(MANIFEST_FILE.read_text())
+    except Exception:
+        return False
+    return (
+        manifest.get("grid_size") == GRID_SIZE
+        and manifest.get("top_n_sheets") == TOP_N_SHEETS
+        and manifest.get("timesteps") == [timestep.stem for timestep in timesteps]
+    )
+
+
 def compare_all_pairs(
     timesteps: list[TimestepInput],
     workers: int,
@@ -784,13 +971,8 @@ def compare_all_pairs(
 
     ensure_dirs()
 
-    manifest_ok = False
-    if MANIFEST_FILE.exists():
-        try:
-            manifest = json.loads(MANIFEST_FILE.read_text())
-            manifest_ok = manifest.get("top_n_sheets") == TOP_N_SHEETS
-        except Exception:
-            manifest_ok = False
+    stems = [t.stem for t in timesteps]
+    manifest_ok = manifest_matches_timesteps(timesteps)
 
     if (
         not manifest_ok
@@ -799,9 +981,13 @@ def compare_all_pairs(
         or not list(TIMESTEP_CACHE_DIR.glob("*.npz"))
     ):
         print("Building cache...", flush=True)
-        build_cache(timesteps, workers, library_path)
+        global_bounds, _descriptors = build_cache(
+            timesteps,
+            workers,
+            library_path,
+            recompute_bounds=not manifest_ok,
+        )
 
-    stems = [t.stem for t in timesteps]
     adjacent_pairs = list(zip(stems, stems[1:]))
 
     results = []
@@ -895,16 +1081,24 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("No matching rs/rsi/vtu timestep triplets were found.")
 
     library_path = make_library_path(args.library_path)
-
-    if args.rebuild_cache or not MANIFEST_FILE.exists():
+    if args.rebuild_cache:
         if CACHE_DIR.exists():
             shutil.rmtree(CACHE_DIR)
         ensure_dirs()
-        bounds, _descriptors = build_cache(timesteps, args.workers, library_path)
+
+    timesteps = filter_exportable_timesteps(timesteps, library_path, args.workers)
+    if len(timesteps) < 2:
+        raise SystemExit("Fewer than two timesteps can export sheet geometry for compare-sheets.")
+
+    manifest_ok = manifest_matches_timesteps(timesteps)
+    if args.rebuild_cache:
+        bounds, _descriptors = build_cache(timesteps, args.workers, library_path, recompute_bounds=True)
+    elif not manifest_ok:
+        bounds, _descriptors = build_cache(timesteps, args.workers, library_path, recompute_bounds=True)
     else:
         cached = load_global_bounds()
         if cached is None:
-            bounds, _descriptors = build_cache(timesteps, args.workers, library_path)
+            bounds, _descriptors = build_cache(timesteps, args.workers, library_path, recompute_bounds=True)
         else:
             bounds = cached
 

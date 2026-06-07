@@ -46,11 +46,41 @@ FIBER_SURFACE_FIELD_G_ISOVALUE = config["g_isovalue"]
 FV99_FNAME = "orb00"
 FV99_GNAME = "orb01"
 
+# Exclude regular domain vertices whose selected scalar pair lies close to
+# the range-space origin. Sheets are kept even when all their vertices are
+# filtered, so they behave like zero-vertex sheets downstream.
+EXCLUDE_LOW_SCALAR_VALUES_NEAR_ORIGIN = False
+LOW_SCALAR_ORIGIN_THRESHOLDS_BY_DATASET = {
+    "stilbene": {"orb00": 0.011, "orb01": 0.011},
+    "mvk": {"orb00": 0.003, "orb01": 0.003},
+    "torus": {"orb00": 0.0, "orb01": 0.0},
+}
+LOW_SCALAR_ORIGIN_THRESHOLDS = LOW_SCALAR_ORIGIN_THRESHOLDS_BY_DATASET.get(dataset_key, {})
+
+# Stage 0 preprocesses VTU files before fv99 or any downstream analysis.
+# It checks whether any tetrahedron face maps to a line in the selected
+# (FV99_FNAME, FV99_GNAME) range space. Degenerate files are overwritten with
+# the first perturbation that removes the degeneracy; files that remain
+# degenerate after every epsilon are removed from VTU_DIR.
+DEGENERACY_PREPROCESS_EPSILONS = (
+    0.000000001,
+    0.00000001,
+    0.0000001,
+    0.000001,
+    0.00001,
+    0.0001,
+)
+DEGENERACY_PREPROCESS_ORIENTATION_TOLERANCE = 0.0
+DEGENERACY_PREPROCESS_DELETE_UNFIXED = True
+DEGENERACY_PREPROCESS_RANDOM_SEED = 1729
+
 FV99 = Path(
     "/home/mohit/Desktop/postdoc/petars_fiber_flexing/"
     "petarsCode/arrange-and-traverse-algorithm/build/fv99"
 )
 
+# Runtime fv99 perturbation should stay zero because Stage 0 writes
+# any required perturbation back into the VTU files before computation.
 EPSILON = "0.00000000"
 RESERVE_CORES = 20
 FV99_OMP_THREADS = 1
@@ -88,6 +118,7 @@ TRACKING_ANALYSIS_PREFERRED_THRESHOLD = 0.5
 TRACKING_ANALYSIS_TOP_INTERVALS = 12
 TRACKING_ANALYSIS_TOP_FEATURES = 12
 TRACKING_ANALYSIS_TOP_DISAGREEMENTS = 12
+TRACKING_ANALYSIS_CORRELATION_WINDOW = 9
 TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT = 0.5
 
 # Event-score formula used by both precomputed tracking analysis and the
@@ -139,10 +170,11 @@ def tracking_analysis_event_score_formula_text():
     return " + ".join(labels)
 
 # Pipeline stage flags
+RUN_STAGE_0_DEGENERACY_PREPROCESS = False
 RUN_STAGE_1_FV99 = False
-RUN_STAGE_2_RSI_JSON = False
+RUN_STAGE_2_RSI_JSON = True
 RUN_STAGE_3A_SHAPE_MATCHING = False
-RUN_STAGE_3B_OVERLAPS = False
+RUN_STAGE_3B_OVERLAPS = True
 RUN_STAGE_4A_SHEET_RENDERING = False
 RUN_STAGE_4B_SHEET_FIBER_SURFACES = False
 RUN_STAGE_5A_BUILD_UNIFIED_SANKEY_DATA = True
@@ -150,6 +182,7 @@ RUN_STAGE_5B_TRACKING_ANALYSIS = True
 RUN_STAGE_5C_UNIFIED_SANKEY_VIEWER = True
 
 # Backward-compatible aliases for older scripts/imports.
+RUN_STAGE_0_PREPROCESS = RUN_STAGE_0_DEGENERACY_PREPROCESS
 RUN_STAGE_2B_SHAPE_MATCHING = RUN_STAGE_3A_SHAPE_MATCHING
 RUN_STAGE_3_OVERLAPS = RUN_STAGE_3B_OVERLAPS
 RUN_STAGE_4_SHEET_RENDERING = RUN_STAGE_4A_SHEET_RENDERING
@@ -222,11 +255,14 @@ OVERLAP_FILE = OUTPUT_DIR / "sheet_overlaps.json"
 
 
 # Log files
+DEGENERACY_PREPROCESS_LOG_FILE = OUTPUT_DIR / "vtu_degeneracy_preprocess.log"
 FV99_FAILED_LOG_FILE = OUTPUT_DIR / "fv99_failed_files.log"
 FV99_PARTIAL_LOG_FILE = OUTPUT_DIR / "fv99_partial_files.log"
 RSI_JSON_WARNINGS_LOG_FILE = OUTPUT_DIR / "rsi_json_warnings.log"
+LOW_SCALAR_ORIGIN_FILTER_LOG_FILE = OUTPUT_DIR / "low_scalar_origin_filter.log"
 OVERLAP_WARNINGS_LOG_FILE = OUTPUT_DIR / "sheet_overlap_warnings.log"
 FIBER_SURFACE_FAILED_LOG_FILE = OUTPUT_DIR / "fiber_surface_failed_files.log"
+SHAPE_MATCHING_SKIPPED_LOG_FILE = OUTPUT_DIR / "shape_matching_skipped_timesteps.log"
 
 
 # Runtime library paths

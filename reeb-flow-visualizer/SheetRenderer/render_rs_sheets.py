@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import colorsys
 import os
+import shlex
 import struct
 import subprocess
 import sys
@@ -306,7 +307,7 @@ def default_library_path() -> str:
     return os.pathsep.join(str(path.resolve()) for path in candidates if path.exists())
 
 
-def export_sheet_vtp(exe: Path, mesh: Path, rs: Path, out_vtp: Path, library_path: str) -> None:
+def export_sheet_vtp(exe: Path, mesh: Path, rs: Path, out_vtp: Path, library_path: str, log_path: Path | None = None) -> None:
     out_vtp.parent.mkdir(parents=True, exist_ok=True)
     command = [
         str(exe),
@@ -327,7 +328,15 @@ def export_sheet_vtp(exe: Path, mesh: Path, rs: Path, out_vtp: Path, library_pat
             library_path if not old_library_path else library_path + os.pathsep + old_library_path
         )
     env["OMP_NUM_THREADS"] = str(FV99_OMP_THREADS)
-    subprocess.run(command, check=True, env=env)
+    if log_path is None:
+        subprocess.run(command, check=True, env=env)
+        return
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w") as log_file:
+        log_file.write("$ " + shlex.join(command) + "\n")
+        log_file.flush()
+        subprocess.run(command, check=True, env=env, stdout=log_file, stderr=subprocess.STDOUT)
 
 
 def parse_sheet_list(value: str | None) -> set[int] | None:

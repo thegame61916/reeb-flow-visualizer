@@ -319,15 +319,21 @@ window.ReebViewerCommon.createCameraController = function(opts) {
     state.viewFocus = { x: +focus.x, y: +focus.y };
     return state.viewFocus;
   };
+  const currentTransform = () => ({
+    zoomScale: state.zoomScale,
+    viewFocus: state.viewFocus
+  });
+  const applyNow = () => {
+    if (!applyTransform) return;
+    state.pending = false;
+    applyTransform(currentTransform());
+  };
   const scheduleApply = () => {
     if (!applyTransform || state.pending) return;
     state.pending = true;
     requestAnimationFrame(() => {
       state.pending = false;
-      applyTransform({
-        zoomScale: state.zoomScale,
-        viewFocus: state.viewFocus
-      });
+      applyTransform(currentTransform());
     });
   };
   const setZoomScale = nextScale => {
@@ -446,6 +452,7 @@ window.ReebViewerCommon.createCameraController = function(opts) {
     zoomBy,
     centerOnBounds,
     scheduleApply,
+    applyNow,
     bindPanAndWheel,
     get zoomStep() {
       return zoomStep;

@@ -19,6 +19,7 @@ from common import (
     OVERLAP_FILE,
     SHEET_IMAGE_DIR,
     SHAPE_SCORE_DEFAULT_WEIGHTS,
+    TRACKING_ANALYSIS_CORRELATION_WINDOW,
     TRACKING_ANALYSIS_EVENT_SCORE_TERMS,
     TRACKING_ANALYSIS_PREFERRED_THRESHOLD,
     TRACKING_ANALYSIS_THRESHOLDS,
@@ -63,7 +64,7 @@ DATA_MODES = [
         "id": "overlap",
         "label": "Domain overlap",
         "pair_field": "overlap_pairs",
-        "default_metric": "overlap_max_percent",
+        "default_metric": "overlap_vertices",
         "metrics": OVERLAP_METRICS,
     },
     {
@@ -339,6 +340,7 @@ def prepare_data(viewer_dir: Path) -> dict:
         for node in overlap_data.get("nodes", [])
     }
 
+    max_vertices = 0
     for timestep in timesteps:
         timestep_index = safe_int(timestep.get("timestep_index"))
         overlap_timestep = overlap_timestep_by_index.get(timestep_index, {})
@@ -353,6 +355,9 @@ def prepare_data(viewer_dir: Path) -> dict:
             sheet_id = safe_int(sheet.get("sheet_id"))
             overlap_node = overlap_node_by_timestep_sheet.get((timestep_index, sheet_id), {})
             sheet["node_id"] = str(overlap_node.get("id", ""))
+            if overlap_node:
+                sheet["num_vertices"] = safe_int(overlap_node.get("num_vertices"))
+            max_vertices = max(max_vertices, safe_int(sheet.get("num_vertices")))
             sheet["rsi_file"] = str(overlap_node.get("rsi_file", "") or timestep["rsi_file"])
             sheet["rsijson_file"] = str(overlap_node.get("rsijson_file", "") or timestep["rsijson_file"])
 
@@ -386,6 +391,8 @@ def prepare_data(viewer_dir: Path) -> dict:
                 metrics[metric["id"]] = value
                 shape_maxima[metric["id"]] = max(shape_maxima[metric["id"]], value)
 
+            source_num_vertices = safe_int(source_node.get("num_vertices")) if source_node else safe_int(match.get("source_num_vertices"))
+            target_num_vertices = safe_int(target_node.get("num_vertices")) if target_node else safe_int(match.get("target_num_vertices"))
             matches.append(
                 {
                     "source_sheet_id": source_sheet_id,
@@ -394,8 +401,8 @@ def prepare_data(viewer_dir: Path) -> dict:
                     "target_rank": safe_int(match.get("target_rank")),
                     "source_area": safe_float(match.get("source_area")),
                     "target_area": safe_float(match.get("target_area")),
-                    "source_num_vertices": safe_int(match.get("source_num_vertices")),
-                    "target_num_vertices": safe_int(match.get("target_num_vertices")),
+                    "source_num_vertices": source_num_vertices,
+                    "target_num_vertices": target_num_vertices,
                     "source_node_id": str(source_node.get("id", "")),
                     "target_node_id": str(target_node.get("id", "")),
                     "source_node_area": safe_float(source_node.get("area")),
@@ -520,6 +527,7 @@ def prepare_data(viewer_dir: Path) -> dict:
             "tracking_analysis_top_intervals": TRACKING_ANALYSIS_TOP_INTERVALS,
             "tracking_analysis_top_features": TRACKING_ANALYSIS_TOP_FEATURES,
             "tracking_analysis_top_disagreements": TRACKING_ANALYSIS_TOP_DISAGREEMENTS,
+            "tracking_analysis_correlation_window": TRACKING_ANALYSIS_CORRELATION_WINDOW,
             "tracking_analysis_event_score_terms": list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS),
             "tracking_analysis_event_score_formula": tracking_analysis_event_score_formula_text(),
             "global_area_max": max_area,
@@ -576,6 +584,7 @@ def apply_current_tracking_analysis_meta(data: dict) -> dict:
     meta["tracking_analysis_top_intervals"] = TRACKING_ANALYSIS_TOP_INTERVALS
     meta["tracking_analysis_top_features"] = TRACKING_ANALYSIS_TOP_FEATURES
     meta["tracking_analysis_top_disagreements"] = TRACKING_ANALYSIS_TOP_DISAGREEMENTS
+    meta["tracking_analysis_correlation_window"] = TRACKING_ANALYSIS_CORRELATION_WINDOW
     meta["tracking_analysis_event_score_terms"] = list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS)
     meta["tracking_analysis_event_score_formula"] = tracking_analysis_event_score_formula_text()
     return data
@@ -1303,6 +1312,12 @@ svg.summary-chart {
   font-weight: 700;
   color: #233040;
 }
+.analysis-subtitle {
+  margin: 10px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+}
 .analysis-tabs {
   margin-bottom: 8px;
 }
@@ -1370,6 +1385,12 @@ svg.summary-chart {
   stroke: #991b1b;
   stroke-width: 1.8px;
 }
+.analysis-graph-dot-count {
+  fill: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  pointer-events: none;
+}
 .analysis-graph-hit {
   fill: transparent;
   cursor: pointer;
@@ -1394,6 +1415,58 @@ svg.summary-chart {
 .analysis-row:hover {
   border-color: #93b4df;
   background: #f1f6fd;
+}
+.analysis-row.active {
+  border-color: #ef4444;
+  background: #fef2f2;
+}
+.track-feature-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+.track-feature-layout.has-chooser {
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+}
+.track-feature-plot {
+  min-width: 0;
+}
+.track-feature-chooser {
+  border: 1px solid #d9e2ec;
+  border-radius: 5px;
+  background: #f8fafc;
+  margin: 7px 0 8px;
+  padding: 8px;
+}
+.track-feature-chooser-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.track-feature-chooser-header strong {
+  color: #1f2937;
+  font-size: 12px;
+}
+.track-feature-chooser-header span {
+  color: #536273;
+  font-size: 12px;
+}
+.track-feature-chooser-list {
+  display: grid;
+  gap: 6px;
+  max-height: 360px;
+  overflow: auto;
+}
+.track-feature-chooser .analysis-row {
+  width: 100%;
+}
+@media (max-width: 900px) {
+  .track-feature-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .analysis-row strong {
   display: block;
@@ -1509,7 +1582,7 @@ d3.json("data.json").then(data => {
   const state = {
     ranges: (data.meta.default_ranges && data.meta.default_ranges.length ? data.meta.default_ranges : [{start: 0, end: 20}]).map(r => ({...r})),
     selectedRangeIndex: 0,
-    panels: [{ id: 1, dataMode: "overlap", metricId: "overlap_max_percent", threshold: 0, panelHeight: PANEL_HEIGHT_DEFAULT }],
+    panels: [{ id: 1, dataMode: "overlap", metricId: "overlap_vertices", threshold: 0, panelHeight: PANEL_HEIGHT_DEFAULT }],
     nextPanelId: 2,
     rangeDrag: null,
     viewportDrag: null,
@@ -1638,6 +1711,8 @@ d3.json("data.json").then(data => {
   const ANALYSIS_DOT_RADIUS = 5.6;
   const ANALYSIS_DOT_SELECTED_RADIUS = 7.0;
   const ANALYSIS_DOT_HIT_RADIUS = 12;
+  const DOMAIN_RANGE_CORRELATION_WINDOW = Math.max(3, Math.floor(Number(data.meta?.tracking_analysis_correlation_window) || 9));
+  const TRACK_GRAPH_GROUP_PIXEL_SIZE = 18;
 
   const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 });
   const shapePairLookup = new Map();
@@ -2335,6 +2410,7 @@ d3.json("data.json").then(data => {
         trackGraphZoomScale: 1,
         trackGraphFocus: null,
         trackGraphKey: "",
+        trackChooserGroupKey: "",
         domainStabilityGraphHeight: INTERVAL_GRAPH_HEIGHT_DEFAULT,
         domainStabilityGraphZoomScale: 1,
         domainStabilityGraphFocus: null,
@@ -2343,7 +2419,12 @@ d3.json("data.json").then(data => {
         disagreementGraphZoomScale: 1,
         disagreementGraphFocus: null,
         disagreementGraphKey: "",
+        correlationGraphHeight: INTERVAL_GRAPH_HEIGHT_DEFAULT,
+        correlationGraphZoomScale: 1,
+        correlationGraphFocus: null,
+        correlationGraphKey: "",
         selectedDisagreementKeys: [],
+        selectedCorrelationKeys: [],
         selectedDomainStabilityKeys: [],
         selectedIntervalKeys: [],
         selectedTrackKeys: [],
@@ -2374,7 +2455,12 @@ d3.json("data.json").then(data => {
     panel.analysis.disagreementGraphZoomScale = Number.isFinite(Number(panel.analysis.disagreementGraphZoomScale))
       ? Number(panel.analysis.disagreementGraphZoomScale)
       : 1;
+    panel.analysis.correlationGraphHeight = clampIntervalGraphHeight(panel.analysis.correlationGraphHeight);
+    panel.analysis.correlationGraphZoomScale = Number.isFinite(Number(panel.analysis.correlationGraphZoomScale))
+      ? Number(panel.analysis.correlationGraphZoomScale)
+      : 1;
     if (!Array.isArray(panel.analysis.selectedDisagreementKeys)) panel.analysis.selectedDisagreementKeys = [];
+    if (!Array.isArray(panel.analysis.selectedCorrelationKeys)) panel.analysis.selectedCorrelationKeys = [];
     if (!Array.isArray(panel.analysis.selectedDomainStabilityKeys)) panel.analysis.selectedDomainStabilityKeys = [];
     if (!Array.isArray(panel.analysis.selectedIntervalKeys)) {
       panel.analysis.selectedIntervalKeys = Array.isArray(panel.analysis.selectedIntervals)
@@ -2382,6 +2468,7 @@ d3.json("data.json").then(data => {
         : [];
     }
     if (!Array.isArray(panel.analysis.selectedTrackKeys)) panel.analysis.selectedTrackKeys = [];
+    if (typeof panel.analysis.trackChooserGroupKey !== "string") panel.analysis.trackChooserGroupKey = "";
   }
 
   function analysisEventScoreTerms() {
@@ -2668,6 +2755,175 @@ d3.json("data.json").then(data => {
     };
     analysisRuntimeCache.set(cacheKey, result);
     return result;
+  }
+
+  function averageRanks(values) {
+    const sorted = values
+      .map((value, index) => ({ value: Number(value), index }))
+      .filter(item => Number.isFinite(item.value))
+      .sort((a, b) => a.value - b.value || a.index - b.index);
+    const ranks = new Array(values.length).fill(Number.NaN);
+    let i = 0;
+    while (i < sorted.length) {
+      let j = i + 1;
+      while (j < sorted.length && sorted[j].value === sorted[i].value) j += 1;
+      const rank = (i + 1 + j) / 2;
+      for (let k = i; k < j; k += 1) ranks[sorted[k].index] = rank;
+      i = j;
+    }
+    return ranks;
+  }
+
+  function spearmanCorrelation(xValues, yValues) {
+    const pairs = [];
+    for (let i = 0; i < Math.min(xValues.length, yValues.length); i += 1) {
+      const x = Number(xValues[i]);
+      const y = Number(yValues[i]);
+      if (Number.isFinite(x) && Number.isFinite(y)) pairs.push({ x, y });
+    }
+    if (pairs.length < 3) return null;
+    const xRanks = averageRanks(pairs.map(item => item.x));
+    const yRanks = averageRanks(pairs.map(item => item.y));
+    const meanX = meanNumber(xRanks);
+    const meanY = meanNumber(yRanks);
+    let numerator = 0;
+    let denomX = 0;
+    let denomY = 0;
+    for (let i = 0; i < pairs.length; i += 1) {
+      const dx = xRanks[i] - meanX;
+      const dy = yRanks[i] - meanY;
+      numerator += dx * dy;
+      denomX += dx * dx;
+      denomY += dy * dy;
+    }
+    if (denomX <= 0 || denomY <= 0) return null;
+    return numerator / Math.sqrt(denomX * denomY);
+  }
+
+  function bestScoreForMatches(matches, scoreFn) {
+    let best = 0;
+    for (const match of matches || []) {
+      const score = Number(scoreFn(match));
+      if (Number.isFinite(score) && score > best) best = score;
+    }
+    return best;
+  }
+
+  function eventScoreForPair(pair, theta, scoreFn) {
+    const sourceIndex = Number(pair.source_timestep_index);
+    const targetIndex = Number(pair.target_timestep_index);
+    if (!Number.isFinite(sourceIndex) || !Number.isFinite(targetIndex)) return null;
+
+    const sourceSheets = timestepByIndex.get(sourceIndex)?.sheets || [];
+    const targetSheets = timestepByIndex.get(targetIndex)?.sheets || [];
+    const bySource = groupMatchesByField(pair.matches || [], "source_sheet_id");
+    const byTarget = groupMatchesByField(pair.matches || [], "target_sheet_id");
+    const bestSourceScores = sourceSheets.map(sheet => bestScoreForMatches(bySource.get(Number(sheet.sheet_id)) || [], scoreFn));
+    const bestTargetScores = targetSheets.map(sheet => bestScoreForMatches(byTarget.get(Number(sheet.sheet_id)) || [], scoreFn));
+    const sourceWeakCount = bestSourceScores.filter(value => value < theta).length;
+    const targetWeakCount = bestTargetScores.filter(value => value < theta).length;
+    let possibleSplits = 0;
+    for (const matches of bySource.values()) {
+      if ((matches || []).filter(match => Number(scoreFn(match)) >= theta).length >= 2) possibleSplits += 1;
+    }
+    let possibleMerges = 0;
+    for (const matches of byTarget.values()) {
+      if ((matches || []).filter(match => Number(scoreFn(match)) >= theta).length >= 2) possibleMerges += 1;
+    }
+    const meanBestScore = meanNumber(bestSourceScores);
+    const components = {
+      source_weak_count: sourceWeakCount,
+      target_weak_count: targetWeakCount,
+      possible_splits: possibleSplits,
+      possible_merges: possibleMerges,
+      continuation_gap_source_count: (1 - meanBestScore) * Math.max(sourceSheets.length, 1),
+    };
+    return {
+      source_timestep_index: sourceIndex,
+      target_timestep_index: targetIndex,
+      source_label: pair.source_label,
+      target_label: pair.target_label,
+      mean_best_score: meanBestScore,
+      event_score: analysisEventScore(components),
+      ...components,
+    };
+  }
+
+  function domainRangeEventScoreSeries(theta) {
+    const cacheKey = `domain-range-event-score-series:${thresholdKey(theta)}`;
+    if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
+    const rows = [];
+    for (const shapePair of (Array.isArray(data.shape_pairs) ? data.shape_pairs : [])) {
+      const sourceIndex = Number(shapePair.source_timestep_index);
+      const targetIndex = Number(shapePair.target_timestep_index);
+      const overlapPair = overlapPairLookup.get(`${sourceIndex}:${targetIndex}`);
+      if (!overlapPair) continue;
+      const rangeEvent = eventScoreForPair(shapePair, theta, match => analysisCombinedScore(match));
+      const domainEvent = eventScoreForPair(overlapPair, theta, match => overlapMaxPercent(match) / 100);
+      if (!rangeEvent || !domainEvent) continue;
+      rows.push({
+        id: `domain-range-event:${sourceIndex}:${targetIndex}`,
+        source_timestep_index: sourceIndex,
+        target_timestep_index: targetIndex,
+        source_label: shapePair.source_label,
+        target_label: shapePair.target_label,
+        pair_label: `${shapePair.source_label || sourceIndex}->${shapePair.target_label || targetIndex}`,
+        range_event_score: rangeEvent.event_score,
+        domain_event_score: domainEvent.event_score,
+        range_mean_best_score: rangeEvent.mean_best_score,
+        domain_mean_best_score: domainEvent.mean_best_score,
+      });
+    }
+    rows.sort((a, b) => Number(a.source_timestep_index) - Number(b.source_timestep_index) || Number(a.target_timestep_index) - Number(b.target_timestep_index));
+    analysisRuntimeCache.set(cacheKey, rows);
+    return rows;
+  }
+
+  function domainRangeSpearmanRows(panel) {
+    const theta = panelTheta(panel);
+    const windowSizeRaw = Math.max(3, Math.floor(Number(DOMAIN_RANGE_CORRELATION_WINDOW) || 9));
+    const windowSize = windowSizeRaw % 2 === 0 ? windowSizeRaw + 1 : windowSizeRaw;
+    const cacheKey = `domain-range-spearman:${thresholdKey(theta)}:${windowSize}`;
+    if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
+    const series = domainRangeEventScoreSeries(theta);
+    const rows = [];
+    if (series.length >= 3) {
+      const half = Math.floor(windowSize / 2);
+      for (let i = 0; i < series.length; i += 1) {
+        let start = Math.max(0, i - half);
+        let end = Math.min(series.length, i + half + 1);
+        if (end - start < Math.min(windowSize, series.length)) {
+          if (start === 0) end = Math.min(series.length, start + Math.min(windowSize, series.length));
+          if (end === series.length) start = Math.max(0, end - Math.min(windowSize, series.length));
+        }
+        const windowRows = series.slice(start, end);
+        const rho = spearmanCorrelation(
+          windowRows.map(item => item.range_event_score),
+          windowRows.map(item => item.domain_event_score),
+        );
+        if (!Number.isFinite(Number(rho))) continue;
+        const center = series[i];
+        const first = windowRows[0];
+        const last = windowRows[windowRows.length - 1];
+        rows.push({
+          id: `domain-range-spearman:${thresholdKey(theta)}:${center.source_timestep_index}:${center.target_timestep_index}`,
+          source_timestep_index: center.source_timestep_index,
+          target_timestep_index: center.target_timestep_index,
+          source_label: center.source_label,
+          target_label: center.target_label,
+          window_start_timestep_index: first.source_timestep_index,
+          window_end_timestep_index: last.target_timestep_index,
+          window_start_label: first.source_label,
+          window_end_label: last.target_label,
+          window_count: windowRows.length,
+          spearman_rho: rho,
+          mean_range_event_score: meanNumber(windowRows.map(item => item.range_event_score)),
+          mean_domain_event_score: meanNumber(windowRows.map(item => item.domain_event_score)),
+        });
+      }
+    }
+    analysisRuntimeCache.set(cacheKey, rows);
+    return rows;
   }
 
   function computeRuntimeIntervals(panel, thetaOverride = null) {
@@ -3104,6 +3360,172 @@ d3.json("data.json").then(data => {
       </div>`;
   }
 
+
+
+  function trackGraphItemSort(a, b) {
+    return Number(b.length) - Number(a.length) ||
+      Number(b.mean_continuation_score) - Number(a.mean_continuation_score) ||
+      Number(b.min_continuation_score) - Number(a.min_continuation_score) ||
+      Number(a.track_id) - Number(b.track_id);
+  }
+
+  function formatTrackGroupCount(count) {
+    return String(Math.max(0, Math.floor(Number(count) || 0)));
+  }
+
+  function formatTrackGroupRange(items, accessor, formatter = formatScore) {
+    const values = (items || [])
+      .map(accessor)
+      .map(Number)
+      .filter(Number.isFinite);
+    if (!values.length) return "-";
+    const minValue = d3.min(values);
+    const maxValue = d3.max(values);
+    if (Math.abs(minValue - maxValue) < 1e-12) return formatter(minValue);
+    return `${formatter(minValue)}-${formatter(maxValue)}`;
+  }
+
+  function trackGraphGroupRows(rows, context) {
+    const groups = new Map();
+    (rows || []).forEach(item => {
+      const x = Number(context.xValue(item));
+      const y = Number(context.yValue(item));
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      const screenX = Number(context.xBase(x));
+      const screenY = Number(context.yBase(y));
+      const bucketX = Math.round(screenX / TRACK_GRAPH_GROUP_PIXEL_SIZE);
+      const bucketY = Math.round(screenY / TRACK_GRAPH_GROUP_PIXEL_SIZE);
+      const groupId = `${bucketX}:${bucketY}`;
+      let group = groups.get(groupId);
+      if (!group) {
+        group = { groupKey: `track-group:${groupId}`, items: [], xSum: 0, ySum: 0 };
+        groups.set(groupId, group);
+      }
+      group.items.push(item);
+      group.xSum += x;
+      group.ySum += y;
+    });
+    return Array.from(groups.values())
+      .map(group => {
+        group.items.sort(trackGraphItemSort);
+        const count = group.items.length;
+        const primary = group.items[0] || null;
+        return {
+          groupKey: group.groupKey,
+          items: group.items,
+          count,
+          primary,
+          length: count ? group.xSum / count : 0,
+          mean_continuation_score: count ? group.ySum / count : 0,
+        };
+      })
+      .sort((a, b) => Number(a.length) - Number(b.length) || Number(b.mean_continuation_score) - Number(a.mean_continuation_score));
+  }
+
+  function trackPlotKey(item) {
+    return item?.groupKey || trackKeyFromItem(item);
+  }
+
+  function trackPlotIsActive(item, activeKeys) {
+    const items = Array.isArray(item?.items) ? item.items : [item];
+    return items.some(entry => activeKeys.has(trackKeyFromItem(entry)));
+  }
+
+  function trackPlotRadius(item, active) {
+    const count = Math.max(1, Number(item?.count) || 1);
+    if (count <= 1) return active ? ANALYSIS_DOT_SELECTED_RADIUS : ANALYSIS_DOT_RADIUS;
+    const base = Math.min(20, ANALYSIS_DOT_RADIUS + Math.log2(count + 1));
+    return active ? Math.max(base + 1.5, ANALYSIS_DOT_SELECTED_RADIUS) : base;
+  }
+
+  function trackPlotHitRadius(item) {
+    return Math.max(ANALYSIS_DOT_HIT_RADIUS, trackPlotRadius(item, false) + 7);
+  }
+
+  function trackPlotTooltip(item, panel) {
+    const items = Array.isArray(item?.items) ? item.items : [item];
+    if (items.length <= 1) return trackGraphTooltip(items[0], panel);
+    const theta = panelTheta(panel);
+    return `
+      <strong>${escapeHtml(items.length)} overlapping continuing features</strong>
+      <div class="tooltip-grid" style="margin-top:8px;">
+        <div>Feature length</div><div>${escapeHtml(formatTrackGroupRange(items, entry => entry.length, value => String(Math.round(value))))}</div>
+        <div>Analysis metric</div><div>${escapeHtml(items[0]?.analysis_metric_label || metricLabel(panel.dataMode, panel.metricId))}</div>
+        <div>Mean score range</div><div>${escapeHtml(formatTrackGroupRange(items, entry => entry.mean_continuation_score))}</div>
+        <div>Min score range</div><div>${escapeHtml(formatTrackGroupRange(items, entry => entry.min_continuation_score))}</div>
+        <div>Theta</div><div>${escapeHtml(formatScore(theta))}</div>
+        <div>Action</div><div>Click to choose a feature</div>
+      </div>`;
+  }
+
+  function openTrackPlotSelection(panel, item) {
+    ensurePanelAnalysis(panel);
+    const items = Array.isArray(item?.items) ? item.items : [item];
+    if (items.length <= 1) {
+      panel.analysis.trackChooserGroupKey = "";
+      toggleTrackGraphSelection(panel, items[0]);
+      return;
+    }
+    panel.analysis.trackChooserGroupKey = item.groupKey || "";
+    renderAll();
+  }
+
+  function trackChooserGroupFromPlotRows(panel, plotRows) {
+    ensurePanelAnalysis(panel);
+    const groupKey = panel.analysis.trackChooserGroupKey;
+    if (!groupKey) return null;
+    const group = (plotRows || []).find(item => item?.groupKey === groupKey && Number(item?.count) > 1);
+    if (!group) {
+      panel.analysis.trackChooserGroupKey = "";
+      return null;
+    }
+    return group;
+  }
+
+  function renderTrackFeatureChooser(container, panel, group) {
+    const items = Array.isArray(group?.items) ? group.items : [];
+    if (items.length <= 1) return;
+    const selectedKeys = selectedTrackKeySet(panel);
+    const chooser = container.append("div").attr("class", "track-feature-chooser");
+    const header = chooser.append("div").attr("class", "track-feature-chooser-header");
+    const title = header.append("div");
+    title.append("strong").text(`${items.length} overlapping continuing features`);
+    title.append("span")
+      .style("display", "block")
+      .text(`length ${formatTrackGroupRange(items, entry => entry.length, value => String(Math.round(value)))} | mean ${formatTrackGroupRange(items, entry => entry.mean_continuation_score)}`);
+    header.append("button")
+      .attr("type", "button")
+      .text("Close")
+      .on("click", () => {
+        panel.analysis.trackChooserGroupKey = "";
+        renderAll();
+      });
+
+    const list = chooser.append("div").attr("class", "track-feature-chooser-list");
+    const rows = list.selectAll("button")
+      .data(items, trackKeyFromItem)
+      .join(enter => {
+        const button = enter.append("button").attr("type", "button");
+        button.append("strong");
+        button.append("span");
+        return button;
+      });
+    rows
+      .attr("class", item => `analysis-row${selectedKeys.has(trackKeyFromItem(item)) ? " active" : ""}`)
+      .on("mouseenter", (event, item) => updateTooltip(trackGraphTooltip(item, panel), event.clientX, event.clientY))
+      .on("mousemove", (event, item) => updateTooltip(trackGraphTooltip(item, panel), event.clientX, event.clientY))
+      .on("mouseleave", hideTooltip)
+      .on("click", (event, item) => {
+        event.stopPropagation();
+        hideTooltip();
+        toggleTrackGraphSelection(panel, item);
+      });
+    rows.select("strong")
+      .text(item => `Feature ${item.track_id}: S${item.start_sheet_id} ${item.start_label} -> ${item.end_label}`);
+    rows.select("span")
+      .text(item => `length ${item.length} | mean ${formatScore(item.mean_continuation_score)} | min ${formatScore(item.min_continuation_score)} | rank ${item.rank_min}/${item.rank_max}`);
+  }
+
   function renderAnalysisPointGraph(container, panel, rows, options) {
     ensurePanelAnalysis(panel);
     const keyFn = options.keyFn;
@@ -3113,7 +3535,7 @@ d3.json("data.json").then(data => {
       .filter(item => Number.isFinite(Number(xValue(item))) && Number.isFinite(Number(yValue(item))))
       .slice()
       .sort(options.sort || ((a, b) => Number(xValue(a)) - Number(xValue(b)) || Number(yValue(a)) - Number(yValue(b))));
-    if (!valid.length) return;
+    if (!valid.length) return null;
 
     const heightKey = options.heightKey;
     const zoomKey = options.zoomKey;
@@ -3140,6 +3562,18 @@ d3.json("data.json").then(data => {
     }
     const xBase = d3.scaleLinear().domain(xDomain).range([0, innerWidth]);
     const yBase = d3.scaleLinear().domain(yDomain).range([innerHeight, 0]).nice();
+    const groupContext = { xBase, yBase, xValue, yValue };
+    const plotRows = typeof options.groupRows === "function"
+      ? options.groupRows(valid, groupContext)
+      : valid;
+    const plotKeyFn = options.plotKeyFn || keyFn;
+    const plotXValue = options.plotXValue || xValue;
+    const plotYValue = options.plotYValue || yValue;
+    const plotTooltip = options.plotTooltip || options.tooltip;
+    const plotClick = options.onPlotClick || options.onClick;
+    const plotIsActive = options.isPlotRowActive || ((item, activeKeys) => activeKeys.has(keyFn(item)));
+    const dotRadius = options.dotRadius || ((item, active) => active ? ANALYSIS_DOT_SELECTED_RADIUS : ANALYSIS_DOT_RADIUS);
+    const hitRadius = options.hitRadius || (() => ANALYSIS_DOT_HIT_RADIUS);
     const validKeys = new Set(valid.map(keyFn));
     const selectedBeforePrune = panel.analysis[selectedKeysKey] || [];
     panel.analysis[selectedKeysKey] = selectedBeforePrune.filter(key => validKeys.has(key));
@@ -3186,6 +3620,7 @@ d3.json("data.json").then(data => {
     const marks = g.append("g").attr("clip-path", `url(#${clipId})`);
     const linePath = options.drawLine ? marks.append("path").attr("class", "analysis-graph-line") : null;
     const dotLayer = marks.append("g");
+    const labelLayer = marks.append("g");
     const hitLayer = marks.append("g");
 
     g.append("text")
@@ -3247,27 +3682,36 @@ d3.json("data.json").then(data => {
       }
 
       dotLayer.selectAll("circle.analysis-graph-dot")
-        .data(valid, keyFn)
+        .data(plotRows, plotKeyFn)
         .join("circle")
-        .attr("class", d => `analysis-graph-dot${activeKeys.has(keyFn(d)) ? " active" : ""}`)
-        .attr("cx", d => screenXFromWorld(xBase(xValue(d)), stateForDraw))
-        .attr("cy", d => screenYFromWorld(yBase(yValue(d)), stateForDraw))
-        .attr("r", d => activeKeys.has(keyFn(d)) ? ANALYSIS_DOT_SELECTED_RADIUS : ANALYSIS_DOT_RADIUS);
+        .attr("class", d => `analysis-graph-dot${plotIsActive(d, activeKeys) ? " active" : ""}${Array.isArray(d?.items) && Number(d?.count) > 1 ? " grouped" : ""}`)
+        .attr("cx", d => screenXFromWorld(xBase(plotXValue(d)), stateForDraw))
+        .attr("cy", d => screenYFromWorld(yBase(plotYValue(d)), stateForDraw))
+        .attr("r", d => dotRadius(d, plotIsActive(d, activeKeys)));
+
+      labelLayer.selectAll("text.analysis-graph-dot-count")
+        .data(plotRows.filter(d => Array.isArray(d?.items) && Number(d?.count) > 1), plotKeyFn)
+        .join("text")
+        .attr("class", "analysis-graph-dot-count")
+        .attr("x", d => screenXFromWorld(xBase(plotXValue(d)), stateForDraw))
+        .attr("y", d => screenYFromWorld(yBase(plotYValue(d)), stateForDraw) + 3.5)
+        .attr("text-anchor", "middle")
+        .text(d => formatTrackGroupCount(d.count));
 
       hitLayer.selectAll("circle.analysis-graph-hit")
-        .data(valid, keyFn)
+        .data(plotRows, plotKeyFn)
         .join("circle")
         .attr("class", "analysis-graph-hit")
-        .attr("cx", d => screenXFromWorld(xBase(xValue(d)), stateForDraw))
-        .attr("cy", d => screenYFromWorld(yBase(yValue(d)), stateForDraw))
-        .attr("r", ANALYSIS_DOT_HIT_RADIUS)
-        .on("mouseenter", (event, d) => updateTooltip(options.tooltip(d, panel), event.clientX, event.clientY))
-        .on("mousemove", (event, d) => updateTooltip(options.tooltip(d, panel), event.clientX, event.clientY))
+        .attr("cx", d => screenXFromWorld(xBase(plotXValue(d)), stateForDraw))
+        .attr("cy", d => screenYFromWorld(yBase(plotYValue(d)), stateForDraw))
+        .attr("r", d => hitRadius(d))
+        .on("mouseenter", (event, d) => updateTooltip(plotTooltip(d, panel), event.clientX, event.clientY))
+        .on("mousemove", (event, d) => updateTooltip(plotTooltip(d, panel), event.clientX, event.clientY))
         .on("mouseleave", hideTooltip)
         .on("click", (event, d) => {
           event.stopPropagation();
           hideTooltip();
-          options.onClick(panel, d);
+          plotClick(panel, d);
         });
     }
 
@@ -3290,7 +3734,7 @@ d3.json("data.json").then(data => {
     draw({ zoomScale: graphCamera.getZoomScale(), viewFocus: graphCamera.getViewFocus() || centerFocus });
     graphCamera.bindPanAndWheel(svg.node(), {
       cursorTarget: svg.node(),
-      isPanTarget: target => !target.closest(".analysis-graph-hit, .analysis-graph-dot, button, input, select, label"),
+      isPanTarget: target => !target.closest(".analysis-graph-hit, .analysis-graph-dot, .analysis-graph-dot-count, button, input, select, label"),
       ensureFocus: () => graphCamera.getViewFocus() || centerFocus,
       onPanState: active => graph.classed("dragging", active)
     });
@@ -3329,6 +3773,7 @@ d3.json("data.json").then(data => {
 
     handleNode.addEventListener("pointerup", finishResize);
     handleNode.addEventListener("pointercancel", finishResize);
+    return { rows: valid, plotRows };
   }
 
   function renderIntervalScoreGraph(container, panel, rows) {
@@ -3357,7 +3802,10 @@ d3.json("data.json").then(data => {
   }
 
   function renderTrackScoreGraph(container, panel, rows) {
-    renderAnalysisPointGraph(container, panel, rows, {
+    const layout = container.append("div").attr("class", "track-feature-layout");
+    const plotPane = layout.append("div").attr("class", "track-feature-plot");
+    const chooserPane = layout.append("div").attr("class", "track-feature-chooser-pane");
+    const graphInfo = renderAnalysisPointGraph(plotPane, panel, rows, {
       id: "tracks",
       heightKey: "trackGraphHeight",
       zoomKey: "trackGraphZoomScale",
@@ -3377,11 +3825,27 @@ d3.json("data.json").then(data => {
       yTickFormat: value => formatScore(value),
       drawLine: false,
       tooltip: trackGraphTooltip,
+      plotTooltip: trackPlotTooltip,
       selectedKeySet: selectedTrackKeySet,
       aggregateHighlight: aggregateSelectedTrackHighlight,
       onClick: toggleTrackGraphSelection,
+      onPlotClick: openTrackPlotSelection,
+      groupRows: trackGraphGroupRows,
+      plotKeyFn: trackPlotKey,
+      plotXValue: item => Number(item.length),
+      plotYValue: item => Number(item.mean_continuation_score),
+      isPlotRowActive: trackPlotIsActive,
+      dotRadius: trackPlotRadius,
+      hitRadius: trackPlotHitRadius,
       resizeTitle: "Drag to resize continuing-feature plot"
     });
+    const chooserGroup = trackChooserGroupFromPlotRows(panel, graphInfo?.plotRows || []);
+    layout.classed("has-chooser", Boolean(chooserGroup));
+    if (chooserGroup) {
+      renderTrackFeatureChooser(chooserPane, panel, chooserGroup);
+    } else {
+      chooserPane.remove();
+    }
   }
 
   function computeDomainStabilityRows(panel) {
@@ -3575,8 +4039,10 @@ d3.json("data.json").then(data => {
     if (!key) return;
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedTrackKeys = [];
+    panel.analysis.trackChooserGroupKey = "";
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
+    panel.analysis.selectedCorrelationKeys = [];
     const selected = panel.analysis.selectedDomainStabilityKeys || [];
     const alreadySelected = selected.includes(key);
     panel.analysis.selectedDomainStabilityKeys = alreadySelected
@@ -3678,6 +4144,7 @@ d3.json("data.json").then(data => {
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedTrackKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
+    panel.analysis.selectedCorrelationKeys = [];
     panel.analysis.selectedDisagreementKeys = alreadySelected ? [] : [key];
     panel.analysis.highlight = aggregateSelectedDisagreementHighlight(panel);
     if (!alreadySelected) queueAnalysisFocusPulse(panel, payload);
@@ -3724,6 +4191,102 @@ d3.json("data.json").then(data => {
       aggregateHighlight: aggregateSelectedDisagreementHighlight,
       onClick: toggleDisagreementGraphSelection,
       resizeTitle: "Drag to resize domain/range complementarity plot"
+    });
+  }
+
+  function correlationSummaryKey(item) {
+    return String(item?.id || `domain_range_spearman:${Number(item?.source_timestep_index)}:${Number(item?.target_timestep_index)}`);
+  }
+
+  function correlationHighlightPayload(item) {
+    return {
+      id: correlationSummaryKey(item),
+      correlationKey: correlationSummaryKey(item),
+      label: "Domain/range Spearman window",
+      nodes: [],
+      links: [],
+      start: Number(item?.window_start_timestep_index ?? item?.source_timestep_index),
+      end: Number(item?.window_end_timestep_index ?? item?.target_timestep_index),
+    };
+  }
+
+  function selectedCorrelationKeySet(panel) {
+    ensurePanelAnalysis(panel);
+    return new Set((panel.analysis.selectedCorrelationKeys || []).filter(Boolean));
+  }
+
+  function aggregateSelectedCorrelationHighlight(panel) {
+    ensurePanelAnalysis(panel);
+    const selectedKeys = selectedCorrelationKeySet(panel);
+    if (!selectedKeys.size) return null;
+    const selected = domainRangeSpearmanRows(panel)
+      .filter(item => selectedKeys.has(correlationSummaryKey(item)))
+      .map(correlationHighlightPayload);
+    if (!selected.length) return null;
+    return {
+      ...combinedHighlight(selected, "Selected domain/range Spearman window"),
+      id: "selected-domain-range-spearman",
+      correlationKeys: selected.map(item => item.correlationKey).filter(Boolean),
+    };
+  }
+
+  function toggleCorrelationGraphSelection(panel, item) {
+    ensurePanelAnalysis(panel);
+    const payload = correlationHighlightPayload(item);
+    const key = payload.correlationKey;
+    if (!key) return;
+    const selected = panel.analysis.selectedCorrelationKeys || [];
+    const alreadySelected = selected.includes(key);
+    panel.analysis.selectedIntervalKeys = [];
+    panel.analysis.selectedTrackKeys = [];
+    panel.analysis.trackChooserGroupKey = "";
+    panel.analysis.selectedDisagreementKeys = [];
+    panel.analysis.selectedDomainStabilityKeys = [];
+    panel.analysis.selectedCorrelationKeys = alreadySelected ? [] : [key];
+    panel.analysis.highlight = aggregateSelectedCorrelationHighlight(panel);
+    if (!alreadySelected) queueAnalysisFocusPulse(panel, payload);
+    expandRangesForHighlight(panel.analysis.highlight);
+    renderAll();
+  }
+
+  function correlationGraphTooltip(item) {
+    return `
+      <strong>Window ${escapeHtml(item.window_start_label || item.window_start_timestep_index)} -> ${escapeHtml(item.window_end_label || item.window_end_timestep_index)}</strong>
+      <div class="tooltip-grid" style="margin-top:8px;">
+        <div>Center interval</div><div>${escapeHtml(intervalTimestepPrimary(item, "source"))} -> ${escapeHtml(intervalTimestepPrimary(item, "target"))}</div>
+        <div>Time</div><div>${escapeHtml(formatIntervalFs(intervalTimeFs(item)))}</div>
+        <div>Spearman rho</div><div>${escapeHtml(formatScore(item.spearman_rho))}</div>
+        <div>Window intervals</div><div>${escapeHtml(item.window_count)}</div>
+        <div>Mean range event score</div><div>${escapeHtml(formatScore(item.mean_range_event_score))}</div>
+        <div>Mean domain event score</div><div>${escapeHtml(formatScore(item.mean_domain_event_score))}</div>
+      </div>`;
+  }
+
+  function renderCorrelationGraph(container, panel, rows) {
+    renderAnalysisPointGraph(container, panel, rows, {
+      id: "domain-range-spearman",
+      heightKey: "correlationGraphHeight",
+      zoomKey: "correlationGraphZoomScale",
+      focusKey: "correlationGraphFocus",
+      graphKey: "correlationGraphKey",
+      selectedKeysKey: "selectedCorrelationKeys",
+      keyFn: correlationSummaryKey,
+      stateKey: panel => `domain-range-spearman:${thresholdKey(panelTheta(panel))}:${DOMAIN_RANGE_CORRELATION_WINDOW}`,
+      xValue: intervalTimeFs,
+      yValue: item => Number(item.spearman_rho),
+      sort: (a, b) => intervalTimeFs(a) - intervalTimeFs(b),
+      xLabel: "time (fs)",
+      yLabel: "local Spearman rho",
+      xTickFormat: value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits),
+      yTickFormat: value => formatScore(value),
+      yDomain: () => [-1, 1],
+      ySingleValuePad: 0.25,
+      drawLine: true,
+      tooltip: correlationGraphTooltip,
+      selectedKeySet: selectedCorrelationKeySet,
+      aggregateHighlight: aggregateSelectedCorrelationHighlight,
+      onClick: toggleCorrelationGraphSelection,
+      resizeTitle: "Drag to resize domain/range correlation plot"
     });
   }
 
@@ -3805,8 +4368,10 @@ d3.json("data.json").then(data => {
     const key = payload.intervalKey;
     if (!key) return;
     panel.analysis.selectedTrackKeys = [];
+    panel.analysis.trackChooserGroupKey = "";
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
+    panel.analysis.selectedCorrelationKeys = [];
     const selected = panel.analysis.selectedIntervalKeys || [];
     const alreadySelected = selected.includes(key);
     panel.analysis.selectedIntervalKeys = alreadySelected
@@ -3826,6 +4391,7 @@ d3.json("data.json").then(data => {
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
+    panel.analysis.selectedCorrelationKeys = [];
     const selected = panel.analysis.selectedTrackKeys || [];
     const alreadySelected = selected.includes(key);
     panel.analysis.selectedTrackKeys = alreadySelected
@@ -3873,8 +4439,10 @@ d3.json("data.json").then(data => {
     if (!panel?.analysis) return;
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedTrackKeys = [];
+    panel.analysis.trackChooserGroupKey = "";
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
+    panel.analysis.selectedCorrelationKeys = [];
     panel.analysis.highlight = null;
     if (state.analysisFocusPulse?.panelId === panel.id) state.analysisFocusPulse = null;
   }
@@ -3883,8 +4451,10 @@ d3.json("data.json").then(data => {
     ensurePanelAnalysis(panel);
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedTrackKeys = [];
+    panel.analysis.trackChooserGroupKey = "";
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
+    panel.analysis.selectedCorrelationKeys = [];
     state.analysisFocusPulse = null;
     panel.analysis.highlight = highlight;
     if (focusRange && highlight && Number.isFinite(Number(highlight.start)) && Number.isFinite(Number(highlight.end))) {
@@ -3903,8 +4473,10 @@ d3.json("data.json").then(data => {
     ensurePanelAnalysis(panel);
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedTrackKeys = [];
+    panel.analysis.trackChooserGroupKey = "";
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
+    panel.analysis.selectedCorrelationKeys = [];
     state.analysisFocusPulse = null;
     panel.analysis.highlight = null;
     renderAll();
@@ -3945,6 +4517,7 @@ d3.json("data.json").then(data => {
       panel.analysis.selectedTrackKeys = [];
       panel.analysis.selectedDisagreementKeys = [];
       panel.analysis.selectedDomainStabilityKeys = [];
+      panel.analysis.selectedCorrelationKeys = [];
       state.analysisFocusPulse = null;
       panel.analysis.highlight = null;
       renderAll();
@@ -3980,11 +4553,16 @@ d3.json("data.json").then(data => {
         .text(label)
         .on("click", () => {
           if (panel.analysis.tab !== id) {
-            if (id !== "disagreement") panel.analysis.selectedDisagreementKeys = [];
+            panel.analysis.trackChooserGroupKey = "";
+            if (id !== "disagreement") {
+              panel.analysis.selectedDisagreementKeys = [];
+              panel.analysis.selectedCorrelationKeys = [];
+            }
             if (id === "disagreement") {
               panel.analysis.selectedIntervalKeys = [];
               panel.analysis.selectedTrackKeys = [];
               panel.analysis.selectedDomainStabilityKeys = [];
+              panel.analysis.selectedCorrelationKeys = [];
               panel.analysis.highlight = null;
             }
             state.analysisFocusPulse = null;
@@ -4032,6 +4610,7 @@ d3.json("data.json").then(data => {
       countInput.on("change", event => {
         const maxCount = Math.max(1, rows.length);
         panel.analysis.topFeatures = clamp(Math.floor(Number(event.target.value) || 1), 1, maxCount);
+        panel.analysis.trackChooserGroupKey = "";
         renderAll();
       });
       controls.append("button").attr("type", "button").text("Highlight")
@@ -4090,8 +4669,10 @@ d3.json("data.json").then(data => {
             panel.analysis.tab = "intervals";
             panel.analysis.selectedIntervalKeys = [];
             panel.analysis.selectedTrackKeys = [];
-                    panel.analysis.selectedDisagreementKeys = [];
+            panel.analysis.trackChooserGroupKey = "";
+            panel.analysis.selectedDisagreementKeys = [];
             panel.analysis.selectedDomainStabilityKeys = [];
+            panel.analysis.selectedCorrelationKeys = [];
             state.analysisFocusPulse = null;
             panel.analysis.highlight = null;
             renderAll();
@@ -4126,7 +4707,20 @@ d3.json("data.json").then(data => {
           false
         ));
 
+      const correlationRows = domainRangeSpearmanRows(panel);
+      content.append("div")
+        .attr("class", "analysis-subtitle")
+        .text(`Sliding-window Spearman correlation, ${DOMAIN_RANGE_CORRELATION_WINDOW} intervals`);
+      renderCorrelationGraph(content, panel, correlationRows);
+
+      content.append("div")
+        .attr("class", "analysis-subtitle")
+        .text("Highest local complementarity intervals");
       renderDisagreementScoreGraph(content, panel, visibleRows);
+
+      if (!correlationRows.length) {
+        content.append("div").attr("class", "analysis-hint").text("No local domain/range Spearman values could be computed for this theta.");
+      }
 
       if (!rankedRows.length) {
         content.append("div").attr("class", "analysis-hint").text("No domain/range complementarity examples were found.");
@@ -5082,8 +5676,12 @@ d3.json("data.json").then(data => {
     return clampZoom(Math.min(paddedWidth / contentWidth, paddedHeight / contentHeight, 1));
   }
 
-  function scheduleViewportUpdate() {
+  function scheduleViewportUpdate(immediate = false) {
     if (!camera) return;
+    if (immediate && typeof camera.applyNow === "function") {
+      camera.applyNow();
+      return;
+    }
     camera.scheduleApply();
   }
 
@@ -5437,7 +6035,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         const minSvgHeight = Math.max(1, (layoutBounds.maxY - layoutBounds.minY) + 140);
         svg.attr("height", Math.max(minSvgHeight, panel.panelHeight));
       }
-      scheduleViewportUpdate();
+      scheduleViewportUpdate(true);
     };
 
     const finishDrag = event => {
@@ -5475,6 +6073,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         if (Number.isFinite(currentFit) && currentFit > 0) {
           const scaledZoom = dragState.startZoom * (currentFit / dragState.startFitZoom);
           camera.setZoomScale(scaledZoom);
+          if (typeof camera.applyNow === "function") camera.applyNow();
         }
       }
       event.preventDefault();
@@ -5852,7 +6451,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       metricId: "combined",
       threshold: 0,
       shapeWeights: cloneDefaultShapeWeights(),
-      analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], selectedTrackKeys: [], selectedDisagreementKeys: [], selectedDomainStabilityKeys: [], highlight: null } : null,
+      analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], selectedTrackKeys: [], selectedDisagreementKeys: [], selectedDomainStabilityKeys: [], selectedCorrelationKeys: [], trackChooserGroupKey: "", highlight: null } : null,
       panelHeight: clampPanelHeight(activePanel?.panelHeight ?? PANEL_HEIGHT_DEFAULT)
     });
     renderAll();
