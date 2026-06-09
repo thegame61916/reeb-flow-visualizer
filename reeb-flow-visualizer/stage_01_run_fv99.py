@@ -2,12 +2,18 @@
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+import json
 import os
 import subprocess
 import sys
+import tempfile
 
 from common import (
     EPSILON,
+    FIBER_SURFACE_FIELD_F_ISOVALUE,
+    FIBER_SURFACE_FIELD_G_ISOVALUE,
+    FIBER_SURFACE_LABELED_DIR,
+    FIBER_SURFACE_TEMP_DIR,
     FV99,
     FV99_FAILED_LOG_FILE,
     FV99_OMP_THREADS,
@@ -21,6 +27,7 @@ from common import (
     FV99_GNAME,
     RSI_DIR,
     RS_DIR,
+    SHEET_VTP_CACHE_DIR,
     TTK_BUILD_LIB_DIR,
     TTK_INSTALL_LIB_DIR,
     VTU_DIR,
@@ -74,29 +81,201 @@ def epsilon_slug(value) -> str:
     return epsilon_label(value).replace(".", "p").replace("-", "m")
 
 
-def fv99_command(vtu_file: Path, rs_file: Path, rsi_file: Path):
+def value_text(value: float) -> str:
+    text = f"{float(value):.12f}".rstrip("0").rstrip(".")
+    if text in ("", "-0"):
+        return "0"
+    return text
+
+
+def sheet_vtp_path(vtu_file: Path) -> Path:
+    return SHEET_VTP_CACHE_DIR / f"{vtu_file.stem}.sheets.vtp"
+
+
+def sheet_vtp_sidecar_paths(vtp_file: Path) -> list[Path]:
+    return [
+        Path(str(vtp_file) + ".features.vtp"),
+        Path(str(vtp_file) + ".graph.dot"),
+    ]
+
+
+def labeled_surface_dir(vtu_file: Path) -> Path:
+    return FIBER_SURFACE_LABELED_DIR / vtu_file.stem
+
+
+def labeled_surface_path(vtu_file: Path, role: str) -> Path:
+    return labeled_surface_dir(vtu_file) / f"{role}.vtp"
+
+
+def labeled_surface_manifest_path(vtu_file: Path) -> Path:
+    return labeled_surface_dir(vtu_file) / "labeled_fiber_surfaces_manifest.json"
+
+
+def expected_labeled_surface_paths(vtu_file: Path) -> list[Path]:
+    return [
+        labeled_surface_path(vtu_file, "f_pos"),
+        labeled_surface_path(vtu_file, "g_pos"),
+        labeled_surface_path(vtu_file, "f_neg"),
+        labeled_surface_path(vtu_file, "g_neg"),
+    ]
+
+
+def fv99_command(vtu_file: Path, rs_file: Path, rsi_file: Path, sheets_vtp_file: Path):
     return [
         str(FV99),
         "-f", str(vtu_file),
         "-e", EPSILON,
         "-s", str(rs_file),
         "-i", str(rsi_file),
+        "-o", str(sheets_vtp_file),
         "--fName", FV99_FNAME,
         "--gName", FV99_GNAME,
         "--headless",
     ]
 
 
-def run_fv99_command(vtu_file: Path, rs_file: Path, rsi_file: Path, log_file: Path):
+def run_fv99_command(vtu_file: Path, rs_file: Path, rsi_file: Path, sheets_vtp_file: Path, log_file: Path):
+    rs_file.parent.mkdir(parents=True, exist_ok=True)
+    rsi_file.parent.mkdir(parents=True, exist_ok=True)
+    sheets_vtp_file.parent.mkdir(parents=True, exist_ok=True)
+
     rs_file.unlink(missing_ok=True)
     rsi_file.unlink(missing_ok=True)
+    sheets_vtp_file.unlink(missing_ok=True)
+    for sidecar in sheet_vtp_sidecar_paths(sheets_vtp_file):
+        sidecar.unlink(missing_ok=True)
+
     with log_file.open("w") as log:
         return subprocess.run(
-            fv99_command(vtu_file, rs_file, rsi_file),
+            fv99_command(vtu_file, rs_file, rsi_file, sheets_vtp_file),
             stdout=log,
             stderr=subprocess.STDOUT,
             env=FV99_ENV,
         )
+
+
+def run_fv99_fiber_sign(
+    vtu_file: Path,
+    rs_file: Path,
+    sign: str,
+    f_value: float,
+    g_value: float,
+    log_file: Path,
+) -> dict:
+    destination_dir = labeled_surface_dir(vtu_file)
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    FIBER_SURFACE_TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+    f_destination = labeled_surface_path(vtu_file, f"f_{sign}")
+    g_destination = labeled_surface_path(vtu_file, f"g_{sign}")
+    f_destination.unlink(missing_ok=True)
+    g_destination.unlink(missing_ok=True)
+
+    command = [
+        str(FV99),
+        "-f", str(vtu_file),
+        "-l", str(rs_file),
+        "--fieldFValueFS", value_text(f_value),
+        "--fieldGValueFS", value_text(g_value),
+        "--fName", FV99_FNAME,
+        "--gName", FV99_GNAME,
+        "--headless",
+    ]
+
+    with tempfile.TemporaryDirectory(
+        prefix=f"{vtu_file.stem}_{sign}_",
+        dir=FIBER_SURFACE_TEMP_DIR,
+    ) as tmp_name:
+        work_dir = Path(tmp_name)
+        (work_dir / "output").mkdir(parents=True, exist_ok=True)
+
+        with log_file.open("w") as log:
+            result = subprocess.run(
+                command,
+                cwd=work_dir,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                env=FV99_ENV,
+            )
+
+        f_source = work_dir / "output" / "labeled.fs.f.vtp"
+        g_source = work_dir / "output" / "labeled.fs.g.vtp"
+        ok = result.returncode == 0 and f_source.exists() and g_source.exists()
+
+        if ok:
+            os.replace(f_source, f_destination)
+            os.replace(g_source, g_destination)
+
+    return {
+        "sign": sign,
+        "returncode": result.returncode,
+        "log": log_file,
+        "f_output": f_destination,
+        "g_output": g_destination,
+        "ok": ok,
+    }
+
+
+def write_labeled_surface_manifest(vtu_file: Path, rs_file: Path, fiber_details: list[dict]) -> None:
+    surfaces = {}
+    for detail in fiber_details:
+        sign = detail["sign"]
+        surfaces[f"f_{sign}"] = str(detail["f_output"])
+        surfaces[f"g_{sign}"] = str(detail["g_output"])
+
+    payload = {
+        "timestep": vtu_file.stem,
+        "vtu": str(vtu_file),
+        "rs": str(rs_file),
+        "f_name": FV99_FNAME,
+        "g_name": FV99_GNAME,
+        "f_isovalue": float(FIBER_SURFACE_FIELD_F_ISOVALUE),
+        "g_isovalue": float(FIBER_SURFACE_FIELD_G_ISOVALUE),
+        "surfaces": surfaces,
+    }
+    labeled_surface_manifest_path(vtu_file).write_text(json.dumps(payload, indent=2) + "\n")
+
+
+def generate_fiber_surfaces(vtu_file: Path, rs_file: Path) -> tuple[bool, list[dict]]:
+    labeled_surface_manifest_path(vtu_file).unlink(missing_ok=True)
+    for path in expected_labeled_surface_paths(vtu_file):
+        path.unlink(missing_ok=True)
+
+    runs = [
+        (
+            "pos",
+            float(FIBER_SURFACE_FIELD_F_ISOVALUE),
+            float(FIBER_SURFACE_FIELD_G_ISOVALUE),
+        ),
+        (
+            "neg",
+            -float(FIBER_SURFACE_FIELD_F_ISOVALUE),
+            -float(FIBER_SURFACE_FIELD_G_ISOVALUE),
+        ),
+    ]
+
+    details: list[dict] = []
+    for sign, f_value, g_value in runs:
+        log_file = FV99_FAILED_LOG_FILE.parent / f"{vtu_file.stem}.{sign}.fiber.fv99.log"
+        detail = run_fv99_fiber_sign(vtu_file, rs_file, sign, f_value, g_value, log_file)
+        details.append(detail)
+        if not detail["ok"]:
+            return False, details
+
+    write_labeled_surface_manifest(vtu_file, rs_file, details)
+    return True, details
+
+
+def finalize_with_artifacts(vtu_file: Path, success: bool, partial: bool, returncode: int, details: dict):
+    rs_file = RS_DIR / f"{vtu_file.stem}.rs"
+    fiber_ok, fiber_details = generate_fiber_surfaces(vtu_file, rs_file)
+    details["fiber_surfaces_ok"] = fiber_ok
+    details["fiber_surface_runs"] = fiber_details
+
+    if not fiber_ok:
+        return vtu_file, False, True, returncode, details
+
+    return vtu_file, success, partial, returncode, details
 
 
 def perturb_output_path(vtu_file: Path) -> Path:
@@ -138,16 +317,19 @@ def perturb_vtu_once(vtu_file: Path, output_file: Path, log_file: Path):
 def run_fv99(vtu_file: Path):
     rs_file = RS_DIR / f"{vtu_file.stem}.rs"
     rsi_file = RSI_DIR / f"{vtu_file.stem}.rsi"
+    sheets_vtp_file = sheet_vtp_path(vtu_file)
     log_file = FV99_FAILED_LOG_FILE.parent / f"{vtu_file.stem}.fv99.log"
 
-    result = run_fv99_command(vtu_file, rs_file, rsi_file, log_file)
+    result = run_fv99_command(vtu_file, rs_file, rsi_file, sheets_vtp_file, log_file)
 
-    has_outputs = rs_file.exists() and rsi_file.exists()
+    has_outputs = rs_file.exists() and rsi_file.exists() and sheets_vtp_file.exists()
     success = result.returncode == 0 and has_outputs
     partial = result.returncode != 0 and has_outputs
     details = {
         "log_file": log_file,
         "normal_returncode": result.returncode,
+        "sheet_vtp": sheets_vtp_file,
+        "primary_outputs_exist": has_outputs,
         "perturbed_vtu": None,
         "perturb_log": None,
         "perturb_returncode": None,
@@ -156,10 +338,12 @@ def run_fv99(vtu_file: Path):
         "recovered_with_perturbation": False,
         "original_vtu_replaced": False,
         "replacement_vtu": None,
+        "fiber_surfaces_ok": False,
+        "fiber_surface_runs": [],
     }
 
     if success or partial:
-        return vtu_file, success, partial, result.returncode, details
+        return finalize_with_artifacts(vtu_file, success, partial, result.returncode, details)
 
     perturbed_vtu = perturb_output_path(vtu_file)
     perturb_log = FV99_FAILED_LOG_FILE.parent / f"{vtu_file.stem}.perturb_vtu.log"
@@ -181,8 +365,8 @@ def run_fv99(vtu_file: Path):
     if details["perturb_returncode"] != 0 or not perturbed_vtu.exists():
         return vtu_file, False, False, result.returncode, details
 
-    retry_result = run_fv99_command(perturbed_vtu, rs_file, rsi_file, retry_log)
-    retry_has_outputs = rs_file.exists() and rsi_file.exists()
+    retry_result = run_fv99_command(perturbed_vtu, rs_file, rsi_file, sheets_vtp_file, retry_log)
+    retry_has_outputs = rs_file.exists() and rsi_file.exists() and sheets_vtp_file.exists()
     retry_success = retry_result.returncode == 0 and retry_has_outputs
     retry_partial = retry_result.returncode != 0 and retry_has_outputs
     details["retry_returncode"] = retry_result.returncode
@@ -192,9 +376,12 @@ def run_fv99(vtu_file: Path):
         os.replace(perturbed_vtu, vtu_file)
         details["original_vtu_replaced"] = True
         details["replacement_vtu"] = vtu_file
-        return vtu_file, True, False, retry_result.returncode, details
+        return finalize_with_artifacts(vtu_file, True, False, retry_result.returncode, details)
     if retry_partial:
-        return vtu_file, False, True, retry_result.returncode, details
+        os.replace(perturbed_vtu, vtu_file)
+        details["original_vtu_replaced"] = True
+        details["replacement_vtu"] = vtu_file
+        return finalize_with_artifacts(vtu_file, False, True, retry_result.returncode, details)
     return vtu_file, False, False, retry_result.returncode, details
 
 
@@ -203,8 +390,11 @@ def run_fv99_stage():
 
     RS_DIR.mkdir(parents=True, exist_ok=True)
     RSI_DIR.mkdir(parents=True, exist_ok=True)
+    SHEET_VTP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     FV99_FAILED_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     FV99_PERTURBED_VTU_DIR.mkdir(parents=True, exist_ok=True)
+    FIBER_SURFACE_LABELED_DIR.mkdir(parents=True, exist_ok=True)
+    FIBER_SURFACE_TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
     vtu_files = sorted(VTU_DIR.glob("*.vtu"))
     num_workers = max(1, (os.cpu_count() or 1) - RESERVE_CORES)
@@ -232,6 +422,8 @@ def run_fv99_stage():
                 )
             elif success:
                 status = "done"
+            elif partial and not details.get("fiber_surfaces_ok") and details.get("primary_outputs_exist"):
+                status = f"partial missing_fiber_artifacts returncode={returncode}"
             elif partial:
                 status = f"partial returncode={returncode}"
             else:
@@ -241,7 +433,18 @@ def run_fv99_stage():
             detail_fields = [
                 f"normal_returncode={details.get('normal_returncode')}",
                 f"log={log_file}",
+                f"sheet_vtp={details.get('sheet_vtp')}",
+                f"primary_outputs_exist={details.get('primary_outputs_exist')}",
+                f"fiber_surfaces_ok={details.get('fiber_surfaces_ok')}",
             ]
+            for fiber_run in details.get("fiber_surface_runs", []):
+                sign = fiber_run.get("sign")
+                detail_fields.extend([
+                    f"fiber_{sign}_returncode={fiber_run.get('returncode')}",
+                    f"fiber_{sign}_log={fiber_run.get('log')}",
+                    f"fiber_{sign}_f_output={fiber_run.get('f_output')}",
+                    f"fiber_{sign}_g_output={fiber_run.get('g_output')}",
+                ])
             if details.get("perturbed_vtu") is not None:
                 detail_fields.extend([
                     f"perturb_epsilon={epsilon_label(FV99_PERTURB_EPSILON)}",

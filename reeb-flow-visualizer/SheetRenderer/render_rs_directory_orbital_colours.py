@@ -7,16 +7,15 @@ Uses project paths from common.py, then run:
     python3 scripts/render_rs_directory_orbital_colours.py
 
 For every .rs file in RS_DIRECTORY, this script looks for matching .rsi and
-.vtu files by stem, reconstructs temporary drawable Reeb-space geometry through
-the existing C++ executable, and writes only PNG files:
+Stage 1 cached sheet geometry VTP files by stem, and writes only PNG files:
 
     OUTPUT_DIRECTORY/<rs-stem>/<rs-stem>.png
     OUTPUT_DIRECTORY/<rs-stem>/sheet_<sheet-id>.png
 
 Cached VTP behavior:
-  - default: reuse cached VTPs and build only missing ones
-  - --rebuild-cache: force rebuilding all VTP cache entries
-  - --clean-cache: clear VTP cache before rendering
+  - sheet VTPs are owned by Stage 1
+  - this renderer only reads the Stage 1 cache and never calls fv99
+  - --rebuild-cache/--clean-cache are kept for CLI compatibility only
 
 When SHEET_RENDERER_USE_GLOBAL_BOUNDS is enabled in common.py, all output PNGs
 use the same global 2D sheet-space frame and fixed canvas size.
@@ -51,7 +50,6 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from common import (  # noqa: E402
-    FV99,
     RSI_DIR,
     RS_DIR,
     SHEET_IMAGE_DIR,
@@ -60,6 +58,7 @@ from common import (  # noqa: E402
     SHEET_RENDERER_TEMP_DIR,
     SHEET_RENDERER_UNIFORM_SHEET_COLOR,
     SHEET_RENDERER_USE_GLOBAL_BOUNDS,
+    SHEET_VTP_CACHE_DIR,
     SHEET_RENDERER_WORKERS,
     TOP_N_SHEETS,
     TTK_BUILD_LIB_DIR,
@@ -68,7 +67,6 @@ from common import (  # noqa: E402
     VTU_DIR,
 )
 from render_rs_sheets import (  # noqa: E402
-    export_sheet_vtp,
     read_sheet_vtp,
     sheet_areas,
 )
@@ -96,7 +94,7 @@ TEMP_PREFIX = "rs-render-"
 STALE_TEMP_MAX_AGE_HOURS = 6
 MIN_TEMP_FREE_GB = 50
 MIN_OUTPUT_FREE_GB = 5
-VTP_CACHE_DIR = TEMP_DIRECTORY / "vtp_cache"
+VTP_CACHE_DIR = SHEET_VTP_CACHE_DIR
 
 DPI = 200
 FIGURE_WIDTH = SHEET_RENDERER_IMAGE_SIZE[0] / DPI
@@ -449,26 +447,23 @@ def load_or_build_sheet_vtp(
     library_path: str,
     rebuild_cache: bool,
 ):
+    del vtu_path, rs_path, library_path, rebuild_cache
     cached_vtp = VTP_CACHE_DIR / f"{stem}.sheets.vtp"
     cache_status = "reused"
 
-    if cached_vtp.exists() and not rebuild_cache:
-        try:
-            return read_sheet_vtp(cached_vtp), cache_status
-        except Exception as exc:
-            raise RuntimeError(
-                f"Cached VTP is unreadable: {cached_vtp}. "
-                f"Run with --rebuild-cache or --clean-cache. Error: {exc}"
-            ) from exc
+    if not cached_vtp.exists():
+        raise FileNotFoundError(
+            f"missing Stage 1 cached sheet VTP: {cached_vtp}. "
+            "Run Stage 1 before sheet rendering."
+        )
 
-    cache_status = "rebuilt" if cached_vtp.exists() else "built"
-    with tempfile.TemporaryDirectory(prefix=f"{TEMP_PREFIX}{stem}-", dir=TEMP_DIRECTORY) as tmp:
-        tmp_vtp = Path(tmp) / f"{stem}.sheets.vtp"
-        export_sheet_vtp(FV99, vtu_path, rs_path, tmp_vtp, library_path)
-        cached_vtp.parent.mkdir(parents=True, exist_ok=True)
-        tmp_vtp.replace(cached_vtp)
-
-    return read_sheet_vtp(cached_vtp), cache_status
+    try:
+        return read_sheet_vtp(cached_vtp), cache_status
+    except Exception as exc:
+        raise RuntimeError(
+            f"Stage 1 cached VTP is unreadable: {cached_vtp}. "
+            f"Regenerate it from Stage 1. Error: {exc}"
+        ) from exc
 
 
 def collect_bounds_one(
@@ -599,10 +594,16 @@ def main(argv: list[str] | None = None) -> int:
     VTP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     CONTEXT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-    if args.clean_cache and VTP_CACHE_DIR.exists():
-        shutil.rmtree(VTP_CACHE_DIR)
-        VTP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        print(f"Cleared VTP cache: {VTP_CACHE_DIR}")
+    if args.clean_cache:
+        print(
+            "Ignoring --clean-cache for Stage 1-owned VTP cache; "
+            "rerun Stage 1 to regenerate sheet VTPs."
+        )
+    if args.rebuild_cache:
+        print(
+            "Ignoring --rebuild-cache for Stage 1-owned VTP cache; "
+            "rerun Stage 1 to regenerate sheet VTPs."
+        )
 
     cleanup_stale_temp_dirs(TEMP_DIRECTORY)
     require_free_space(TEMP_DIRECTORY, MIN_TEMP_FREE_GB, "Temporary filesystem")
@@ -620,7 +621,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Output free space: {free_gb(OUTPUT_DIRECTORY):.1f} GiB")
 
     render_bounds = None
-    render_rebuild_cache = args.rebuild_cache
+    render_rebuild_cache = False
     if SHEET_RENDERER_USE_GLOBAL_BOUNDS:
         render_bounds = collect_global_render_bounds(
             rs_files=rs_files,

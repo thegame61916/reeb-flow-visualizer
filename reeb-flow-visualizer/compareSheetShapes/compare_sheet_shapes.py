@@ -6,7 +6,7 @@ This is a standalone tool. It does not modify the existing pipeline.
 
 What it does:
   1. discovers matching .rs / .rsi / .vtu files by timestep stem
-  2. exports sheet geometry with fv99 into a local cache when needed
+  2. reads Stage 1 cached sheet geometry VTP files
   3. preprocesses every sheet into reusable descriptors
   4. rasterizes sheet polygons into masks on a shared global grid
   5. computes pairwise similarity scores for adjacent timesteps
@@ -42,7 +42,6 @@ if str(SHEET_RENDERER_DIR) not in sys.path:
     sys.path.insert(0, str(SHEET_RENDERER_DIR))
 
 from render_rs_sheets import (  # noqa: E402
-    export_sheet_vtp,
     polygon_area,
     read_sheet_vtp,
     sheet_areas,
@@ -55,12 +54,12 @@ from render_rs_sheets import (  # noqa: E402
 
 from common import (
     BASE_DIR,
-    FV99,
     RESERVE_CORES,
     RSI_DIR,
     RS_DIR,
     SHAPE_SCORE_DEFAULT_WEIGHTS,
     SHAPE_MATCHING_SKIPPED_LOG_FILE,
+    SHEET_VTP_CACHE_DIR,
     TOP_N_SHEETS,
     TTK_BUILD_LIB_DIR,
     TTK_INSTALL_LIB_DIR,
@@ -82,7 +81,7 @@ CACHE_DIR = STORAGE_ROOT / "cache"
 RESULTS_DIR = STORAGE_ROOT / "results"
 
 RSI_JSON_CACHE_DIR = CACHE_DIR / "rsi_json"
-VTP_CACHE_DIR = CACHE_DIR / "vtp"
+VTP_CACHE_DIR = SHEET_VTP_CACHE_DIR
 VTP_EXPORT_LOG_DIR = CACHE_DIR / "vtp_export_logs"
 TIMESTEP_CACHE_DIR = CACHE_DIR / "timesteps"
 MATCH_CACHE_DIR = CACHE_DIR / "matches"
@@ -268,21 +267,15 @@ def export_geometry_if_needed(
     library_path: str,
     log_path: Path | None = None,
 ) -> Path:
+    del library_path, log_path
     out_vtp = cached_vtp_path(timestep)
     if out_vtp.exists():
         return out_vtp
 
-    tmp_vtp = out_vtp.with_name(f"{out_vtp.stem}.tmp{out_vtp.suffix}")
-    if tmp_vtp.exists():
-        tmp_vtp.unlink()
-    try:
-        export_sheet_vtp(FV99, timestep.vtu, timestep.rs, tmp_vtp, library_path, log_path=log_path)
-        tmp_vtp.replace(out_vtp)
-    except Exception:
-        if tmp_vtp.exists():
-            tmp_vtp.unlink()
-        raise
-    return out_vtp
+    raise FileNotFoundError(
+        f"missing Stage 1 cached sheet VTP: {out_vtp}. "
+        "Run Stage 1 before compare-sheets."
+    )
 
 
 def export_failure_details(exc: Exception) -> tuple[str, str]:
@@ -312,12 +305,6 @@ def exportable_timestep_worker(timestep: TimestepInput, library_path: str) -> di
             "vtp": str(vtp_path),
         }
     except Exception as exc:
-        bad_vtp = cached_vtp_path(timestep)
-        if bad_vtp.exists():
-            try:
-                bad_vtp.unlink()
-            except OSError:
-                pass
         status, command_text = export_failure_details(exc)
         return {
             "ok": False,
@@ -336,7 +323,7 @@ def write_skipped_timesteps_log(skipped: list[dict]) -> None:
         return
 
     lines = [
-        "# Timesteps skipped because fv99 could not export sheet geometry for compare-sheets.\n",
+        "# Timesteps skipped because their Stage 1 sheet geometry cache is missing/unreadable.\n",
         "# Skipped timesteps are removed before adjacent range-shape matches are built.\n",
     ]
     for item in skipped:
@@ -344,7 +331,7 @@ def write_skipped_timesteps_log(skipped: list[dict]) -> None:
             "\t".join(
                 [
                     str(item["vtu"]),
-                    "status=skipped_vtp_export_failed",
+                    "status=skipped_missing_stage1_sheet_vtp",
                     str(item.get("failure_status", "-")),
                     f"rs={item['rs']}",
                     f"log={item.get('log', '-')}",
@@ -391,7 +378,7 @@ def filter_exportable_timesteps(
             if result.get("ok"):
                 valid.append(by_stem[str(result["stem"])])
                 print(
-                    f"[shape export {i}/{len(futures)}] ok polygons={result['polygon_count']}: {result['stem']}",
+                    f"[shape cache {i}/{len(futures)}] ok polygons={result['polygon_count']}: {result['stem']}",
                     flush=True,
                 )
             else:
@@ -407,7 +394,7 @@ def filter_exportable_timesteps(
                     }
                 )
                 print(
-                    f"[shape export {i}/{len(futures)}] skipped {result.get('status', '-')}: {timestep.stem}",
+                    f"[shape cache {i}/{len(futures)}] skipped {result.get('status', '-')}: {timestep.stem}",
                     flush=True,
                 )
 

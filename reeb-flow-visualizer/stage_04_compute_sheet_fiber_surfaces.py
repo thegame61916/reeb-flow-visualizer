@@ -20,6 +20,7 @@ from common import (
     FIBER_SURFACE_FIELD_F_ISOVALUE,
     FIBER_SURFACE_FIELD_G_ISOVALUE,
     FIBER_SURFACE_IMAGE_DIR,
+    FIBER_SURFACE_LABELED_DIR,
     FIBER_SURFACE_MOLECULAR_STRUCTURE_DIR,
     FIBER_SURFACE_REBUILD,
     FIBER_SURFACE_RENDER_IMAGE_RESOLUTION,
@@ -29,17 +30,12 @@ from common import (
     FIBER_SURFACE_TEMP_DIR,
     FIBER_SURFACE_TOP_N_SHEETS,
     FIBER_SURFACE_WORKERS,
-    FV99,
     FV99_FNAME,
     FV99_GNAME,
-    FV99_OMP_THREADS,
     PVPYTHON,
     RSI_DIR,
     RS_DIR,
-    TTK_BUILD_LIB_DIR,
-    TTK_INSTALL_LIB_DIR,
     VTU_DIR,
-    VTK_LIB_DIR,
 )
 from stage_02_build_sankey_data import read_rsi
 
@@ -89,30 +85,12 @@ class TimestepResult:
     message: str = ""
 
 
-def make_fv99_environment() -> dict[str, str]:
-    env = os.environ.copy()
-    library_paths = [
-        str(TTK_BUILD_LIB_DIR),
-        str(TTK_INSTALL_LIB_DIR),
-        str(VTK_LIB_DIR),
-    ]
-
-    if env.get("LD_LIBRARY_PATH"):
-        library_paths.append(env["LD_LIBRARY_PATH"])
-
-    env["LD_LIBRARY_PATH"] = os.pathsep.join(library_paths)
-    env["OMP_NUM_THREADS"] = str(FV99_OMP_THREADS)
-    env.setdefault("QT_QPA_PLATFORM", "offscreen")
-    return env
-
-
 def make_render_environment() -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("QT_QPA_PLATFORM", "offscreen")
     return env
 
 
-FV99_ENV = make_fv99_environment()
 RENDER_ENV = make_render_environment()
 
 
@@ -150,7 +128,7 @@ def expected_manifest_payload(vtu_file: Path) -> dict:
         "g_isovalue": float(FIBER_SURFACE_FIELD_G_ISOVALUE),
         "top_n_sheets": int(FIBER_SURFACE_TOP_N_SHEETS),
         "output_mode": "rendered_images_from_paraview_state",
-        "surface_mode": "temporary_thresholded_from_full_labeled_fiber_surface",
+        "surface_mode": "temporary_thresholded_from_stage1_labeled_fiber_surface",
         "threshold_cell_array": "sheetId",
         "image_resolution": list(FIBER_SURFACE_RENDER_IMAGE_RESOLUTION),
     }
@@ -180,12 +158,6 @@ def existing_outputs_complete(vtu_file: Path) -> bool:
 
 
 def check_inputs() -> None:
-    if not FV99.exists():
-        raise FileNotFoundError(f"fv99 binary not found: {FV99}")
-
-    if not os.access(FV99, os.X_OK):
-        raise PermissionError(f"fv99 binary is not executable: {FV99}")
-
     if not PVPYTHON.exists():
         raise FileNotFoundError(f"pvpython binary not found: {PVPYTHON}")
 
@@ -262,60 +234,84 @@ def read_top_sheet_ids(rsi_file: Path) -> list[int]:
     ]
 
 
-def run_fv99_for_sign(
-    vtu_file: Path,
-    rs_file: Path,
-    sign: str,
-    f_value: float,
-    g_value: float,
-    work_dir: Path,
-    log_file: Path,
-) -> tuple[int, list[LabeledSurfaceOutput]]:
-    output_dir = work_dir / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
+def cached_labeled_surface_path(vtu_file: Path, role: str) -> Path:
+    return FIBER_SURFACE_LABELED_DIR / vtu_file.stem / f"{role}.vtp"
 
-    command = [
-        str(FV99),
-        "-f",
-        str(vtu_file),
-        "-l",
-        str(rs_file),
-        "--fieldFValueFS",
-        value_text(f_value),
-        "--fieldGValueFS",
-        value_text(g_value),
-        "--fName",
-        FV99_FNAME,
-        "--gName",
-        FV99_GNAME,
-        "--headless",
-    ]
 
-    with log_file.open("w") as log:
-        result = subprocess.run(
-            command,
-            cwd=work_dir,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            env=FV99_ENV,
-        )
+def cached_labeled_manifest_path(vtu_file: Path) -> Path:
+    return FIBER_SURFACE_LABELED_DIR / vtu_file.stem / "labeled_fiber_surfaces_manifest.json"
 
-    outputs = [
+
+def validate_cached_labeled_manifest(vtu_file: Path) -> str | None:
+    path = cached_labeled_manifest_path(vtu_file)
+    if not path.exists():
+        return f"missing Stage 1 labeled fiber surface manifest: {path}"
+
+    try:
+        manifest = json.loads(path.read_text())
+    except Exception as exc:
+        return f"failed to read Stage 1 labeled fiber surface manifest {path}: {exc}"
+
+    expected = {
+        "timestep": vtu_file.stem,
+        "vtu": str(vtu_file),
+        "rs": str(RS_DIR / f"{vtu_file.stem}.rs"),
+        "f_name": FV99_FNAME,
+        "g_name": FV99_GNAME,
+        "f_isovalue": float(FIBER_SURFACE_FIELD_F_ISOVALUE),
+        "g_isovalue": float(FIBER_SURFACE_FIELD_G_ISOVALUE),
+    }
+    for key, value in expected.items():
+        if manifest.get(key) != value:
+            return (
+                f"Stage 1 labeled fiber surface manifest mismatch for {vtu_file.stem}: "
+                f"{key}={manifest.get(key)!r}, expected {value!r}. Rerun Stage 1."
+            )
+
+    surfaces = manifest.get("surfaces")
+    if not isinstance(surfaces, dict):
+        return f"Stage 1 labeled fiber surface manifest has no surfaces map: {path}"
+
+    for role in SURFACE_ROLES:
+        expected_path = cached_labeled_surface_path(vtu_file, role)
+        if surfaces.get(role) != str(expected_path):
+            return (
+                f"Stage 1 labeled fiber surface manifest path mismatch for {role}: "
+                f"{surfaces.get(role)!r}, expected {str(expected_path)!r}. Rerun Stage 1."
+            )
+
+    return None
+
+
+def cached_labeled_surfaces(vtu_file: Path) -> list[LabeledSurfaceOutput]:
+    f_value = float(FIBER_SURFACE_FIELD_F_ISOVALUE)
+    g_value = float(FIBER_SURFACE_FIELD_G_ISOVALUE)
+    return [
         LabeledSurfaceOutput(
             field="f",
-            sign=sign,
+            sign="neg",
+            value=-f_value,
+            path=cached_labeled_surface_path(vtu_file, "f_neg"),
+        ),
+        LabeledSurfaceOutput(
+            field="f",
+            sign="pos",
             value=f_value,
-            path=output_dir / "labeled.fs.f.vtp",
+            path=cached_labeled_surface_path(vtu_file, "f_pos"),
         ),
         LabeledSurfaceOutput(
             field="g",
-            sign=sign,
+            sign="neg",
+            value=-g_value,
+            path=cached_labeled_surface_path(vtu_file, "g_neg"),
+        ),
+        LabeledSurfaceOutput(
+            field="g",
+            sign="pos",
             value=g_value,
-            path=output_dir / "labeled.fs.g.vtp",
+            path=cached_labeled_surface_path(vtu_file, "g_pos"),
         ),
     ]
-
-    return result.returncode, outputs
 
 
 def cell_data_array_name(poly_data: vtk.vtkPolyData) -> str:
@@ -609,60 +605,35 @@ def compute_timestep(vtu_file: Path, rebuild: bool) -> TimestepResult:
     log_dir.mkdir(parents=True, exist_ok=True)
     FIBER_SURFACE_TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-    all_labeled_surfaces: list[LabeledSurfaceOutput] = []
+    all_labeled_surfaces = cached_labeled_surfaces(vtu_file)
+    missing_outputs = [
+        str(surface.path)
+        for surface in all_labeled_surfaces
+        if not surface.path.exists()
+    ]
+    if missing_outputs:
+        return TimestepResult(
+            vtu=vtu_file,
+            status="failed",
+            message=(
+                "missing Stage 1 labeled fiber surface(s): "
+                + ", ".join(missing_outputs)
+            ),
+        )
+
+    manifest_error = validate_cached_labeled_manifest(vtu_file)
+    if manifest_error:
+        return TimestepResult(
+            vtu=vtu_file,
+            status="failed",
+            message=manifest_error,
+        )
 
     with tempfile.TemporaryDirectory(
         prefix=f"{vtu_file.stem}_",
         dir=FIBER_SURFACE_TEMP_DIR,
     ) as tmp_name:
         tmp_dir = Path(tmp_name)
-        runs = [
-            (
-                "pos",
-                float(FIBER_SURFACE_FIELD_F_ISOVALUE),
-                float(FIBER_SURFACE_FIELD_G_ISOVALUE),
-            ),
-            (
-                "neg",
-                -float(FIBER_SURFACE_FIELD_F_ISOVALUE),
-                -float(FIBER_SURFACE_FIELD_G_ISOVALUE),
-            ),
-        ]
-
-        for sign, f_value, g_value in runs:
-            run_dir = tmp_dir / sign
-            run_dir.mkdir(parents=True, exist_ok=True)
-            log_file = log_dir / f"{vtu_file.stem}_{sign}.fv99.log"
-            returncode, labeled_surfaces = run_fv99_for_sign(
-                vtu_file,
-                rs_file,
-                sign,
-                f_value,
-                g_value,
-                run_dir,
-                log_file,
-            )
-
-            if returncode != 0:
-                return TimestepResult(
-                    vtu=vtu_file,
-                    status="failed",
-                    message=f"{sign} returncode={returncode} log={log_file}",
-                )
-
-            missing_outputs = [
-                str(surface.path)
-                for surface in labeled_surfaces
-                if not surface.path.exists()
-            ]
-            if missing_outputs:
-                return TimestepResult(
-                    vtu=vtu_file,
-                    status="failed",
-                    message=f"{sign} missing labeled outputs: {', '.join(missing_outputs)} log={log_file}",
-                )
-
-            all_labeled_surfaces.extend(labeled_surfaces)
 
         try:
             temp_surfaces_dir = tmp_dir / "thresholded"
