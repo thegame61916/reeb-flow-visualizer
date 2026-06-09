@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -202,9 +203,16 @@ def run_fv99_fiber_sign(
         g_source = work_dir / "output" / "labeled.fs.g.vtp"
         ok = result.returncode == 0 and f_source.exists() and g_source.exists()
 
+        move_error = None
         if ok:
-            os.replace(f_source, f_destination)
-            os.replace(g_source, g_destination)
+            try:
+                shutil.move(str(f_source), str(f_destination))
+                shutil.move(str(g_source), str(g_destination))
+            except OSError as exc:
+                move_error = f"{type(exc).__name__}: {exc}"
+                f_destination.unlink(missing_ok=True)
+                g_destination.unlink(missing_ok=True)
+                ok = False
 
     return {
         "sign": sign,
@@ -213,6 +221,7 @@ def run_fv99_fiber_sign(
         "f_output": f_destination,
         "g_output": g_destination,
         "ok": ok,
+        "move_error": move_error,
     }
 
 
@@ -257,7 +266,18 @@ def generate_fiber_surfaces(vtu_file: Path, rs_file: Path) -> tuple[bool, list[d
     details: list[dict] = []
     for sign, f_value, g_value in runs:
         log_file = FV99_FAILED_LOG_FILE.parent / f"{vtu_file.stem}.{sign}.fiber.fv99.log"
-        detail = run_fv99_fiber_sign(vtu_file, rs_file, sign, f_value, g_value, log_file)
+        try:
+            detail = run_fv99_fiber_sign(vtu_file, rs_file, sign, f_value, g_value, log_file)
+        except Exception as exc:
+            detail = {
+                "sign": sign,
+                "returncode": "error",
+                "log": log_file,
+                "f_output": labeled_surface_path(vtu_file, f"f_{sign}"),
+                "g_output": labeled_surface_path(vtu_file, f"g_{sign}"),
+                "ok": False,
+                "move_error": f"{type(exc).__name__}: {exc}",
+            }
         details.append(detail)
         if not detail["ok"]:
             return False, details
@@ -444,6 +464,7 @@ def run_fv99_stage():
                     f"fiber_{sign}_log={fiber_run.get('log')}",
                     f"fiber_{sign}_f_output={fiber_run.get('f_output')}",
                     f"fiber_{sign}_g_output={fiber_run.get('g_output')}",
+                    f"fiber_{sign}_move_error={fiber_run.get('move_error')}",
                 ])
             if details.get("perturbed_vtu") is not None:
                 detail_fields.extend([
