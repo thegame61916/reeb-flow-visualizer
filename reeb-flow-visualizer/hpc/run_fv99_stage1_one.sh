@@ -264,11 +264,32 @@ run_fiber_sign() {
   ) > "${log_file}" 2>&1
   local rc=$?
 
-  local f_source="${work_dir}/output/labeled.fs.f.vtp"
-  local g_source="${work_dir}/output/labeled.fs.g.vtp"
-  if [[ ${rc} -eq 0 && -s "${f_source}" && -s "${g_source}" ]]; then
+  local f_source=""
+  local g_source=""
+  local candidate
+  for candidate in "${work_dir}/output/labeled.fs.f.vtp" "${work_dir}/output/labeled.fs.f"; do
+    if [[ -s "${candidate}" ]]; then
+      f_source="${candidate}"
+      break
+    fi
+  done
+  for candidate in "${work_dir}/output/labeled.fs.g.vtp" "${work_dir}/output/labeled.fs.g"; do
+    if [[ -s "${candidate}" ]]; then
+      g_source="${candidate}"
+      break
+    fi
+  done
+
+  if [[ ${rc} -eq 0 && -n "${f_source}" && -n "${g_source}" ]]; then
     mv "${f_source}" "${FIBER_DIR}/f_${sign}.vtp"
     mv "${g_source}" "${FIBER_DIR}/g_${sign}.vtp"
+  elif [[ ${rc} -eq 0 ]]; then
+    {
+      echo "fv99 returned 0 but expected fiber outputs were not found."
+      echo "Checked: output/labeled.fs.f.vtp, output/labeled.fs.f, output/labeled.fs.g.vtp, output/labeled.fs.g"
+      echo "Files in output/:"
+      find "${work_dir}/output" -maxdepth 1 -type f -printf '  %f\n' 2>/dev/null || true
+    } >> "${log_file}"
   fi
 
   if [[ "${KEEP_FIBER_WORK}" != "1" ]]; then
