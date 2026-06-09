@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import stage_00_preprocess_vtu_degeneracy as s0
 import stage_01_run_fv99 as s1
 import stage_02_build_sankey_data as s2
 import stage_03_compute_sheet_overlaps as s3
@@ -12,7 +11,6 @@ from compareSheetShapes.compare_sheet_shapes import (
 )
 
 from common import (
-    RUN_STAGE_0_DEGENERACY_PREPROCESS,
     RUN_STAGE_1_FV99,
     RUN_STAGE_2_RSI_JSON,
     RUN_STAGE_3A_SHAPE_MATCHING,
@@ -35,14 +33,6 @@ from unified_sankey_viewer.stage_07_unified_sankey_viewer import (
 
 def enabled_stages():
     stages = []
-
-    if RUN_STAGE_0_DEGENERACY_PREPROCESS:
-        stages.append(
-            (
-                "Stage 0: check and repair VTU degeneracy",
-                s0.preprocess_vtu_degeneracy_stage,
-            )
-        )
 
     if RUN_STAGE_1_FV99:
         stages.append(

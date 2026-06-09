@@ -3,7 +3,7 @@ from pathlib import Path
 
 # ================= USER SETTINGS =================
 
-BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene")
+BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/FullRes/stilbene")
 
 DATASET_CONFIGS = {
     "stilbene": {
@@ -57,32 +57,24 @@ LOW_SCALAR_ORIGIN_THRESHOLDS_BY_DATASET = {
 }
 LOW_SCALAR_ORIGIN_THRESHOLDS = LOW_SCALAR_ORIGIN_THRESHOLDS_BY_DATASET.get(dataset_key, {})
 
-# Stage 0 preprocesses VTU files before fv99 or any downstream analysis.
-# It checks whether any tetrahedron face maps to a line in the selected
-# (FV99_FNAME, FV99_GNAME) range space. Degenerate files are overwritten with
-# the first perturbation that removes the degeneracy; files that remain
-# degenerate after every epsilon are removed from VTU_DIR.
-DEGENERACY_PREPROCESS_EPSILONS = (
-    0.000000001,
-    0.00000001,
-    0.0000001,
-    0.000001,
-    0.00001,
-    0.0001,
+# Stage 1 one-shot fallback. If fv99 fails without producing both .rs and
+# .rsi outputs, perturb the input VTU once with this script/epsilon and retry
+# fv99 against the perturbed file.
+FV99_PERTURB_SCRIPT = Path(
+    "/home/mohit/Desktop/postdoc/petars_fiber_flexing/"
+    "petarsCode/arrange-and-traverse-algorithm/scripts/perturb.py"
 )
-DEGENERACY_PREPROCESS_ORIENTATION_TOLERANCE = 0.0
-DEGENERACY_PREPROCESS_DELETE_UNFIXED = True
-DEGENERACY_PREPROCESS_RANDOM_SEED = 1729
+FV99_PERTURB_EPSILON = "0.00001"
 
 FV99 = Path(
     "/home/mohit/Desktop/postdoc/petars_fiber_flexing/"
     "petarsCode/arrange-and-traverse-algorithm/build/fv99"
 )
 
-# Runtime fv99 perturbation should stay zero because Stage 0 writes
-# any required perturbation back into the VTU files before computation.
+# Runtime fv99 perturbation stays zero. Stage 1's fallback uses perturb.py
+# to create a perturbed VTU and then retries fv99 with this same epsilon.
 EPSILON = "0.00000000"
-RESERVE_CORES = 20
+RESERVE_CORES = 47
 FV99_OMP_THREADS = 1
 TOP_N_SHEETS = 20
 VIEWER_DEFAULT_TOP_SHEETS = 10
@@ -170,19 +162,17 @@ def tracking_analysis_event_score_formula_text():
     return " + ".join(labels)
 
 # Pipeline stage flags
-RUN_STAGE_0_DEGENERACY_PREPROCESS = False
-RUN_STAGE_1_FV99 = False
+RUN_STAGE_1_FV99 = True
 RUN_STAGE_2_RSI_JSON = True
-RUN_STAGE_3A_SHAPE_MATCHING = False
+RUN_STAGE_3A_SHAPE_MATCHING = True
 RUN_STAGE_3B_OVERLAPS = True
-RUN_STAGE_4A_SHEET_RENDERING = False
-RUN_STAGE_4B_SHEET_FIBER_SURFACES = False
+RUN_STAGE_4A_SHEET_RENDERING = True
+RUN_STAGE_4B_SHEET_FIBER_SURFACES = True
 RUN_STAGE_5A_BUILD_UNIFIED_SANKEY_DATA = True
 RUN_STAGE_5B_TRACKING_ANALYSIS = True
 RUN_STAGE_5C_UNIFIED_SANKEY_VIEWER = True
 
 # Backward-compatible aliases for older scripts/imports.
-RUN_STAGE_0_PREPROCESS = RUN_STAGE_0_DEGENERACY_PREPROCESS
 RUN_STAGE_2B_SHAPE_MATCHING = RUN_STAGE_3A_SHAPE_MATCHING
 RUN_STAGE_3_OVERLAPS = RUN_STAGE_3B_OVERLAPS
 RUN_STAGE_4_SHEET_RENDERING = RUN_STAGE_4A_SHEET_RENDERING
@@ -206,6 +196,7 @@ RSI_DIR = BASE_DIR / "sheetInfo"
 
 OUTPUT_DIR = BASE_DIR / "sankey"
 RSI_JSON_DIR = OUTPUT_DIR / "rsi_json"
+FV99_PERTURBED_VTU_DIR = OUTPUT_DIR / "fv99_perturbed_vtu"
 UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
 VIEWER_DIR = UNIFIED_VIEWER_DIR
 TRACKING_DATA_FILE = OUTPUT_DIR / "tracking_data.json"
@@ -255,9 +246,9 @@ OVERLAP_FILE = OUTPUT_DIR / "sheet_overlaps.json"
 
 
 # Log files
-DEGENERACY_PREPROCESS_LOG_FILE = OUTPUT_DIR / "vtu_degeneracy_preprocess.log"
 FV99_FAILED_LOG_FILE = OUTPUT_DIR / "fv99_failed_files.log"
 FV99_PARTIAL_LOG_FILE = OUTPUT_DIR / "fv99_partial_files.log"
+FV99_RECOVERED_LOG_FILE = OUTPUT_DIR / "fv99_recovered_files.log"
 RSI_JSON_WARNINGS_LOG_FILE = OUTPUT_DIR / "rsi_json_warnings.log"
 LOW_SCALAR_ORIGIN_FILTER_LOG_FILE = OUTPUT_DIR / "low_scalar_origin_filter.log"
 OVERLAP_WARNINGS_LOG_FILE = OUTPUT_DIR / "sheet_overlap_warnings.log"
