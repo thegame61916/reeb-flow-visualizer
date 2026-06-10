@@ -150,3 +150,45 @@ venv/conda environment, then submit with:
 ```bash
 PERTURB_PYTHON=/path/to/python-with-numpy hpc/submit_fv99_stage1_failed.sh stilbene 64
 ```
+
+
+## Local Perturbation Upload
+
+If Tetralith cannot run `perturb.py` because its batch Python environment lacks
+NumPy/VTK, perturb failed VTUs locally and upload the perturbed files back to the
+Tetralith input dataset under the original filenames:
+
+```bash
+python3 hpc/perturb_failed_locally_upload.py --dataset stilbene
+```
+
+The script reads:
+
+```bash
+/media/mohit/4TB_kingston_tufA2/hpc/datasets/stilbene/sankey/rerun_failed_stems.txt
+```
+
+and uploads to:
+
+```bash
+x_mohsh@tetralith.nsc.liu.se:/proj/reeb-space-storage/users/x_mohsh/datasets/stilbene/downsampledGrids/
+```
+
+Remote originals are backed up in:
+
+```bash
+/proj/reeb-space-storage/users/x_mohsh/datasets/stilbene/downsampledGrids/_original_before_local_perturb/
+```
+
+Test first without uploading:
+
+```bash
+python3 hpc/perturb_failed_locally_upload.py --dataset stilbene --dry-run --limit 2
+```
+
+After uploading, rerun the failed list on Tetralith. Since the remote inputs are
+already perturbed, you can avoid Tetralith perturbation with:
+
+```bash
+PERTURB_ON_FAIL=0 hpc/submit_fv99_stage1_failed.sh stilbene 64
+```
