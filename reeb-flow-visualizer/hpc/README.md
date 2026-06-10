@@ -132,3 +132,21 @@ hpc/submit_fv99_stage1_failed_all.sh
 An explicit rerun list bypasses `hpc_completed_stems.txt` by default. This is
 intentional: a timestep may be marked complete on Tetralith but still missing
 from the local copied artifact set.
+
+
+## Perturbation Python
+
+`perturb.py` imports NumPy. The worker uses `PERTURB_PYTHON` to run it; the
+default is `python3`. On Tetralith, first load or create a Python environment
+where NumPy imports successfully:
+
+```bash
+python3 -c "import numpy; print(numpy.__version__)"
+```
+
+If the default Python does not have NumPy, load a suitable Python module or use a
+venv/conda environment, then submit with:
+
+```bash
+PERTURB_PYTHON=/path/to/python-with-numpy hpc/submit_fv99_stage1_failed.sh stilbene 64
+```

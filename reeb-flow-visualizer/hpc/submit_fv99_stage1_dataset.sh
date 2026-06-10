@@ -28,6 +28,7 @@ Environment variables:
                       1 to exclude stems in the completed-stems file from new arrays. Default: 1
   RERUN_STEMS_FILE    Optional file of stems or .vtu paths to submit exactly.
                       When set, default SKIP_COMPLETED_STEMS becomes 0.
+  PERTURB_PYTHON      Python executable for perturb.py. Must have numpy. Default: python3
 EOF
 }
 
@@ -47,6 +48,7 @@ CPUS_PER_TASK="${CPUS_PER_TASK:-1}"
 REBUILD="${REBUILD:-0}"
 RUN_FIBERS="${RUN_FIBERS:-1}"
 RERUN_STEMS_FILE="${RERUN_STEMS_FILE:-}"
+PERTURB_PYTHON="${PERTURB_PYTHON:-python3}"
 if [[ -n "${RERUN_STEMS_FILE}" && -z "${SKIP_COMPLETED_STEMS+x}" ]]; then
   SKIP_COMPLETED_STEMS=0
 else
@@ -158,7 +160,7 @@ SBATCH_ARGS=(
   --array "0-$((COUNT - 1))%${MAX_PARALLEL}"
   --output "${SLURM_LOG_DIR}/%x_%A_%a.out"
   --error "${SLURM_LOG_DIR}/%x_%A_%a.err"
-  --export "ALL,DATASETS_ROOT=${DATASETS_ROOT},OUTPUT_DATASETS_ROOT=${OUTPUT_DATASETS_ROOT},FV99=${FV99},VTU_MANIFEST=${MANIFEST},STATUS_FILE=${STATUS_FILE},COMPLETED_STEMS_FILE=${COMPLETED_STEMS_FILE},REBUILD=${REBUILD},RUN_FIBERS=${RUN_FIBERS},SKIP_COMPLETED_STEMS=${SKIP_COMPLETED_STEMS}"
+  --export "ALL,DATASETS_ROOT=${DATASETS_ROOT},OUTPUT_DATASETS_ROOT=${OUTPUT_DATASETS_ROOT},FV99=${FV99},VTU_MANIFEST=${MANIFEST},STATUS_FILE=${STATUS_FILE},COMPLETED_STEMS_FILE=${COMPLETED_STEMS_FILE},REBUILD=${REBUILD},RUN_FIBERS=${RUN_FIBERS},SKIP_COMPLETED_STEMS=${SKIP_COMPLETED_STEMS},PERTURB_PYTHON=${PERTURB_PYTHON}"
 )
 
 if [[ -n "${ACCOUNT:-}" ]]; then

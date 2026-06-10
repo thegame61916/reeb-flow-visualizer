@@ -28,6 +28,7 @@ Environment variables:
                      $OUTPUT_DATASETS_ROOT/$DATASET/sankey/hpc_completed_stems.txt
   PERTURB_ON_FAIL    1 to perturb once if primary .rs/.rsi/.vtp are missing. Default: 1
   PERTURB_SCRIPT     perturb.py path. Default: $FV99_ROOT/scripts/perturb.py
+  PERTURB_PYTHON     Python executable for perturb.py. Must have numpy. Default: python3
   PERTURB_EPSILON    perturb.py epsilon. Default: 0.00001
   REPLACE_ORIGINAL_ON_PERTURB
                      1 to replace input VTU by successful perturbed VTU. Default: 1
@@ -61,6 +62,7 @@ RUN_FIBERS="${RUN_FIBERS:-1}"
 SKIP_COMPLETED_STEMS="${SKIP_COMPLETED_STEMS:-1}"
 PERTURB_ON_FAIL="${PERTURB_ON_FAIL:-1}"
 PERTURB_EPSILON="${PERTURB_EPSILON:-0.00001}"
+PERTURB_PYTHON="${PERTURB_PYTHON:-python3}"
 REPLACE_ORIGINAL_ON_PERTURB="${REPLACE_ORIGINAL_ON_PERTURB:-1}"
 KEEP_FIBER_WORK="${KEEP_FIBER_WORK:-0}"
 OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
@@ -261,7 +263,7 @@ perturb_vtu_once() {
   fi
 
   rm -f "${tmp_vtu}" "${output_vtu}"
-  python3 "${PERTURB_SCRIPT}" "${source_vtu}" "${PERTURB_EPSILON}" "${tmp_vtu}" > "${log_file}" 2>&1
+  "${PERTURB_PYTHON}" "${PERTURB_SCRIPT}" "${source_vtu}" "${PERTURB_EPSILON}" "${tmp_vtu}" > "${log_file}" 2>&1
   local rc=$?
   if [[ ${rc} -eq 0 && -s "${tmp_vtu}" ]]; then
     mv "${tmp_vtu}" "${output_vtu}"
