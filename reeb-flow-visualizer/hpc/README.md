@@ -1,7 +1,9 @@
 # Tetralith fv99 Stage-1 Artifact Jobs
 
 These scripts generate the fv99 artifacts produced by local Stage 1, but as
-Slurm array jobs on Tetralith.
+Slurm array jobs on Tetralith. Input VTUs are read from `DATASETS_ROOT`; all
+generated artifacts, logs, and resume checks are written under
+`OUTPUT_DATASETS_ROOT`.
 
 For each input `downsampledGrids/*.vtu`, the worker writes:
 
@@ -17,7 +19,8 @@ artifacts already exist.
 
 Default remote paths:
 
-- datasets: `/proj/reeb-space-storage/users/x_mohsh/datasets`
+- input datasets: `/proj/reeb-space-storage/users/x_mohsh/datasets`
+- output datasets: `/media/mohit/4TB_kingston_tufA2/hpc/datasets`
 - fv99: `/home/x_mohsh/sat-hpc-3/build/fv99`
 
 Submit all default datasets:
@@ -50,6 +53,13 @@ REBUILD=1 hpc/submit_fv99_stage1_dataset.sh MVK_s1 8
 # Disable fiber-surface generation if you only want .rs/.rsi/sheet VTP.
 RUN_FIBERS=0 hpc/submit_fv99_stage1_dataset.sh MVK_s1 8
 
-# Use a different fv99 or dataset root.
-FV99=/path/to/fv99 DATASETS_ROOT=/path/to/datasets hpc/submit_fv99_stage1_all.sh
+# Use a different fv99, input root, or output root.
+FV99=/path/to/fv99 \
+DATASETS_ROOT=/path/to/input/datasets \
+OUTPUT_DATASETS_ROOT=/path/to/output/datasets \
+hpc/submit_fv99_stage1_all.sh
 ```
+
+Important: `OUTPUT_DATASETS_ROOT` must be visible from the machine running the
+Slurm jobs. If `/media/mohit/4TB_kingston_tufA2/hpc/datasets` is only mounted on
+your local workstation, Tetralith jobs cannot write there directly.

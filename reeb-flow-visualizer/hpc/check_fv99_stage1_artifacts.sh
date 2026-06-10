@@ -4,6 +4,7 @@
 set -euo pipefail
 
 DATASETS_ROOT="${DATASETS_ROOT:-/proj/reeb-space-storage/users/x_mohsh/datasets}"
+OUTPUT_DATASETS_ROOT="${OUTPUT_DATASETS_ROOT:-/media/mohit/4TB_kingston_tufA2/hpc/datasets}"
 if [[ $# -gt 0 ]]; then
   DATASETS=("$@")
 else
@@ -21,13 +22,14 @@ count_files() {
 }
 
 for dataset in "${DATASETS[@]}"; do
-  dataset_dir="${DATASETS_ROOT}/${dataset}"
-  vtu_dir="${dataset_dir}/downsampledGrids"
-  rs_dir="${dataset_dir}/reebSpaces"
-  rsi_dir="${dataset_dir}/sheetInfo"
-  sheet_vtp_dir="${dataset_dir}/compareSheetShapesCache/cache/vtp"
-  fiber_dir="${dataset_dir}/sheetFiberSurfaces/labeled"
-  status_file="${dataset_dir}/sankey/hpc_stage1_status.tsv"
+  input_dataset_dir="${DATASETS_ROOT}/${dataset}"
+  output_dataset_dir="${OUTPUT_DATASETS_ROOT}/${dataset}"
+  vtu_dir="${input_dataset_dir}/downsampledGrids"
+  rs_dir="${output_dataset_dir}/reebSpaces"
+  rsi_dir="${output_dataset_dir}/sheetInfo"
+  sheet_vtp_dir="${output_dataset_dir}/compareSheetShapesCache/cache/vtp"
+  fiber_dir="${output_dataset_dir}/sheetFiberSurfaces/labeled"
+  status_file="${output_dataset_dir}/sankey/hpc_stage1_status.tsv"
 
   vtu_count="$(count_files "${vtu_dir}" '*.vtu')"
   rs_count="$(count_files "${rs_dir}" '*.rs')"
@@ -38,6 +40,8 @@ for dataset in "${DATASETS[@]}"; do
   expected_fiber_vtp=$((vtu_count * 4))
 
   echo "== ${dataset} =="
+  echo "Input:  ${input_dataset_dir}"
+  echo "Output: ${output_dataset_dir}"
   echo "VTU: ${vtu_count}"
   echo "RS: ${rs_count}  RSI: ${rsi_count}  sheet VTP: ${sheet_vtp_count}"
   echo "fiber VTP: ${fiber_vtp_count}/${expected_fiber_vtp}  fiber manifests: ${fiber_manifest_count}/${vtu_count}"

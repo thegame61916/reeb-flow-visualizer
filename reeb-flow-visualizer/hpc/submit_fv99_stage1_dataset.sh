@@ -12,7 +12,9 @@ Examples:
   TIME_LIMIT=2:00:00 MEM=20G ./hpc/submit_fv99_stage1_dataset.sh MVK_s1 8
 
 Environment variables:
-  DATASETS_ROOT       Default: /proj/reeb-space-storage/users/x_mohsh/datasets
+  DATASETS_ROOT       Input datasets root. Default: /proj/reeb-space-storage/users/x_mohsh/datasets
+  OUTPUT_DATASETS_ROOT
+                      Artifact output root. Default: /media/mohit/4TB_kingston_tufA2/hpc/datasets
   FV99                Default: /home/x_mohsh/sat-hpc-3/build/fv99
   TIME_LIMIT          Slurm wall time per VTU. Default: 4:00:00
   MEM                 Slurm memory per array task. Default: 24G
@@ -33,6 +35,7 @@ fi
 DATASET_NAME="$1"
 MAX_PARALLEL="${2:-${MAX_PARALLEL:-4}}"
 DATASETS_ROOT="${DATASETS_ROOT:-/proj/reeb-space-storage/users/x_mohsh/datasets}"
+OUTPUT_DATASETS_ROOT="${OUTPUT_DATASETS_ROOT:-/media/mohit/4TB_kingston_tufA2/hpc/datasets}"
 FV99="${FV99:-/home/x_mohsh/sat-hpc-3/build/fv99}"
 TIME_LIMIT="${TIME_LIMIT:-4:00:00}"
 MEM="${MEM:-24G}"
@@ -42,9 +45,10 @@ RUN_FIBERS="${RUN_FIBERS:-1}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_ONE="${SCRIPT_DIR}/run_fv99_stage1_one.sh"
-DATASET_DIR="${DATASETS_ROOT}/${DATASET_NAME}"
-VTU_DIR="${DATASET_DIR}/downsampledGrids"
-LOG_DIR="${DATASET_DIR}/sankey"
+INPUT_DATASET_DIR="${DATASETS_ROOT}/${DATASET_NAME}"
+OUTPUT_DATASET_DIR="${OUTPUT_DATASETS_ROOT}/${DATASET_NAME}"
+VTU_DIR="${INPUT_DATASET_DIR}/downsampledGrids"
+LOG_DIR="${OUTPUT_DATASET_DIR}/sankey"
 SLURM_LOG_DIR="${LOG_DIR}/slurm"
 MANIFEST="${LOG_DIR}/hpc_vtu_manifest.txt"
 STATUS_FILE="${LOG_DIR}/hpc_stage1_status.tsv"
@@ -71,8 +75,8 @@ if [[ "${COUNT}" -eq 0 ]]; then
 fi
 
 # Keep previous status as history, but make this run easy to identify.
-printf "# submit_time=%s dataset=%s count=%s max_parallel=%s rebuild=%s run_fibers=%s\n" \
-  "$(date -Is)" "${DATASET_NAME}" "${COUNT}" "${MAX_PARALLEL}" "${REBUILD}" "${RUN_FIBERS}" >> "${STATUS_FILE}"
+printf "# submit_time=%s dataset=%s count=%s max_parallel=%s rebuild=%s run_fibers=%s input_root=%s output_root=%s\n" \
+  "$(date -Is)" "${DATASET_NAME}" "${COUNT}" "${MAX_PARALLEL}" "${REBUILD}" "${RUN_FIBERS}" "${DATASETS_ROOT}" "${OUTPUT_DATASETS_ROOT}" >> "${STATUS_FILE}"
 
 SBATCH_ARGS=(
   --job-name "fv99_${DATASET_NAME}"
@@ -84,7 +88,7 @@ SBATCH_ARGS=(
   --array "0-$((COUNT - 1))%${MAX_PARALLEL}"
   --output "${SLURM_LOG_DIR}/%x_%A_%a.out"
   --error "${SLURM_LOG_DIR}/%x_%A_%a.err"
-  --export "ALL,DATASETS_ROOT=${DATASETS_ROOT},FV99=${FV99},VTU_MANIFEST=${MANIFEST},STATUS_FILE=${STATUS_FILE},REBUILD=${REBUILD},RUN_FIBERS=${RUN_FIBERS}"
+  --export "ALL,DATASETS_ROOT=${DATASETS_ROOT},OUTPUT_DATASETS_ROOT=${OUTPUT_DATASETS_ROOT},FV99=${FV99},VTU_MANIFEST=${MANIFEST},STATUS_FILE=${STATUS_FILE},REBUILD=${REBUILD},RUN_FIBERS=${RUN_FIBERS}"
 )
 
 if [[ -n "${ACCOUNT:-}" ]]; then
@@ -97,6 +101,8 @@ fi
 sbatch "${SBATCH_ARGS[@]}" "${RUN_ONE}" "${DATASET_NAME}"
 
 echo "Submitted ${COUNT} VTUs for ${DATASET_NAME} with max_parallel=${MAX_PARALLEL}"
+echo "Input:    ${VTU_DIR}"
+echo "Output:   ${OUTPUT_DATASET_DIR}"
 echo "Manifest: ${MANIFEST}"
 echo "Status:   ${STATUS_FILE}"
 echo "Logs:     ${SLURM_LOG_DIR}"

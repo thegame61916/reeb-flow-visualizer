@@ -10,8 +10,11 @@ usage() {
 Usage: run_fv99_stage1_one.sh DATASET_NAME [ARRAY_INDEX]
 
 Environment variables:
-  DATASETS_ROOT      Root containing dataset folders. Default:
+  DATASETS_ROOT      Root containing input dataset folders. Default:
                      /proj/reeb-space-storage/users/x_mohsh/datasets
+  OUTPUT_DATASETS_ROOT
+                     Root where generated artifacts are written. Default:
+                     /media/mohit/4TB_kingston_tufA2/hpc/datasets
   FV99               fv99 binary. Default: /home/x_mohsh/sat-hpc-3/build/fv99
   F_NAME             Range-space x field passed as --fName. Default: orb00
   G_NAME             Range-space y field passed as --gName. Default: orb01
@@ -43,6 +46,7 @@ if ! [[ "${ARRAY_INDEX}" =~ ^[0-9]+$ ]]; then
 fi
 
 DATASETS_ROOT="${DATASETS_ROOT:-/proj/reeb-space-storage/users/x_mohsh/datasets}"
+OUTPUT_DATASETS_ROOT="${OUTPUT_DATASETS_ROOT:-/media/mohit/4TB_kingston_tufA2/hpc/datasets}"
 FV99="${FV99:-/home/x_mohsh/sat-hpc-3/build/fv99}"
 F_NAME="${F_NAME:-orb00}"
 G_NAME="${G_NAME:-orb01}"
@@ -56,17 +60,19 @@ KEEP_FIBER_WORK="${KEEP_FIBER_WORK:-0}"
 OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
 
-DATASET_DIR="${DATASETS_ROOT}/${DATASET_NAME}"
-VTU_DIR="${DATASET_DIR}/downsampledGrids"
-LOG_DIR="${DATASET_DIR}/sankey"
+INPUT_DATASET_DIR="${DATASETS_ROOT}/${DATASET_NAME}"
+OUTPUT_DATASET_DIR="${OUTPUT_DATASETS_ROOT}/${DATASET_NAME}"
+VTU_DIR="${INPUT_DATASET_DIR}/downsampledGrids"
+LOG_DIR="${OUTPUT_DATASET_DIR}/sankey"
 VTU_MANIFEST="${VTU_MANIFEST:-${LOG_DIR}/hpc_vtu_manifest.txt}"
 STATUS_FILE="${STATUS_FILE:-${LOG_DIR}/hpc_stage1_status.tsv}"
 
-RS_DIR="${DATASET_DIR}/reebSpaces"
-RSI_DIR="${DATASET_DIR}/sheetInfo"
-SHEET_VTP_DIR="${DATASET_DIR}/compareSheetShapesCache/cache/vtp"
-FIBER_LABELED_ROOT="${DATASET_DIR}/sheetFiberSurfaces/labeled"
-FIBER_WORK_ROOT="${FIBER_WORK_ROOT:-${DATASET_DIR}/sheetFiberSurfaces/_tmp}"
+OUTPUT_VTU_DIR="${OUTPUT_DATASET_DIR}/downsampledGrids"
+RS_DIR="${OUTPUT_DATASET_DIR}/reebSpaces"
+RSI_DIR="${OUTPUT_DATASET_DIR}/sheetInfo"
+SHEET_VTP_DIR="${OUTPUT_DATASET_DIR}/compareSheetShapesCache/cache/vtp"
+FIBER_LABELED_ROOT="${OUTPUT_DATASET_DIR}/sheetFiberSurfaces/labeled"
+FIBER_WORK_ROOT="${FIBER_WORK_ROOT:-${OUTPUT_DATASET_DIR}/sheetFiberSurfaces/_tmp}"
 PERTURBED_ROOT="${LOG_DIR}/fv99_perturbed_vtu"
 
 if [[ ! -x "${FV99}" ]]; then
@@ -95,6 +101,7 @@ fi
 
 base_name="$(basename "${VTU}")"
 STEM="${base_name%.vtu}"
+OUTPUT_VTU="${OUTPUT_VTU_DIR}/${STEM}.vtu"
 RS="${RS_DIR}/${STEM}.rs"
 RSI="${RSI_DIR}/${STEM}.rsi"
 SHEET_VTP="${SHEET_VTP_DIR}/${STEM}.sheets.vtp"
@@ -112,7 +119,7 @@ PERTURB_LOG="${LOG_DIR}/${STEM}.perturb_vtu.log"
 POS_FIBER_LOG="${LOG_DIR}/${STEM}.pos.fiber.fv99.log"
 NEG_FIBER_LOG="${LOG_DIR}/${STEM}.neg.fiber.fv99.log"
 
-mkdir -p "${LOG_DIR}" "${RS_DIR}" "${RSI_DIR}" "${SHEET_VTP_DIR}" \
+mkdir -p "${LOG_DIR}" "${OUTPUT_VTU_DIR}" "${RS_DIR}" "${RSI_DIR}" "${SHEET_VTP_DIR}" \
   "${FIBER_DIR}" "${FIBER_WORK_ROOT}" "${PERTURBED_ROOT}"
 
 # Infer the repository/source root from the binary path, unless provided.
@@ -357,9 +364,25 @@ generate_fibers() {
 }
 
 if [[ "${REBUILD}" != "1" ]] && is_complete; then
-  append_status "skipped_existing" "rs=${RS}; rsi=${RSI}; sheet_vtp=${SHEET_VTP}; fibers=${FIBER_DIR}"
+  append_status "skipped_existing" "input_vtu=${VTU}; rs=${RS}; rsi=${RSI}; sheet_vtp=${SHEET_VTP}; fibers=${FIBER_DIR}"
   echo "skipped existing artifacts: ${base_name}"
   exit 0
+fi
+
+if [[ "${REBUILD}" != "1" ]] && has_primary_outputs; then
+  if [[ -s "${OUTPUT_VTU}" ]]; then
+    ARTIFACT_VTU="${OUTPUT_VTU}"
+  else
+    ARTIFACT_VTU="${VTU}"
+  fi
+  MAIN_RC=0
+  if generate_fibers; then
+    append_status "completed_missing_fibers" "input_vtu=${VTU}; vtu=${ARTIFACT_VTU}; rs=${RS}; rsi=${RSI}; sheet_vtp=${SHEET_VTP}; fibers=${FIBER_DIR}"
+    echo "completed missing fibers from existing primary artifacts: ${base_name}"
+    exit 0
+  fi
+  echo "partial missing fibers with existing primary artifacts: ${base_name}"
+  exit 1
 fi
 
 clear_outputs
@@ -374,7 +397,7 @@ if has_primary_outputs; then
     primary_status="partial_primary_nonzero"
   fi
   if generate_fibers; then
-    append_status "${primary_status}" "returncode=${MAIN_RC}; vtu=${ARTIFACT_VTU}; rs=${RS}; rsi=${RSI}; sheet_vtp=${SHEET_VTP}; fibers=${FIBER_DIR}"
+    append_status "${primary_status}" "returncode=${MAIN_RC}; input_vtu=${VTU}; vtu=${ARTIFACT_VTU}; rs=${RS}; rsi=${RSI}; sheet_vtp=${SHEET_VTP}; fibers=${FIBER_DIR}"
     echo "${primary_status}: ${base_name}"
     exit 0
   fi
@@ -383,7 +406,7 @@ if has_primary_outputs; then
 fi
 
 if [[ "${PERTURB_ON_FAIL}" != "1" ]]; then
-  append_status "failed" "returncode=${MAIN_RC}; log=${MAIN_LOG}; primary_outputs_exist=0"
+  append_status "failed" "returncode=${MAIN_RC}; input_vtu=${VTU}; log=${MAIN_LOG}; primary_outputs_exist=0"
   echo "failed returncode=${MAIN_RC}: ${base_name}"
   exit 1
 fi
@@ -393,7 +416,7 @@ PERTURBED_VTU="${PERTURBED_ROOT}/${STEM}_eps_${perturb_slug}.vtu"
 perturb_vtu_once "${VTU}" "${PERTURBED_VTU}" "${PERTURB_LOG}"
 PERTURB_RC=$?
 if [[ ${PERTURB_RC} -ne 0 || ! -s "${PERTURBED_VTU}" ]]; then
-  append_status "failed" "returncode=${MAIN_RC}; log=${MAIN_LOG}; perturb_returncode=${PERTURB_RC}; perturb_log=${PERTURB_LOG}; primary_outputs_exist=0"
+  append_status "failed" "returncode=${MAIN_RC}; input_vtu=${VTU}; log=${MAIN_LOG}; perturb_returncode=${PERTURB_RC}; perturb_log=${PERTURB_LOG}; primary_outputs_exist=0"
   echo "failed perturb returncode=${PERTURB_RC}: ${base_name}"
   exit 1
 fi
@@ -402,15 +425,15 @@ clear_outputs
 run_main_fv99 "${PERTURBED_VTU}" "${RETRY_LOG}"
 MAIN_RC=$?
 if ! has_primary_outputs; then
-  append_status "failed" "returncode=${MAIN_RC}; normal_log=${MAIN_LOG}; perturb_returncode=${PERTURB_RC}; perturb_log=${PERTURB_LOG}; retry_log=${RETRY_LOG}; primary_outputs_exist=0; perturbed_vtu=${PERTURBED_VTU}"
+  append_status "failed" "returncode=${MAIN_RC}; input_vtu=${VTU}; normal_log=${MAIN_LOG}; perturb_returncode=${PERTURB_RC}; perturb_log=${PERTURB_LOG}; retry_log=${RETRY_LOG}; primary_outputs_exist=0; perturbed_vtu=${PERTURBED_VTU}"
   echo "failed after perturb returncode=${MAIN_RC}: ${base_name}"
   exit 1
 fi
 
 if [[ "${REPLACE_ORIGINAL_ON_PERTURB}" == "1" ]]; then
-  mv "${PERTURBED_VTU}" "${VTU}"
-  ARTIFACT_VTU="${VTU}"
-  replaced="1"
+  mv "${PERTURBED_VTU}" "${OUTPUT_VTU}"
+  ARTIFACT_VTU="${OUTPUT_VTU}"
+  replaced="output_copy"
 else
   ARTIFACT_VTU="${PERTURBED_VTU}"
   replaced="0"
@@ -422,7 +445,7 @@ if generate_fibers; then
   else
     status="partial_perturbed_primary_nonzero"
   fi
-  append_status "${status}" "returncode=${MAIN_RC}; normal_log=${MAIN_LOG}; perturb_returncode=${PERTURB_RC}; perturb_log=${PERTURB_LOG}; retry_log=${RETRY_LOG}; perturb_epsilon=${PERTURB_EPSILON}; perturbed_source=${PERTURBED_VTU}; replaced_original=${replaced}; replacement_vtu=${ARTIFACT_VTU}; rs=${RS}; rsi=${RSI}; sheet_vtp=${SHEET_VTP}; fibers=${FIBER_DIR}"
+  append_status "${status}" "returncode=${MAIN_RC}; input_vtu=${VTU}; normal_log=${MAIN_LOG}; perturb_returncode=${PERTURB_RC}; perturb_log=${PERTURB_LOG}; retry_log=${RETRY_LOG}; perturb_epsilon=${PERTURB_EPSILON}; perturbed_source=${PERTURBED_VTU}; stored_perturbed_vtu=${ARTIFACT_VTU}; rs=${RS}; rsi=${RSI}; sheet_vtp=${SHEET_VTP}; fibers=${FIBER_DIR}"
   echo "${status}: ${base_name}"
   exit 0
 fi
