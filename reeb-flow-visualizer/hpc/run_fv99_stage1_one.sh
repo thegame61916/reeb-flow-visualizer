@@ -21,6 +21,11 @@ Environment variables:
   EPSILON            fv99 -e value. Default: 0.00000000
   REBUILD            1 to regenerate even when all artifacts exist. Default: 0
   RUN_FIBERS         1 to generate labeled fiber-surface VTPs. Default: 1
+  SKIP_COMPLETED_STEMS
+                     1 to skip stems recorded in COMPLETED_STEMS_FILE. Default: 1
+  COMPLETED_STEMS_FILE
+                     Small file listing completed stems. Default:
+                     $OUTPUT_DATASETS_ROOT/$DATASET/sankey/hpc_completed_stems.txt
   PERTURB_ON_FAIL    1 to perturb once if primary .rs/.rsi/.vtp are missing. Default: 1
   PERTURB_SCRIPT     perturb.py path. Default: $FV99_ROOT/scripts/perturb.py
   PERTURB_EPSILON    perturb.py epsilon. Default: 0.00001
@@ -53,6 +58,7 @@ G_NAME="${G_NAME:-orb01}"
 EPSILON="${EPSILON:-0.00000000}"
 REBUILD="${REBUILD:-0}"
 RUN_FIBERS="${RUN_FIBERS:-1}"
+SKIP_COMPLETED_STEMS="${SKIP_COMPLETED_STEMS:-1}"
 PERTURB_ON_FAIL="${PERTURB_ON_FAIL:-1}"
 PERTURB_EPSILON="${PERTURB_EPSILON:-0.00001}"
 REPLACE_ORIGINAL_ON_PERTURB="${REPLACE_ORIGINAL_ON_PERTURB:-1}"
@@ -66,6 +72,7 @@ VTU_DIR="${INPUT_DATASET_DIR}/downsampledGrids"
 LOG_DIR="${OUTPUT_DATASET_DIR}/sankey"
 VTU_MANIFEST="${VTU_MANIFEST:-${LOG_DIR}/hpc_vtu_manifest.txt}"
 STATUS_FILE="${STATUS_FILE:-${LOG_DIR}/hpc_stage1_status.tsv}"
+COMPLETED_STEMS_FILE="${COMPLETED_STEMS_FILE:-${LOG_DIR}/hpc_completed_stems.txt}"
 
 OUTPUT_VTU_DIR="${OUTPUT_DATASET_DIR}/downsampledGrids"
 RS_DIR="${OUTPUT_DATASET_DIR}/reebSpaces"
@@ -157,6 +164,24 @@ append_status() {
   local status="$1"
   local details="${2:-}"
   printf "%s\t%s\t%s\t%s\t%s\n" "$(date -Is)" "${DATASET_NAME}" "${STEM}" "${status}" "${details}" >> "${STATUS_FILE}"
+}
+
+completed_key() {
+  printf "%s\trun_fibers=%s\n" "${STEM}" "${RUN_FIBERS}"
+}
+
+is_marked_completed() {
+  if [[ "${SKIP_COMPLETED_STEMS}" != "1" || ! -f "${COMPLETED_STEMS_FILE}" ]]; then
+    return 1
+  fi
+  local key
+  key="$(completed_key)"
+  grep -Fxq "${key}" "${COMPLETED_STEMS_FILE}" || grep -Fxq "${STEM}" "${COMPLETED_STEMS_FILE}"
+}
+
+mark_completed() {
+  mkdir -p "$(dirname "${COMPLETED_STEMS_FILE}")"
+  completed_key >> "${COMPLETED_STEMS_FILE}"
 }
 
 has_primary_outputs() {
@@ -363,7 +388,14 @@ generate_fibers() {
   return 0
 }
 
+if [[ "${REBUILD}" != "1" ]] && is_marked_completed; then
+  append_status "skipped_completed_marker" "input_vtu=${VTU}; completed_stems_file=${COMPLETED_STEMS_FILE}"
+  echo "skipped completed marker: ${base_name}"
+  exit 0
+fi
+
 if [[ "${REBUILD}" != "1" ]] && is_complete; then
+  mark_completed
   append_status "skipped_existing" "input_vtu=${VTU}; rs=${RS}; rsi=${RSI}; sheet_vtp=${SHEET_VTP}; fibers=${FIBER_DIR}"
   echo "skipped existing artifacts: ${base_name}"
   exit 0
@@ -377,6 +409,7 @@ if [[ "${REBUILD}" != "1" ]] && has_primary_outputs; then
   fi
   MAIN_RC=0
   if generate_fibers; then
+    mark_completed
     append_status "completed_missing_fibers" "input_vtu=${VTU}; vtu=${ARTIFACT_VTU}; rs=${RS}; rsi=${RSI}; sheet_vtp=${SHEET_VTP}; fibers=${FIBER_DIR}"
     echo "completed missing fibers from existing primary artifacts: ${base_name}"
     exit 0
@@ -397,6 +430,7 @@ if has_primary_outputs; then
     primary_status="partial_primary_nonzero"
   fi
   if generate_fibers; then
+    mark_completed
     append_status "${primary_status}" "returncode=${MAIN_RC}; input_vtu=${VTU}; vtu=${ARTIFACT_VTU}; rs=${RS}; rsi=${RSI}; sheet_vtp=${SHEET_VTP}; fibers=${FIBER_DIR}"
     echo "${primary_status}: ${base_name}"
     exit 0
@@ -440,6 +474,7 @@ else
 fi
 
 if generate_fibers; then
+  mark_completed
   if [[ ${MAIN_RC} -eq 0 ]]; then
     status="recovered_with_perturbation"
   else

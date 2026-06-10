@@ -63,3 +63,29 @@ hpc/submit_fv99_stage1_all.sh
 Important: `OUTPUT_DATASETS_ROOT` must be visible from the machine running the
 Slurm jobs. If `/media/mohit/4TB_kingston_tufA2/hpc/datasets` is only mounted on
 your local workstation, Tetralith jobs cannot write there directly.
+
+
+## Staging With Limited Tetralith Storage
+
+Each successful timestep is recorded in:
+
+```bash
+$OUTPUT_DATASETS_ROOT/<dataset>/sankey/hpc_completed_stems.txt
+```
+
+This file is small and is used to avoid recomputing timesteps after bulky
+artifacts have been copied away and removed from Tetralith. Preserve the
+`hpc_completed_stems.txt` file if you clean output directories.
+
+A safe cleanup after copying a dataset locally is to remove bulky artifact
+folders but keep `sankey/hpc_completed_stems.txt`, for example:
+
+```bash
+DATASET=stilbene
+OUT=/proj/reeb-space-storage/users/x_mohsh/hpc_outputs/datasets/$DATASET
+rm -rf "$OUT/reebSpaces" "$OUT/sheetInfo" "$OUT/compareSheetShapesCache" "$OUT/sheetFiberSurfaces"
+```
+
+The next submission excludes stems listed in `hpc_completed_stems.txt` from the
+new Slurm array. Set `SKIP_COMPLETED_STEMS=0` only if you intentionally want to
+recompute copied/cleaned timesteps.
