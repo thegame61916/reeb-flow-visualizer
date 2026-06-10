@@ -31,6 +31,7 @@ for dataset in "${DATASETS[@]}"; do
   fiber_dir="${output_dataset_dir}/sheetFiberSurfaces/labeled"
   status_file="${output_dataset_dir}/sankey/hpc_stage1_status.tsv"
   completed_stems_file="${output_dataset_dir}/sankey/hpc_completed_stems.txt"
+  rerun_failed_stems_file="${output_dataset_dir}/sankey/rerun_failed_stems.txt"
 
   vtu_count="$(count_files "${vtu_dir}" '*.vtu')"
   rs_count="$(count_files "${rs_dir}" '*.rs')"
@@ -44,6 +45,11 @@ for dataset in "${DATASETS[@]}"; do
   else
     completed_stem_count="0"
   fi
+  if [[ -f "${rerun_failed_stems_file}" ]]; then
+    rerun_failed_count="$(grep -vE '^[[:space:]]*(#|$)' "${rerun_failed_stems_file}" | wc -l | tr -d '[:space:]')"
+  else
+    rerun_failed_count="0"
+  fi
 
   echo "== ${dataset} =="
   echo "Input:  ${input_dataset_dir}"
@@ -52,6 +58,7 @@ for dataset in "${DATASETS[@]}"; do
   echo "RS: ${rs_count}  RSI: ${rsi_count}  sheet VTP: ${sheet_vtp_count}"
   echo "fiber VTP: ${fiber_vtp_count}/${expected_fiber_vtp}  fiber manifests: ${fiber_manifest_count}/${vtu_count}"
   echo "completed stems marker: ${completed_stem_count}/${vtu_count}"
+  echo "rerun failed stems: ${rerun_failed_count}"
 
   if [[ -f "${status_file}" ]]; then
     echo "status counts:"

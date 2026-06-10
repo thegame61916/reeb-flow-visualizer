@@ -26,6 +26,8 @@ Environment variables:
   RUN_FIBERS          1 to generate labeled fiber-surface VTPs. Default: 1
   SKIP_COMPLETED_STEMS
                       1 to exclude stems in the completed-stems file from new arrays. Default: 1
+  RERUN_STEMS_FILE    Optional file of stems or .vtu paths to submit exactly.
+                      When set, default SKIP_COMPLETED_STEMS becomes 0.
 EOF
 }
 
@@ -44,7 +46,12 @@ MEM="${MEM:-24G}"
 CPUS_PER_TASK="${CPUS_PER_TASK:-1}"
 REBUILD="${REBUILD:-0}"
 RUN_FIBERS="${RUN_FIBERS:-1}"
-SKIP_COMPLETED_STEMS="${SKIP_COMPLETED_STEMS:-1}"
+RERUN_STEMS_FILE="${RERUN_STEMS_FILE:-}"
+if [[ -n "${RERUN_STEMS_FILE}" && -z "${SKIP_COMPLETED_STEMS+x}" ]]; then
+  SKIP_COMPLETED_STEMS=0
+else
+  SKIP_COMPLETED_STEMS="${SKIP_COMPLETED_STEMS:-1}"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_ONE="${SCRIPT_DIR}/run_fv99_stage1_one.sh"
@@ -72,7 +79,41 @@ fi
 
 mkdir -p "${LOG_DIR}" "${SLURM_LOG_DIR}"
 ALL_MANIFEST="${MANIFEST}.all"
-find "${VTU_DIR}" -maxdepth 1 -type f -name '*.vtu' | sort > "${ALL_MANIFEST}"
+MISSING_RERUN_INPUTS="${LOG_DIR}/hpc_rerun_missing_inputs.txt"
+: > "${MISSING_RERUN_INPUTS}"
+if [[ -n "${RERUN_STEMS_FILE}" ]]; then
+  if [[ ! -f "${RERUN_STEMS_FILE}" ]]; then
+    echo "RERUN_STEMS_FILE not found: ${RERUN_STEMS_FILE}" >&2
+    exit 2
+  fi
+  : > "${ALL_MANIFEST}"
+  while IFS= read -r raw_item || [[ -n "${raw_item}" ]]; do
+    item="${raw_item%%#*}"
+    item="$(printf "%s" "${item}" | awk '{$1=$1; print}')"
+    if [[ -z "${item}" ]]; then
+      continue
+    fi
+    if [[ "${item}" == *.vtu ]]; then
+      if [[ -f "${item}" ]]; then
+        vtu_file="${item}"
+      else
+        stem="$(basename "${item}" .vtu)"
+        vtu_file="${VTU_DIR}/${stem}.vtu"
+      fi
+    else
+      stem="$(basename "${item}")"
+      vtu_file="${VTU_DIR}/${stem}.vtu"
+    fi
+    if [[ -f "${vtu_file}" ]]; then
+      printf "%s\n" "${vtu_file}" >> "${ALL_MANIFEST}"
+    else
+      printf "%s\t%s\n" "${item}" "${vtu_file}" >> "${MISSING_RERUN_INPUTS}"
+    fi
+  done < "${RERUN_STEMS_FILE}"
+  sort -u "${ALL_MANIFEST}" -o "${ALL_MANIFEST}"
+else
+  find "${VTU_DIR}" -maxdepth 1 -type f -name '*.vtu' | sort > "${ALL_MANIFEST}"
+fi
 if [[ "${SKIP_COMPLETED_STEMS}" == "1" && -f "${COMPLETED_STEMS_FILE}" ]]; then
   : > "${MANIFEST}"
   while IFS= read -r vtu_file; do
@@ -91,6 +132,11 @@ TOTAL_COUNT="$(wc -l < "${ALL_MANIFEST}" | tr -d '[:space:]')"
 if [[ "${COUNT}" -eq 0 ]]; then
   if [[ "${TOTAL_COUNT}" -eq 0 ]]; then
     echo "No .vtu files found in ${VTU_DIR}" >&2
+  elif [[ -n "${RERUN_STEMS_FILE}" ]]; then
+    echo "No runnable VTUs found from rerun list: ${RERUN_STEMS_FILE}"
+    if [[ -s "${MISSING_RERUN_INPUTS}" ]]; then
+      echo "Missing rerun inputs: ${MISSING_RERUN_INPUTS}"
+    fi
   else
     echo "No uncompleted .vtu files to submit for ${DATASET_NAME}."
     echo "Completed stems: ${COMPLETED_STEMS_FILE}"
@@ -99,8 +145,8 @@ if [[ "${COUNT}" -eq 0 ]]; then
 fi
 
 # Keep previous status as history, but make this run easy to identify.
-printf "# submit_time=%s dataset=%s count=%s total_count=%s max_parallel=%s rebuild=%s run_fibers=%s skip_completed=%s input_root=%s output_root=%s\n" \
-  "$(date -Is)" "${DATASET_NAME}" "${COUNT}" "${TOTAL_COUNT}" "${MAX_PARALLEL}" "${REBUILD}" "${RUN_FIBERS}" "${SKIP_COMPLETED_STEMS}" "${DATASETS_ROOT}" "${OUTPUT_DATASETS_ROOT}" >> "${STATUS_FILE}"
+printf "# submit_time=%s dataset=%s count=%s total_count=%s max_parallel=%s rebuild=%s run_fibers=%s skip_completed=%s rerun_stems_file=%s input_root=%s output_root=%s\n" \
+  "$(date -Is)" "${DATASET_NAME}" "${COUNT}" "${TOTAL_COUNT}" "${MAX_PARALLEL}" "${REBUILD}" "${RUN_FIBERS}" "${SKIP_COMPLETED_STEMS}" "${RERUN_STEMS_FILE:-}" "${DATASETS_ROOT}" "${OUTPUT_DATASETS_ROOT}" >> "${STATUS_FILE}"
 
 SBATCH_ARGS=(
   --job-name "fv99_${DATASET_NAME}"
@@ -130,4 +176,10 @@ echo "Output:   ${OUTPUT_DATASET_DIR}"
 echo "Manifest: ${MANIFEST}"
 echo "Status:   ${STATUS_FILE}"
 echo "Completed:${COMPLETED_STEMS_FILE}"
+if [[ -n "${RERUN_STEMS_FILE}" ]]; then
+  echo "Rerun:    ${RERUN_STEMS_FILE}"
+  if [[ -s "${MISSING_RERUN_INPUTS}" ]]; then
+    echo "Missing rerun inputs: ${MISSING_RERUN_INPUTS}"
+  fi
+fi
 echo "Logs:     ${SLURM_LOG_DIR}"

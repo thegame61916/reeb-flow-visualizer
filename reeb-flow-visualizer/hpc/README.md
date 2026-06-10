@@ -89,3 +89,47 @@ rm -rf "$OUT/reebSpaces" "$OUT/sheetInfo" "$OUT/compareSheetShapesCache" "$OUT/s
 The next submission excludes stems listed in `hpc_completed_stems.txt` from the
 new Slurm array. Set `SKIP_COMPLETED_STEMS=0` only if you intentionally want to
 recompute copied/cleaned timesteps.
+
+
+## Preparing Reruns From Local Copies
+
+After copying a partial batch from Tetralith to local storage, scan the local
+artifact copy and upload per-dataset failed timestep lists back to Tetralith:
+
+```bash
+python3 hpc/prepare_failed_timestep_reruns.py stilbene
+```
+
+By default this scans:
+
+```bash
+/media/mohit/4TB_kingston_tufA2/hpc/datasets
+```
+
+and uploads these files to the matching dataset under the Tetralith output root:
+
+```bash
+sankey/rerun_failed_stems.txt
+sankey/rerun_failed_report.tsv
+```
+
+The scanner uses `sankey/hpc_vtu_manifest.txt.all` or
+`sankey/hpc_vtu_manifest.txt` to know the full expected timestep set. Keep the
+`sankey/` folder when copying outputs locally; otherwise the scanner can only
+infer timesteps from artifacts that already exist locally.
+
+On Tetralith, submit only the failed timesteps for one dataset:
+
+```bash
+hpc/submit_fv99_stage1_failed.sh stilbene 64
+```
+
+or for every dataset with a non-empty `rerun_failed_stems.txt`:
+
+```bash
+hpc/submit_fv99_stage1_failed_all.sh
+```
+
+An explicit rerun list bypasses `hpc_completed_stems.txt` by default. This is
+intentional: a timestep may be marked complete on Tetralith but still missing
+from the local copied artifact set.
