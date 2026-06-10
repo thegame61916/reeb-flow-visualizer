@@ -254,8 +254,6 @@ def validate_cached_labeled_manifest(vtu_file: Path) -> str | None:
 
     expected = {
         "timestep": vtu_file.stem,
-        "vtu": str(vtu_file),
-        "rs": str(RS_DIR / f"{vtu_file.stem}.rs"),
         "f_name": FV99_FNAME,
         "g_name": FV99_GNAME,
         "f_isovalue": float(FIBER_SURFACE_FIELD_F_ISOVALUE),
@@ -268,17 +266,42 @@ def validate_cached_labeled_manifest(vtu_file: Path) -> str | None:
                 f"{key}={manifest.get(key)!r}, expected {value!r}. Rerun Stage 1."
             )
 
+    # HPC artifacts are often copied to a different local root, while the
+    # manifest written on the cluster still contains absolute Tetralith paths.
+    # Treat those paths as provenance only and validate the local cache layout.
+    manifest_vtu = manifest.get("vtu")
+    if manifest_vtu and Path(str(manifest_vtu)).name != vtu_file.name:
+        return (
+            f"Stage 1 labeled fiber surface manifest VTU mismatch for {vtu_file.stem}: "
+            f"{manifest_vtu!r}, expected a file named {vtu_file.name!r}."
+        )
+
+    manifest_rs = manifest.get("rs")
+    expected_rs = RS_DIR / f"{vtu_file.stem}.rs"
+    if manifest_rs and Path(str(manifest_rs)).name != expected_rs.name:
+        return (
+            f"Stage 1 labeled fiber surface manifest RS mismatch for {vtu_file.stem}: "
+            f"{manifest_rs!r}, expected a file named {expected_rs.name!r}."
+        )
+
     surfaces = manifest.get("surfaces")
     if not isinstance(surfaces, dict):
         return f"Stage 1 labeled fiber surface manifest has no surfaces map: {path}"
 
     for role in SURFACE_ROLES:
+        manifest_surface = surfaces.get(role)
         expected_path = cached_labeled_surface_path(vtu_file, role)
-        if surfaces.get(role) != str(expected_path):
+        if not manifest_surface:
+            return (
+                f"Stage 1 labeled fiber surface manifest is missing role {role}: {path}"
+            )
+        if Path(str(manifest_surface)).name != expected_path.name:
             return (
                 f"Stage 1 labeled fiber surface manifest path mismatch for {role}: "
-                f"{surfaces.get(role)!r}, expected {str(expected_path)!r}. Rerun Stage 1."
+                f"{manifest_surface!r}, expected a file named {expected_path.name!r}."
             )
+        if not expected_path.exists():
+            return f"missing Stage 1 labeled fiber surface for {role}: {expected_path}"
 
     return None
 

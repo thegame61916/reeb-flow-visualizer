@@ -113,10 +113,9 @@ sankey/rerun_failed_stems.txt
 sankey/rerun_failed_report.tsv
 ```
 
-The scanner uses `sankey/hpc_vtu_manifest.txt.all` or
-`sankey/hpc_vtu_manifest.txt` to know the full expected timestep set. Keep the
-`sankey/` folder when copying outputs locally; otherwise the scanner can only
-infer timesteps from artifacts that already exist locally.
+The scanner uses copied `downsampledGrids/*.vtu` files as the expected timestep
+set. If those are absent, it falls back to `sankey/hpc_vtu_manifest.txt.all` or
+`sankey/hpc_vtu_manifest.txt`, and then to whatever artifact stems exist.
 
 On Tetralith, submit only the failed timesteps for one dataset:
 

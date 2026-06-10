@@ -39,6 +39,13 @@ def manifest_path(dataset_dir: Path) -> Path | None:
 
 
 def read_expected_stems(dataset_dir: Path) -> tuple[list[str], Path | None]:
+    # Prefer copied input VTUs when present. The HPC manifest can be overwritten
+    # by a later subset/rerun submission, while downsampledGrids represents the
+    # full local dataset the user wants to verify.
+    vtu_stems = sorted({path.stem for path in (dataset_dir / "downsampledGrids").glob("*.vtu")})
+    if vtu_stems:
+        return vtu_stems, dataset_dir / "downsampledGrids"
+
     manifest = manifest_path(dataset_dir)
     if manifest is not None:
         stems = []
@@ -49,15 +56,14 @@ def read_expected_stems(dataset_dir: Path) -> tuple[list[str], Path | None]:
             stems.append(Path(line).stem)
         return sorted(set(stems)), manifest
 
-    # Fallback: infer from copied artifacts. This cannot detect timesteps that
-    # have no copied artifact at all, so the manifest path is preferred.
+    # Last fallback: infer from copied artifacts. This cannot detect timesteps
+    # with no copied artifact at all, so local VTUs or a manifest are preferred.
     stems: set[str] = set()
     for pattern in (
         "reebSpaces/*.rs",
         "sheetInfo/*.rsi",
         "compareSheetShapesCache/cache/vtp/*.sheets.vtp",
         "sheetFiberSurfaces/labeled/*",
-        "downsampledGrids/*.vtu",
     ):
         for path in dataset_dir.glob(pattern):
             name = path.name
