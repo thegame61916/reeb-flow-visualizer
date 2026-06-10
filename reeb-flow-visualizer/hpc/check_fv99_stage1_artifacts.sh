@@ -4,7 +4,7 @@
 set -euo pipefail
 
 DATASETS_ROOT="${DATASETS_ROOT:-/proj/reeb-space-storage/users/x_mohsh/datasets}"
-OUTPUT_DATASETS_ROOT="${OUTPUT_DATASETS_ROOT:-/media/mohit/4TB_kingston_tufA2/hpc/datasets}"
+OUTPUT_DATASETS_ROOT="${OUTPUT_DATASETS_ROOT:-/proj/reeb-space-storage/users/x_mohsh/hpc_outputs/datasets}"
 if [[ $# -gt 0 ]]; then
   DATASETS=("$@")
 else

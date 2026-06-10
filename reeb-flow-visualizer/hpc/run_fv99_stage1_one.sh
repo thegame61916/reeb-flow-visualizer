@@ -14,7 +14,7 @@ Environment variables:
                      /proj/reeb-space-storage/users/x_mohsh/datasets
   OUTPUT_DATASETS_ROOT
                      Root where generated artifacts are written. Default:
-                     /media/mohit/4TB_kingston_tufA2/hpc/datasets
+                     /proj/reeb-space-storage/users/x_mohsh/hpc_outputs/datasets
   FV99               fv99 binary. Default: /home/x_mohsh/sat-hpc-3/build/fv99
   F_NAME             Range-space x field passed as --fName. Default: orb00
   G_NAME             Range-space y field passed as --gName. Default: orb01
@@ -51,7 +51,7 @@ if ! [[ "${ARRAY_INDEX}" =~ ^[0-9]+$ ]]; then
 fi
 
 DATASETS_ROOT="${DATASETS_ROOT:-/proj/reeb-space-storage/users/x_mohsh/datasets}"
-OUTPUT_DATASETS_ROOT="${OUTPUT_DATASETS_ROOT:-/media/mohit/4TB_kingston_tufA2/hpc/datasets}"
+OUTPUT_DATASETS_ROOT="${OUTPUT_DATASETS_ROOT:-/proj/reeb-space-storage/users/x_mohsh/hpc_outputs/datasets}"
 FV99="${FV99:-/home/x_mohsh/sat-hpc-3/build/fv99}"
 F_NAME="${F_NAME:-orb00}"
 G_NAME="${G_NAME:-orb01}"

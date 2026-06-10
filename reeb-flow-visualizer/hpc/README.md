@@ -20,7 +20,7 @@ artifacts already exist.
 Default remote paths:
 
 - input datasets: `/proj/reeb-space-storage/users/x_mohsh/datasets`
-- output datasets: `/media/mohit/4TB_kingston_tufA2/hpc/datasets`
+- output datasets: `/proj/reeb-space-storage/users/x_mohsh/hpc_outputs/datasets`
 - fv99: `/home/x_mohsh/sat-hpc-3/build/fv99`
 
 Submit all default datasets:
@@ -61,8 +61,8 @@ hpc/submit_fv99_stage1_all.sh
 ```
 
 Important: `OUTPUT_DATASETS_ROOT` must be visible from the machine running the
-Slurm jobs. If `/media/mohit/4TB_kingston_tufA2/hpc/datasets` is only mounted on
-your local workstation, Tetralith jobs cannot write there directly.
+Slurm jobs. The default path is on Tetralith project storage. After the jobs
+finish, copy or pull those outputs to your local disk.
 
 
 ## Staging With Limited Tetralith Storage

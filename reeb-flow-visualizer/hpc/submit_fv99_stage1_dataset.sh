@@ -14,7 +14,7 @@ Examples:
 Environment variables:
   DATASETS_ROOT       Input datasets root. Default: /proj/reeb-space-storage/users/x_mohsh/datasets
   OUTPUT_DATASETS_ROOT
-                      Artifact output root. Default: /media/mohit/4TB_kingston_tufA2/hpc/datasets
+                      Artifact output root. Default: /proj/reeb-space-storage/users/x_mohsh/hpc_outputs/datasets
   FV99                Default: /home/x_mohsh/sat-hpc-3/build/fv99
   TIME_LIMIT          Slurm wall time per VTU. Default: 4:00:00
   MEM                 Slurm memory per array task. Default: 24G
@@ -37,7 +37,7 @@ fi
 DATASET_NAME="$1"
 MAX_PARALLEL="${2:-${MAX_PARALLEL:-4}}"
 DATASETS_ROOT="${DATASETS_ROOT:-/proj/reeb-space-storage/users/x_mohsh/datasets}"
-OUTPUT_DATASETS_ROOT="${OUTPUT_DATASETS_ROOT:-/media/mohit/4TB_kingston_tufA2/hpc/datasets}"
+OUTPUT_DATASETS_ROOT="${OUTPUT_DATASETS_ROOT:-/proj/reeb-space-storage/users/x_mohsh/hpc_outputs/datasets}"
 FV99="${FV99:-/home/x_mohsh/sat-hpc-3/build/fv99}"
 TIME_LIMIT="${TIME_LIMIT:-4:00:00}"
 MEM="${MEM:-24G}"
