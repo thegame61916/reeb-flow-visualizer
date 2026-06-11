@@ -1,0 +1,4 @@
+node_modules/
+.csm_setup_*
+__pycache__/
+*.pyc

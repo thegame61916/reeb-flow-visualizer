@@ -636,6 +636,7 @@ def write_index_html() -> Path:
       <button id="zoomOut">Zoom out</button>
       <button id="zoomIn">Zoom in</button>
       <button id="centerView">Center sankey</button>
+      <button id="saveFigurePreset">Save figure preset</button>
       <button id="addPanel">+ Add panel</button>
     </div>
   </header>
@@ -1587,6 +1588,7 @@ d3.json("data.json").then(data => {
     rangeDrag: null,
     viewportDrag: null,
     tooltipLocked: false,
+    detailsSelection: null,
     activePanelId: 1,
     panelViews: new Map(),
     panelPan: null,
@@ -4362,6 +4364,44 @@ d3.json("data.json").then(data => {
     };
   }
 
+  function trackNodeKeys(item) {
+    const nodes = item?.highlight?.nodes || item?.nodes || [];
+    return Array.isArray(nodes) ? nodes : [];
+  }
+
+  function trackLength(item) {
+    const explicit = Number(item?.length);
+    if (Number.isFinite(explicit)) return explicit;
+    return trackNodeKeys(item).length;
+  }
+
+  function longestTracksThroughNode(panel, node) {
+    const key = nodeKeyFromDatum(node);
+    const rows = analysisTracks(panel)
+      .filter(item => trackNodeKeys(item).includes(key));
+    if (!rows.length) return [];
+    const maxLength = Math.max(...rows.map(trackLength));
+    return rows
+      .filter(item => Math.abs(trackLength(item) - maxLength) < 1e-9)
+      .sort(trackGraphItemSort);
+  }
+
+  function highlightLongestTracksThroughNode(panel, node) {
+    ensurePanelAnalysis(panel);
+    const tracks = longestTracksThroughNode(panel, node);
+    if (!tracks.length) return tracks;
+    panel.analysis.selectedIntervalKeys = [];
+    panel.analysis.selectedDisagreementKeys = [];
+    panel.analysis.selectedDomainStabilityKeys = [];
+    panel.analysis.selectedCorrelationKeys = [];
+    panel.analysis.trackChooserGroupKey = "";
+    panel.analysis.selectedTrackKeys = [...new Set(tracks.map(trackKeyFromItem).filter(Boolean))];
+    panel.analysis.highlight = aggregateSelectedTrackHighlight(panel);
+    if (state.analysisFocusPulse?.panelId === panel.id) state.analysisFocusPulse = null;
+    renderAll();
+    return tracks;
+  }
+
   function toggleIntervalGraphSelection(panel, item) {
     ensurePanelAnalysis(panel);
     const payload = intervalHighlightPayload(item, panel);
@@ -5131,11 +5171,22 @@ d3.json("data.json").then(data => {
     return `<span class="color-swatch" style="background:${safe}"></span>${escapeHtml(safe)}`;
   }
 
-  function showNodeDetails(node, panel) {
+  function showNodeDetails(node, panel, recordSelection = true) {
     if (!detailsContent) return;
+    if (recordSelection) {
+      state.detailsSelection = {
+        type: "node",
+        panelId: panel?.id ?? state.activePanelId,
+        key: nodeKeyFromDatum(node)
+      };
+    }
     const image = nodeMediaStack(node, "thumb");
     const incoming = bestContinuationForNode(node, "incoming", panel);
     const outgoing = bestContinuationForNode(node, "outgoing", panel);
+    const longestTracks = longestTracksThroughNode(panel, node);
+    const longestTrackText = longestTracks.length
+      ? `${longestTracks.length} feature${longestTracks.length === 1 ? "" : "s"}, length ${formatTrackGroupCount(trackLength(longestTracks[0]))}`
+      : "None at current theta";
     const imageFile = node.thumbnail ? imageFilename(node.thumbnail) : "N/A";
     const fiberImageFile = node.fiber_surface_image ? imageFilename(node.fiber_surface_image) : "N/A";
     const rawTable = scalarMetadataTable({
@@ -5150,6 +5201,7 @@ d3.json("data.json").then(data => {
       analysis_theta: panelTheta(panel),
       best_incoming_continuation: incoming.text,
       best_outgoing_continuation: outgoing.text,
+      longest_continuing_features_through_node: longestTrackText,
       rsi_file: node.rsi_file || "",
       rsijson_file: node.rsijson_file || "",
       thumbnail: node.thumbnail || "",
@@ -5171,6 +5223,7 @@ d3.json("data.json").then(data => {
         <div>Domain vertices</div><div>${escapeHtml(node.num_vertices)}</div>
         <div>Best incoming continuation</div><div>${escapeHtml(incoming.text)}</div>
         <div>Best outgoing continuation</div><div>${escapeHtml(outgoing.text)}</div>
+        <div>Longest continuing feature</div><div>${escapeHtml(longestTrackText)}</div>
         <div>Centroid color</div><div>${colorSwatch(node.centroid_color)}</div>
         <div>RSI file</div><div>${escapeHtml(node.rsi_file || "N/A")}</div>
         <div>RSI JSON file</div><div>${escapeHtml(node.rsijson_file || "N/A")}</div>
@@ -5181,8 +5234,15 @@ d3.json("data.json").then(data => {
     `;
   }
 
-  function showLinkDetails(link, panel) {
+  function showLinkDetails(link, panel, recordSelection = true) {
     if (!detailsContent) return;
+    if (recordSelection) {
+      state.detailsSelection = {
+        type: "link",
+        panelId: panel?.id ?? state.activePanelId,
+        key: linkKeyFromDatum(link)
+      };
+    }
     const sourceNode = sheetByTimestepAndId(link.source_timestep_index, link.source_sheet_id);
     const targetNode = sheetByTimestepAndId(link.target_timestep_index, link.target_sheet_id);
     const linkedPair = { left: sourceNode, right: targetNode };
@@ -5268,6 +5328,216 @@ d3.json("data.json").then(data => {
       <div class="meta-list">${metricRows}</div>
       ${rawTable}
     `;
+  }
+
+  function cloneJson(value) {
+    return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+  }
+
+  function sanitizeFilenamePart(value) {
+    const cleaned = String(value || "figure")
+      .trim()
+      .replace(/[^a-zA-Z0-9._-]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    return cleaned || "figure";
+  }
+
+  function datasetFigureLabel() {
+    const fromMeta = data.meta?.dataset_name || data.meta?.base_dir || "";
+    const raw = fromMeta ? String(fromMeta).split("/").filter(Boolean).pop() : "";
+    if (raw) return raw;
+    const tokens = String(location.pathname || "").split("/").filter(Boolean);
+    const sankeyIndex = tokens.lastIndexOf("sankey");
+    if (sankeyIndex > 0) return tokens[sankeyIndex - 1];
+    return tokens[tokens.length - 2] || "reeb_viewer";
+  }
+
+  function serializeFigurePanel(panel) {
+    return cloneJson({
+      id: panel.id,
+      dataMode: panel.dataMode,
+      metricId: panel.metricId,
+      threshold: panel.threshold,
+      shapeWeights: panel.shapeWeights || null,
+      analysis: panel.analysis || null,
+      panelHeight: panel.panelHeight
+    });
+  }
+
+  function serializeFigurePreset(options = {}) {
+    const activePanel = getPanelById(state.activePanelId) || state.panels[0] || null;
+    return {
+      schema_version: 1,
+      viewer: "unified_sankey_viewer",
+      name: options.name || "",
+      dataset: datasetFigureLabel(),
+      created_at: new Date().toISOString(),
+      recommended_target: options.target || "active-panel",
+      state: {
+        ranges: cloneJson(state.ranges),
+        selectedRangeIndex: state.selectedRangeIndex,
+        activePanelId: activePanel?.id ?? state.activePanelId,
+        panels: state.panels.map(serializeFigurePanel),
+        layoutControls: cloneJson(state.layoutControls),
+        detailsSelection: cloneJson(state.detailsSelection),
+        camera: {
+          zoomScale: camera?.getZoomScale?.() ?? 1,
+          viewFocus: camera?.getViewFocus?.() || null
+        }
+      }
+    };
+  }
+
+  function downloadTextFile(filename, text, mimeType = "application/json") {
+    const blob = new Blob([text], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function saveFigurePreset() {
+    const defaultName = `${datasetFigureLabel()}_${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    const requested = window.prompt("Figure preset name", defaultName);
+    if (requested === null) return;
+    const name = sanitizeFilenamePart(requested || defaultName);
+    const preset = serializeFigurePreset({ name });
+    downloadTextFile(`${name}.figure_preset.json`, JSON.stringify(preset, null, 2));
+  }
+
+  function normalizePresetPanel(raw, fallbackId) {
+    const panel = {
+      id: Number(raw?.id) || fallbackId,
+      dataMode: String(raw?.dataMode || "overlap"),
+      metricId: String(raw?.metricId || "overlap_vertices"),
+      threshold: clamp(Number(raw?.threshold) || 0, 0, 100),
+      shapeWeights: raw?.shapeWeights ? cloneJson(raw.shapeWeights) : cloneDefaultShapeWeights(),
+      analysis: raw?.analysis ? cloneJson(raw.analysis) : null,
+      panelHeight: clampPanelHeight(raw?.panelHeight ?? PANEL_HEIGHT_DEFAULT)
+    };
+    ensurePanelMetric(panel);
+    ensurePanelAnalysis(panel);
+    return panel;
+  }
+
+  function syncLayoutControlsToDom() {
+    const orderingNode = document.getElementById("orderingMode");
+    const topSheetsNode = document.getElementById("topSheets");
+    const nodeColorNode = document.getElementById("nodeColorMode");
+    const darknessNode = document.getElementById("linkDarkness");
+    const darknessValueNode = document.getElementById("linkDarknessValue");
+    const hideIsolatedNode = document.getElementById("hideIsolated");
+    const strongestOutgoingNode = document.getElementById("strongestOutgoingOnly");
+    if (orderingNode) orderingNode.value = state.layoutControls.orderingMode;
+    if (topSheetsNode) topSheetsNode.value = String(normalizeTopSheets(state.layoutControls.topSheets));
+    if (nodeColorNode) nodeColorNode.value = state.layoutControls.nodeColorMode;
+    if (darknessNode) darknessNode.value = String(clamp(state.layoutControls.linkDarkness, 0, 100));
+    if (darknessValueNode) darknessValueNode.textContent = `${clamp(state.layoutControls.linkDarkness, 0, 100)}%`;
+    if (hideIsolatedNode) hideIsolatedNode.checked = Boolean(state.layoutControls.hideIsolated);
+    if (strongestOutgoingNode) strongestOutgoingNode.checked = Boolean(state.layoutControls.strongestOutgoingOnly);
+    drawCentroidColorLegend();
+    updateCentroidColorLegendVisibility();
+    refreshLinkDarkness();
+  }
+
+  function nodeFromKey(key) {
+    const [timestepIndex, sheetId] = String(key || "").split(":").map(Number);
+    if (!Number.isFinite(timestepIndex) || !Number.isFinite(sheetId)) return null;
+    return sheetByTimestepAndId(timestepIndex, sheetId);
+  }
+
+  function linkFromKeyForPanel(key, panel) {
+    if (!key || !panel) return null;
+    return gatherVisibleMatchEdges(panel, 0).find(link => linkKeyFromDatum(link) === key) || null;
+  }
+
+  function restoreFigureDetailsSelection(selection) {
+    if (!selection) return;
+    const panel = getPanelById(selection.panelId) || getPanelById(state.activePanelId) || state.panels[0];
+    if (!panel) return;
+    if (selection.type === "node") {
+      const node = nodeFromKey(selection.key);
+      if (node) showNodeDetails(node, panel, false);
+      return;
+    }
+    if (selection.type === "link") {
+      const link = linkFromKeyForPanel(selection.key, panel);
+      if (link) showLinkDetails(link, panel, false);
+    }
+  }
+
+  function applyFigurePreset(preset) {
+    const presetState = preset?.state || preset || {};
+    if (Array.isArray(presetState.ranges)) {
+      state.ranges = presetState.ranges.map(range => ({
+        start: Number(range.start),
+        end: Number(range.end)
+      })).filter(range => Number.isFinite(range.start) && Number.isFinite(range.end));
+    }
+    state.selectedRangeIndex = Math.max(0, Math.floor(Number(presetState.selectedRangeIndex) || 0));
+    if (Array.isArray(presetState.panels) && presetState.panels.length) {
+      state.panels = presetState.panels.map((panel, index) => normalizePresetPanel(panel, index + 1));
+      state.nextPanelId = Math.max(...state.panels.map(panel => Number(panel.id) || 0), 0) + 1;
+    }
+    if (presetState.layoutControls && typeof presetState.layoutControls === "object") {
+      state.layoutControls = {
+        ...state.layoutControls,
+        ...cloneJson(presetState.layoutControls),
+        nodeSizeMode: "vertices",
+        topSheets: normalizeTopSheets(presetState.layoutControls.topSheets)
+      };
+    }
+    state.detailsSelection = presetState.detailsSelection ? cloneJson(presetState.detailsSelection) : null;
+    const requestedActiveId = Number(presetState.activePanelId);
+    state.activePanelId = state.panels.some(panel => panel.id === requestedActiveId)
+      ? requestedActiveId
+      : state.panels[0]?.id ?? 1;
+
+    const presetCamera = presetState.camera || {};
+    const zoomScale = Number(presetCamera.zoomScale);
+    if (Number.isFinite(zoomScale)) camera?.setZoomScale(zoomScale);
+    if (presetCamera.viewFocus && Number.isFinite(Number(presetCamera.viewFocus.x)) && Number.isFinite(Number(presetCamera.viewFocus.y))) {
+      camera?.setViewFocus({ x: Number(presetCamera.viewFocus.x), y: Number(presetCamera.viewFocus.y) });
+    } else {
+      camera?.clearViewFocus();
+    }
+
+    hideTooltip();
+    syncLayoutControlsToDom();
+    renderAll();
+    return new Promise(resolve => {
+      requestAnimationFrame(() => {
+        if (Number.isFinite(zoomScale)) camera?.setZoomScale(zoomScale);
+        if (presetCamera.viewFocus && Number.isFinite(Number(presetCamera.viewFocus.x)) && Number.isFinite(Number(presetCamera.viewFocus.y))) {
+          camera?.setViewFocus({ x: Number(presetCamera.viewFocus.x), y: Number(presetCamera.viewFocus.y) });
+          camera?.applyNow?.();
+        }
+        restoreFigureDetailsSelection(state.detailsSelection);
+        resolve(serializeFigurePreset({ name: preset?.name || "restored" }));
+      });
+    });
+  }
+
+  function installFigureExportApi() {
+    window.ReebFigureExport = {
+      ready: () => Boolean(camera),
+      getPreset: serializeFigurePreset,
+      applyPreset: applyFigurePreset,
+      selectors: () => ({
+        full: "body",
+        main: "main",
+        viewer: "#viewer",
+        panels: "#panelList",
+        activePanel: ".panel.active-panel",
+        details: "#details",
+        controls: "#controls",
+        analysis: ".panel.active-panel .analysis-box"
+      })
+    };
   }
 
   function buildVisibleColumns() {
@@ -6258,7 +6528,11 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         d3.select(this).attr("fill", linkFillColor(d.opacity, false));
         hideTooltip();
       })
-      .on("click", (_, d) => showLinkDetails(d, panel));
+      .on("click", (event, d) => {
+        event.stopPropagation();
+        hideTooltip();
+        showLinkDetails(d, panel);
+      });
 
     state.panelViews.get(panel.id).linkSelection = linkSelection;
 
@@ -6277,7 +6551,12 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         d3.select(this).classed("hover", false);
         hideTooltip();
       })
-      .on("click", (_, d) => showNodeDetails(d, panel));
+      .on("click", (event, d) => {
+        event.stopPropagation();
+        hideTooltip();
+        highlightLongestTracksThroughNode(panel, d);
+        showNodeDetails(d, panel);
+      });
 
     state.panelViews.get(panel.id).nodeSelection = node;
 
@@ -6319,6 +6598,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
 
     canvasNode.addEventListener("mouseenter", () => {
       state.activePanelId = panel.id;
+      panelList.selectAll(".panel").classed("active-panel", d => d.id === panel.id);
       renderRangeBar();
     });
 
@@ -6330,6 +6610,10 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     const panels = panelList.selectAll(".panel")
       .data(state.panels, d => d.id)
       .join(enter => enter.append("div").attr("class", "panel"));
+
+    panels
+      .classed("active-panel", d => d.id === state.activePanelId)
+      .attr("data-panel-id", d => d.id);
 
     panels.each(function(panel) {
       panel.container = d3.select(this);
@@ -6482,6 +6766,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
   document.getElementById("zoomOut").addEventListener("click", () => camera.zoomBy(1 / camera.zoomStep));
   document.getElementById("zoomIn").addEventListener("click", () => camera.zoomBy(camera.zoomStep));
   document.getElementById("centerView").addEventListener("click", () => centerSankey());
+  document.getElementById("saveFigurePreset").addEventListener("click", () => saveFigurePreset());
 
   window.ReebViewerCommon.bindKeyboardShortcuts({
     target: document,
@@ -6507,6 +6792,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
   });
   camera.setZoomScale(1);
   camera.clearViewFocus();
+  installFigureExportApi();
   bindImageZoomViewer();
   bindLayoutControls();
   initRangeDispatcher();

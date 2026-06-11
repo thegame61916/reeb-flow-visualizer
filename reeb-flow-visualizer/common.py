@@ -3,7 +3,7 @@ from pathlib import Path
 
 # ================= USER SETTINGS =================
 
-BASE_DIR = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/FullRes/stilbene")
+BASE_DIR = Path("/media/mohit/4TB_kingston_tufA2/hpc/datasets/MVK_s1")
 
 DATASET_CONFIGS = {
     "stilbene": {
@@ -74,7 +74,7 @@ FV99 = Path(
 # Runtime fv99 perturbation stays zero. Stage 1's fallback uses perturb.py
 # to create a perturbed VTU and then retries fv99 with this same epsilon.
 EPSILON = "0.00000000"
-RESERVE_CORES = 47
+RESERVE_CORES = 44
 FV99_OMP_THREADS = 1
 TOP_N_SHEETS = 20
 VIEWER_DEFAULT_TOP_SHEETS = 10
@@ -162,7 +162,7 @@ def tracking_analysis_event_score_formula_text():
     return " + ".join(labels)
 
 # Pipeline stage flags
-RUN_STAGE_1_FV99 = True
+RUN_STAGE_1_FV99 = False
 RUN_STAGE_2_RSI_JSON = True
 RUN_STAGE_3A_SHAPE_MATCHING = True
 RUN_STAGE_3B_OVERLAPS = True
