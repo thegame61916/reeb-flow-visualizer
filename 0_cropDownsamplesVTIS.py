@@ -5,17 +5,17 @@ from paraview.simple import *
 # Global parameters
 # ============================================================
 
-INPUT_DIR = "/media/mohit/8tbh/vgl/8tbSamsung/2TB backup/FinalResultsForPaper/caseStudy2/grids/s1"
-OUTPUT_DIR = "/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/FullRes/stilbene/downsampledGrids"
+INPUT_DIR = "/media/mohit/8tbh/vgl/8tbSamsung/2TB backup/FinalResultsForPaper/caseStudy1/grids/s2"
+OUTPUT_DIR = "/media/mohit/4TB_kingston_tufA2/hpc/datasets/MVK_s2/downsampledGrids"
 
 #stilbene
 # [xmin, xmax, ymin, ymax, zmin, zmax]
-VOI = [10, 65, 10, 55, 10, 90]
+#VOI = [10, 65, 10, 55, 10, 90]
 
 
 #MVK_s1/s2
 # [xmin, xmax, ymin, ymax, zmin, zmax]
-#VOI = [20, 75, 20, 80, 20, 48]
+VOI = [20, 75, 20, 80, 20, 48]
 
 # [x_rate, y_rate, z_rate]
 SAMPLE_RATE = [1, 1, 1]

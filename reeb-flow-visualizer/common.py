@@ -74,7 +74,7 @@ FV99 = Path(
 # Runtime fv99 perturbation stays zero. Stage 1's fallback uses perturb.py
 # to create a perturbed VTU and then retries fv99 with this same epsilon.
 EPSILON = "0.00000000"
-RESERVE_CORES = 44
+RESERVE_CORES = 20
 FV99_OMP_THREADS = 1
 TOP_N_SHEETS = 20
 VIEWER_DEFAULT_TOP_SHEETS = 10

@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Perturb failed local VTUs and upload them to Tetralith input downsampledGrids.
+"""Prepare failed timestep lists, perturb local VTUs, and upload to Tetralith.
 
-Default workflow is for stilbene:
+Default perturb/upload workflow runs for all configured datasets. Use
+--dataset to process only one dataset. For each selected dataset:
 
-1. Read failed stems from
-   /media/mohit/4TB_kingston_tufA2/hpc/datasets/stilbene/sankey/rerun_failed_stems.txt
-2. Perturb local input VTUs from
-   /media/mohit/4TB_kingston_tufA2/hpc/datasets/stilbene/downsampledGrids
+1. Scan <local-root>/<dataset> and write sankey/rerun_failed_stems.txt.
+2. Perturb failed input VTUs from <local-root>/<dataset>/downsampledGrids.
 3. Upload the perturbed VTUs to
-   x_mohsh@tetralith.nsc.liu.se:/proj/reeb-space-storage/users/x_mohsh/datasets/stilbene/downsampledGrids
+   <remote-host>:<remote-datasets-root>/<dataset>/downsampledGrids.
 
 Remote originals are backed up by rsync before replacement unless --no-backup is used.
+
+By default the script scans the copied local HPC artifacts first and writes
+the failed-stems list before perturbing. Use --use-existing-failed-list only for
+a curated list.
 """
 
 from __future__ import annotations
@@ -29,6 +32,57 @@ DEFAULT_PERTURB_SCRIPT = Path(
     "/home/mohit/Desktop/postdoc/petars_fiber_flexing/"
     "petarsCode/arrange-and-traverse-algorithm/scripts/perturb.py"
 )
+DEFAULT_REMOTE_OUTPUT_ROOT = "/proj/reeb-space-storage/users/x_mohsh/hpc_outputs/datasets"
+DEFAULT_DATASETS = ("MVK_s1", "MVK_s2", "stilbene", "torus")
+
+
+def refresh_failed_list(
+    *,
+    dataset: str,
+    dataset_dir: Path,
+    require_fibers: bool,
+    remote_host: str,
+    remote_output_root: str,
+    upload: bool,
+    dry_run: bool,
+) -> Path | None:
+    from prepare_failed_timestep_reruns import (
+        missing_outputs,
+        read_expected_stems,
+        upload_files,
+        write_outputs,
+    )
+
+    stems, manifest = read_expected_stems(dataset_dir)
+    if not stems:
+        print(
+            f"[{dataset}] no expected timesteps found; copy downsampledGrids or sankey/hpc_vtu_manifest.txt first",
+            file=sys.stderr,
+        )
+        return None
+
+    failed: list[tuple[str, list[str]]] = []
+    for stem in stems:
+        missing = missing_outputs(dataset_dir, stem, require_fibers=require_fibers)
+        if missing:
+            failed.append((stem, missing))
+
+    stems_file, report_file = write_outputs(dataset_dir, failed, len(stems))
+    manifest_text = str(manifest) if manifest is not None else "inferred-from-local-artifacts"
+    print(f"[{dataset}] expected={len(stems)} failed={len(failed)} manifest={manifest_text}")
+    print(f"[{dataset}] wrote {stems_file}")
+    print(f"[{dataset}] wrote {report_file}")
+
+    if upload:
+        if dry_run:
+            remote_dir = f"{remote_output_root.rstrip('/')}/{dataset}/sankey"
+            print(f"+ ssh {remote_host} mkdir -p {remote_dir}")
+            print(f"+ rsync -av {stems_file} {report_file} {remote_host}:{remote_dir}/")
+        else:
+            upload_files(remote_host, remote_output_root, dataset, [stems_file, report_file])
+            print(f"[{dataset}] uploaded rerun list to {remote_host}:{remote_output_root}/{dataset}/sankey/")
+
+    return stems_file
 
 
 def read_failed_stems(path: Path) -> list[str]:
@@ -121,31 +175,27 @@ def upload_outputs(
     run_checked(command, dry_run=dry_run)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", default="stilbene")
-    parser.add_argument("--local-root", type=Path, default=DEFAULT_LOCAL_ROOT)
-    parser.add_argument("--failed-list", type=Path, help="Defaults to <local-root>/<dataset>/sankey/rerun_failed_stems.txt")
-    parser.add_argument("--epsilon", default="0.00001")
-    parser.add_argument("--python", dest="python_exe", default=sys.executable)
-    parser.add_argument("--perturb-script", type=Path, default=DEFAULT_PERTURB_SCRIPT)
-    parser.add_argument("--remote-host", default=DEFAULT_REMOTE_HOST)
-    parser.add_argument("--remote-datasets-root", default=DEFAULT_REMOTE_DATASETS_ROOT)
-    parser.add_argument("--remote-dir", help="Defaults to <remote-datasets-root>/<dataset>/downsampledGrids")
-    parser.add_argument("--output-dir", type=Path, help="Defaults to <local-root>/<dataset>/sankey/local_perturbed_vtu")
-    parser.add_argument("--manifest", type=Path, help="Defaults to <local-root>/<dataset>/sankey/local_perturbed_upload_manifest.tsv")
-    parser.add_argument("--limit", type=int, help="Only process the first N failed stems.")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--no-upload", action="store_true", help="Perturb locally but do not upload to Tetralith.")
-    parser.add_argument("--no-backup", action="store_true", help="Do not back up overwritten remote originals.")
-    args = parser.parse_args()
-
-    dataset_dir = args.local_root / args.dataset
+def process_dataset(args: argparse.Namespace, dataset: str) -> int:
+    dataset_dir = args.local_root / dataset
     input_dir = dataset_dir / "downsampledGrids"
     failed_list = args.failed_list or dataset_dir / "sankey" / "rerun_failed_stems.txt"
     output_dir = args.output_dir or dataset_dir / "sankey" / "local_perturbed_vtu"
     manifest = args.manifest or dataset_dir / "sankey" / "local_perturbed_upload_manifest.tsv"
-    remote_dir = args.remote_dir or f"{args.remote_datasets_root.rstrip('/')}/{args.dataset}/downsampledGrids"
+    remote_dir = args.remote_dir or f"{args.remote_datasets_root.rstrip('/')}/{dataset}/downsampledGrids"
+
+    if not args.use_existing_failed_list:
+        refreshed = refresh_failed_list(
+            dataset=dataset,
+            dataset_dir=dataset_dir,
+            require_fibers=not args.no_fibers,
+            remote_host=args.remote_host,
+            remote_output_root=args.remote_output_root,
+            upload=not args.no_upload and not args.no_rerun_list_upload,
+            dry_run=args.dry_run,
+        )
+        if refreshed is None:
+            return 2
+        failed_list = refreshed
 
     if not failed_list.is_file():
         print(f"failed list not found: {failed_list}", file=sys.stderr)
@@ -161,7 +211,7 @@ def main() -> int:
     if args.limit is not None:
         stems = stems[: max(0, args.limit)]
 
-    print(f"Dataset: {args.dataset}")
+    print(f"Dataset: {dataset}")
     print(f"Failed list: {failed_list}")
     print(f"Failed stems: {len(stems)}")
     print(f"Local input VTUs: {input_dir}")
@@ -233,6 +283,59 @@ def main() -> int:
         dry_run=args.dry_run,
     )
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dataset", help="Dataset to process. If omitted, processes all configured datasets.")
+    parser.add_argument("--local-root", type=Path, default=DEFAULT_LOCAL_ROOT)
+    parser.add_argument("--failed-list", type=Path, help="Defaults to <local-root>/<dataset>/sankey/rerun_failed_stems.txt")
+    parser.add_argument("--epsilon", default="0.00001")
+    parser.add_argument("--python", dest="python_exe", default=sys.executable)
+    parser.add_argument("--perturb-script", type=Path, default=DEFAULT_PERTURB_SCRIPT)
+    parser.add_argument("--remote-host", default=DEFAULT_REMOTE_HOST)
+    parser.add_argument("--remote-datasets-root", default=DEFAULT_REMOTE_DATASETS_ROOT)
+    parser.add_argument("--remote-output-root", default=DEFAULT_REMOTE_OUTPUT_ROOT)
+    parser.add_argument("--remote-dir", help="Defaults to <remote-datasets-root>/<dataset>/downsampledGrids")
+    parser.add_argument("--output-dir", type=Path, help="Defaults to <local-root>/<dataset>/sankey/local_perturbed_vtu")
+    parser.add_argument("--manifest", type=Path, help="Defaults to <local-root>/<dataset>/sankey/local_perturbed_upload_manifest.tsv")
+    parser.add_argument("--limit", type=int, help="Only process the first N failed stems.")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--use-existing-failed-list", action="store_true", help="Do not rescan artifacts; perturb stems from the existing rerun_failed_stems.txt or --failed-list.")
+    parser.add_argument("--no-fibers", action="store_true", help="When scanning failed artifacts, do not require fiber-surface VTP artifacts.")
+    parser.add_argument("--no-rerun-list-upload", action="store_true", help="After scanning failed artifacts, do not upload rerun_failed_stems.txt/report to Tetralith output storage.")
+    parser.add_argument("--no-upload", action="store_true", help="Perturb locally but do not upload to Tetralith.")
+    parser.add_argument("--no-backup", action="store_true", help="Do not back up overwritten remote originals.")
+    args = parser.parse_args()
+
+    if args.dataset is None or args.dataset.lower() == "all":
+        datasets = list(DEFAULT_DATASETS)
+    else:
+        datasets = [args.dataset]
+
+    if len(datasets) > 1:
+        single_dataset_options = [
+            "--failed-list" if args.failed_list is not None else "",
+            "--remote-dir" if args.remote_dir is not None else "",
+            "--output-dir" if args.output_dir is not None else "",
+            "--manifest" if args.manifest is not None else "",
+        ]
+        single_dataset_options = [option for option in single_dataset_options if option]
+        if single_dataset_options:
+            parser.error(
+                "single-dataset path overrides require --dataset: "
+                + ", ".join(single_dataset_options)
+            )
+
+    exit_code = 0
+    for index, dataset in enumerate(datasets, start=1):
+        if len(datasets) > 1:
+            print(f"\n=== Dataset {index}/{len(datasets)}: {dataset} ===")
+        dataset_exit_code = process_dataset(args, dataset)
+        if dataset_exit_code != 0 and exit_code == 0:
+            exit_code = dataset_exit_code
+
+    return exit_code
 
 
 if __name__ == "__main__":

@@ -156,34 +156,64 @@ PERTURB_PYTHON=/path/to/python-with-numpy hpc/submit_fv99_stage1_failed.sh stilb
 
 If Tetralith cannot run `perturb.py` because its batch Python environment lacks
 NumPy/VTK, perturb failed VTUs locally and upload the perturbed files back to the
-Tetralith input dataset under the original filenames:
+Tetralith input dataset under the original filenames. The perturb/upload script
+now refreshes the failed-timestep list by default. The usual local command processes all configured datasets:
+
+```bash
+python3 hpc/perturb_failed_locally_upload.py
+```
+
+To process only one dataset, pass `--dataset`:
 
 ```bash
 python3 hpc/perturb_failed_locally_upload.py --dataset stilbene
 ```
 
-The script reads:
+By default, the script scans each local artifact copy under:
 
 ```bash
-/media/mohit/4TB_kingston_tufA2/hpc/datasets/stilbene/sankey/rerun_failed_stems.txt
+/media/mohit/4TB_kingston_tufA2/hpc/datasets/<dataset>
 ```
 
-and uploads to:
+and writes per dataset:
 
 ```bash
-x_mohsh@tetralith.nsc.liu.se:/proj/reeb-space-storage/users/x_mohsh/datasets/stilbene/downsampledGrids/
+sankey/rerun_failed_stems.txt
+sankey/rerun_failed_report.tsv
+```
+
+It also uploads that rerun list to Tetralith output storage unless
+`--no-rerun-list-upload` or `--no-upload` is passed. The perturbed VTUs are then
+uploaded to the matching remote dataset input folder:
+
+```bash
+x_mohsh@tetralith.nsc.liu.se:/proj/reeb-space-storage/users/x_mohsh/datasets/<dataset>/downsampledGrids/
 ```
 
 Remote originals are backed up in:
 
 ```bash
-/proj/reeb-space-storage/users/x_mohsh/datasets/stilbene/downsampledGrids/_original_before_local_perturb/
+/proj/reeb-space-storage/users/x_mohsh/datasets/<dataset>/downsampledGrids/_original_before_local_perturb/
 ```
 
-Test first without uploading:
+Test first without uploading. This still refreshes the local failed lists and
+prints the planned remote commands for every dataset:
+
+```bash
+python3 hpc/perturb_failed_locally_upload.py --dry-run --limit 2
+```
+
+For one dataset only:
 
 ```bash
 python3 hpc/perturb_failed_locally_upload.py --dataset stilbene --dry-run --limit 2
+```
+
+If you already have a curated failed list and do not want to rescan artifacts,
+use `--use-existing-failed-list`:
+
+```bash
+python3 hpc/perturb_failed_locally_upload.py --dataset stilbene --use-existing-failed-list
 ```
 
 After uploading, rerun the failed list on Tetralith. Since the remote inputs are
