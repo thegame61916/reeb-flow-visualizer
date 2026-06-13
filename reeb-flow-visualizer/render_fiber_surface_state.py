@@ -37,12 +37,12 @@ def classify_path(value: str | None) -> str | None:
     return None
 
 
-def replacement_for_role(role: str, spec: dict, image: dict) -> str:
+def replacement_for_role(role: str, spec: dict, image: dict) -> str | None:
     if role == "vtu":
         return spec["vtu"]
     if role == "molecule":
         return spec["molecule_vtp"]
-    return image["fiber_surfaces"][role]
+    return image.get("fiber_surfaces", {}).get(role)
 
 
 def patch_state_for_first_image(state_file: Path, spec: dict, patched_state: Path) -> None:
@@ -57,7 +57,12 @@ def patch_state_for_first_image(state_file: Path, spec: dict, patched_state: Pat
             role = classify_path(element.attrib.get("value"))
             if role is None:
                 continue
-            element.set("value", replacement_for_role(role, spec, first_image))
+            replacement = replacement_for_role(role, spec, first_image)
+            if replacement is None:
+                replacement = spec.get("empty_fiber_surface")
+            if replacement is None:
+                continue
+            element.set("value", replacement)
 
     tree.write(patched_state, encoding="utf-8", xml_declaration=False)
 
@@ -88,7 +93,7 @@ def source_role_from_name_or_file(name: str, proxy) -> str | None:
     return classify_path(name)
 
 
-def find_reader_sources() -> dict[str, object]:
+def find_reader_sources(required_fiber_roles: set[str]) -> dict[str, object]:
     sources = {}
     for key, proxy in pvs.GetSources().items():
         name = key[0] if isinstance(key, tuple) else str(key)
@@ -96,7 +101,8 @@ def find_reader_sources() -> dict[str, object]:
         if role is not None:
             sources[role] = proxy
 
-    missing = [role for role in ("vtu", "molecule", *FIBER_ROLES) if role not in sources]
+    required_roles = ["vtu", "molecule", *sorted(required_fiber_roles)]
+    missing = [role for role in required_roles if role not in sources]
     if missing:
         available = sorted(
             f"{key}: {get_proxy_filename(proxy)}"
@@ -107,11 +113,38 @@ def find_reader_sources() -> dict[str, object]:
     return sources
 
 
-def update_sources(sources: dict[str, object], spec: dict, image: dict) -> None:
+def set_proxy_visibility(proxy, view, visible: bool) -> None:
+    try:
+        display = pvs.GetDisplayProperties(proxy, view)
+        if display is not None:
+            display.Visibility = 1 if visible else 0
+            return
+    except Exception:
+        pass
+
+    try:
+        if visible:
+            pvs.Show(proxy, view)
+        else:
+            pvs.Hide(proxy, view)
+    except Exception:
+        pass
+
+
+def update_sources(sources: dict[str, object], spec: dict, image: dict, view) -> None:
     set_proxy_filename(sources["vtu"], spec["vtu"])
     set_proxy_filename(sources["molecule"], spec["molecule_vtp"])
+
+    fiber_surfaces = image.get("fiber_surfaces", {})
     for role in FIBER_ROLES:
-        set_proxy_filename(sources[role], image["fiber_surfaces"][role])
+        proxy = sources.get(role)
+        if role in fiber_surfaces:
+            if proxy is None:
+                raise RuntimeError(f"state is missing reader role {role}")
+            set_proxy_filename(proxy, fiber_surfaces[role])
+            set_proxy_visibility(proxy, view, True)
+        elif proxy is not None:
+            set_proxy_visibility(proxy, view, False)
 
 
 def save_image(view, output: Path, spec: dict) -> None:
@@ -139,10 +172,11 @@ def render_spec(spec: dict) -> None:
 
         view = pvs.GetActiveViewOrCreate("RenderView")
         pvs.SetActiveView(view)
-        sources = find_reader_sources()
+        first_roles = set(spec["images"][0].get("fiber_surfaces", {}).keys())
+        sources = find_reader_sources(first_roles)
 
         for image in spec["images"]:
-            update_sources(sources, spec, image)
+            update_sources(sources, spec, image, view)
             pvs.Render(view)
             save_image(view, Path(image["output"]), spec)
 

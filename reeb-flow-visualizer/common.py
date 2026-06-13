@@ -3,23 +3,26 @@ from pathlib import Path
 
 # ================= USER SETTINGS =================
 
-BASE_DIR = Path("/media/mohit/4TB_kingston_tufA2/hpc/datasets/MVK_s1")
+BASE_DIR = Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/torus")
 
 DATASET_CONFIGS = {
     "stilbene": {
         "state_file": "sampleFSImage_stilbene.pvsm",
         "f_isovalue": 0.05,
         "g_isovalue": 0.05,
+        "fiber_surface_mode": "fixed",
     },
     "mvk": {
         "state_file": "sampleFSImage_MVK.pvsm",
         "f_isovalue": 0.07,
         "g_isovalue": 0.07,
+        "fiber_surface_mode": "fixed",
     },
     "torus": {
         "state_file": "sampleFSImage_torus.pvsm",
         "f_isovalue": 0.0,
         "g_isovalue": -10.0,
+        "fiber_surface_mode": "adaptive_f_range_change",
     },
 }
 
@@ -40,6 +43,13 @@ config = DATASET_CONFIGS[dataset_key]
 # writes surfaces for +f, -f, +g, and -g at these absolute isovalues.
 FIBER_SURFACE_FIELD_F_ISOVALUE = config["f_isovalue"]
 FIBER_SURFACE_FIELD_G_ISOVALUE = config["g_isovalue"]
+FIBER_SURFACE_MODE = config.get("fiber_surface_mode", "fixed")
+FIBER_SURFACE_ADAPTIVE_ENABLED = FIBER_SURFACE_MODE == "adaptive_f_range_change"
+FIBER_SURFACE_ADAPTIVE_FIELD = "f"
+FIBER_SURFACE_ADAPTIVE_DEFAULT_POSITION = 0.5
+FIBER_SURFACE_ADAPTIVE_MIN_POSITION = 0.05
+FIBER_SURFACE_ADAPTIVE_MAX_POSITION = 0.95
+FIBER_SURFACE_ADAPTIVE_VALUE_PRECISION = 6
     
 # Range-field selection passed to fv99.
 # Keep these close to BASE_DIR so dataset switches can update them together.
@@ -74,16 +84,21 @@ FV99 = Path(
 # Runtime fv99 perturbation stays zero. Stage 1's fallback uses perturb.py
 # to create a perturbed VTU and then retries fv99 with this same epsilon.
 EPSILON = "0.00000000"
-RESERVE_CORES = 20
+RESERVE_CORES = 43
 FV99_OMP_THREADS = 1
 TOP_N_SHEETS = 20
 VIEWER_DEFAULT_TOP_SHEETS = 10
-SHEET_RENDERER_WORKERS = 4
+# Precompute direct timestep-pair comparisons for strides 1..N.
+# A value of 4 computes links/matches for t->t+1, t->t+2, t->t+3, and t->t+4.
+SANKEY_TIMESTEP_STRIDE_MAX = 4
+SHEET_RENDERER_WORKERS = 5
 SHEET_RENDERER_REBUILD_CACHE = False
 SHEET_RENDERER_CLEAN_CACHE = False
+SHEET_RENDERER_REPLACE_EXISTING_IMAGES = False
 SHEET_RENDERER_USE_GLOBAL_BOUNDS = True
 SHEET_RENDERER_IMAGE_SIZE = (1600, 1600)
 SHEET_RENDERER_GLOBAL_PADDING = 0.03
+SHEET_RENDERER_RENDER_TIMEOUT_SECONDS = 300
 
 # Default weights for combined range score.
 # These are used by compareSheetShapes, overlap attachment metadata,
@@ -163,11 +178,12 @@ def tracking_analysis_event_score_formula_text():
 
 # Pipeline stage flags
 RUN_STAGE_1_FV99 = False
-RUN_STAGE_2_RSI_JSON = True
-RUN_STAGE_3A_SHAPE_MATCHING = True
-RUN_STAGE_3B_OVERLAPS = True
+RUN_STAGE_2_RSI_JSON = False
+RUN_STAGE_3A_SHAPE_MATCHING = False
+RUN_STAGE_3B_OVERLAPS = False
 RUN_STAGE_4A_SHEET_RENDERING = True
 RUN_STAGE_4B_SHEET_FIBER_SURFACES = True
+RUN_STAGE_4C_ADAPTIVE_FIBER_SURFACES = FIBER_SURFACE_ADAPTIVE_ENABLED
 RUN_STAGE_5A_BUILD_UNIFIED_SANKEY_DATA = True
 RUN_STAGE_5B_TRACKING_ANALYSIS = True
 RUN_STAGE_5C_UNIFIED_SANKEY_VIEWER = True
@@ -177,6 +193,7 @@ RUN_STAGE_2B_SHAPE_MATCHING = RUN_STAGE_3A_SHAPE_MATCHING
 RUN_STAGE_3_OVERLAPS = RUN_STAGE_3B_OVERLAPS
 RUN_STAGE_4_SHEET_RENDERING = RUN_STAGE_4A_SHEET_RENDERING
 RUN_STAGE_4_SHEET_FIBER_SURFACES = RUN_STAGE_4B_SHEET_FIBER_SURFACES
+RUN_STAGE_4_ADAPTIVE_FIBER_SURFACES = RUN_STAGE_4C_ADAPTIVE_FIBER_SURFACES
 RUN_STAGE_5_UNIFIED_SANKEY_VIEWER = RUN_STAGE_5C_UNIFIED_SANKEY_VIEWER
 RUN_STAGE_6_TRACKING_ANALYSIS = RUN_STAGE_5B_TRACKING_ANALYSIS
 RUN_UNIFIED_SANKEY_VIEWER = RUN_STAGE_5C_UNIFIED_SANKEY_VIEWER
@@ -213,8 +230,10 @@ FIBER_SURFACE_WORKERS = 20
 FIBER_SURFACE_REBUILD = False
 FIBER_SURFACE_DIR = BASE_DIR / "sheetFiberSurfaces"
 FIBER_SURFACE_LABELED_DIR = FIBER_SURFACE_DIR / "labeled"
+FIBER_SURFACE_ADAPTIVE_LABELED_DIR = FIBER_SURFACE_DIR / "adaptive_labeled"
 FIBER_SURFACE_IMAGE_DIR = BASE_DIR / "sheetFiberSurfaceImages"
 FIBER_SURFACE_TEMP_DIR = SHEET_RENDERER_TEMP_DIR / "fiber_surfaces"
+FIBER_SURFACE_ADAPTIVE_TEMP_DIR = FIBER_SURFACE_TEMP_DIR / "adaptive"
 FIBER_SURFACE_MOLECULAR_STRUCTURE_DIR = VTU_DIR / "molecularStructure"
 FIBER_SURFACE_RENDER_STATE_FILE = Path(__file__).resolve().parent / config["state_file"]
 FIBER_SURFACE_RENDER_IMAGE_RESOLUTION = (1600, 1200)
@@ -255,6 +274,7 @@ RSI_JSON_WARNINGS_LOG_FILE = OUTPUT_DIR / "rsi_json_warnings.log"
 LOW_SCALAR_ORIGIN_FILTER_LOG_FILE = OUTPUT_DIR / "low_scalar_origin_filter.log"
 OVERLAP_WARNINGS_LOG_FILE = OUTPUT_DIR / "sheet_overlap_warnings.log"
 FIBER_SURFACE_FAILED_LOG_FILE = OUTPUT_DIR / "fiber_surface_failed_files.log"
+FIBER_SURFACE_ADAPTIVE_FAILED_LOG_FILE = OUTPUT_DIR / "adaptive_fiber_surface_failed_files.log"
 SHAPE_MATCHING_SKIPPED_LOG_FILE = OUTPUT_DIR / "shape_matching_skipped_timesteps.log"
 
 

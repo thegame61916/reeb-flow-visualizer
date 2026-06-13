@@ -283,7 +283,13 @@ def render(
         else:
             colors.append((0.80, 0.80, 0.80, 0.08))
 
-    collection = PolyCollection(collections, facecolors=colors, edgecolors="none", antialiased=True)
+    collection = PolyCollection(
+        collections,
+        facecolors=colors,
+        edgecolors=colors,
+        linewidths=0.05,
+        antialiased=True,
+    )
     ax.add_collection(collection)
     ax.autoscale_view()
     ax.margins(0.03)

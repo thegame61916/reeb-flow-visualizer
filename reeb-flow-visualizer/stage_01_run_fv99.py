@@ -11,8 +11,10 @@ import tempfile
 
 from common import (
     EPSILON,
+    FIBER_SURFACE_ADAPTIVE_ENABLED,
     FIBER_SURFACE_FIELD_F_ISOVALUE,
     FIBER_SURFACE_FIELD_G_ISOVALUE,
+    FIBER_SURFACE_MODE,
     FIBER_SURFACE_LABELED_DIR,
     FIBER_SURFACE_TEMP_DIR,
     FV99,
@@ -287,6 +289,13 @@ def generate_fiber_surfaces(vtu_file: Path, rs_file: Path) -> tuple[bool, list[d
 
 
 def finalize_with_artifacts(vtu_file: Path, success: bool, partial: bool, returncode: int, details: dict):
+    if FIBER_SURFACE_ADAPTIVE_ENABLED:
+        details["fiber_surfaces_ok"] = True
+        details["fiber_surface_runs"] = []
+        details["fiber_surface_mode"] = FIBER_SURFACE_MODE
+        details["fiber_surface_note"] = "fixed fiber artifacts skipped; Stage 4C renders adaptive fiber images"
+        return vtu_file, success, partial, returncode, details
+
     rs_file = RS_DIR / f"{vtu_file.stem}.rs"
     fiber_ok, fiber_details = generate_fiber_surfaces(vtu_file, rs_file)
     details["fiber_surfaces_ok"] = fiber_ok
@@ -360,6 +369,8 @@ def run_fv99(vtu_file: Path):
         "replacement_vtu": None,
         "fiber_surfaces_ok": False,
         "fiber_surface_runs": [],
+        "fiber_surface_mode": FIBER_SURFACE_MODE,
+        "fiber_surface_note": None,
     }
 
     if success or partial:
@@ -456,6 +467,8 @@ def run_fv99_stage():
                 f"sheet_vtp={details.get('sheet_vtp')}",
                 f"primary_outputs_exist={details.get('primary_outputs_exist')}",
                 f"fiber_surfaces_ok={details.get('fiber_surfaces_ok')}",
+                f"fiber_surface_mode={details.get('fiber_surface_mode')}",
+                f"fiber_surface_note={details.get('fiber_surface_note')}",
             ]
             for fiber_run in details.get("fiber_surface_runs", []):
                 sign = fiber_run.get("sign")

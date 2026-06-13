@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Build a unified Sankey dashboard for domain and range metrics."""
+"""Build a unified Sankey dashboard for shape and domain overlap."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from common import (
     OVERLAP_FILE,
     SHEET_IMAGE_DIR,
     SHAPE_SCORE_DEFAULT_WEIGHTS,
+    SANKEY_TIMESTEP_STRIDE_MAX,
     TRACKING_ANALYSIS_CORRELATION_WINDOW,
     TRACKING_ANALYSIS_EVENT_SCORE_TERMS,
     TRACKING_ANALYSIS_PREFERRED_THRESHOLD,
@@ -44,11 +45,11 @@ MATCHES_FILE = STORAGE_ROOT / "results" / "sheet_shape_matches.json"
 UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
 
 SHAPE_METRICS = [
-    {"id": "combined", "label": "range score", "field": "final_score"},
-    {"id": "shape_iou", "label": "range IoU", "field": "shape_iou"},
-    {"id": "area_ratio", "label": "range area ratio", "field": "area_ratio"},
-    {"id": "bbox_iou", "label": "range bbox IoU", "field": "bbox_iou"},
-    {"id": "centroid_similarity", "label": "range centroid similarity", "field": "centroid_similarity"},
+    {"id": "shape_iou", "label": "shape overlap", "field": "shape_iou"},
+    {"id": "combined", "label": "shape overlap score", "field": "final_score"},
+    {"id": "area_ratio", "label": "shape area ratio", "field": "area_ratio"},
+    {"id": "bbox_iou", "label": "shape bbox overlap", "field": "bbox_iou"},
+    {"id": "centroid_similarity", "label": "shape centroid similarity", "field": "centroid_similarity"},
 ]
 
 OVERLAP_METRICS = [
@@ -61,18 +62,18 @@ OVERLAP_METRICS = [
 
 DATA_MODES = [
     {
+        "id": "shape",
+        "label": "Shape overlap",
+        "pair_field": "shape_pairs",
+        "default_metric": "shape_iou",
+        "metrics": SHAPE_METRICS,
+    },
+    {
         "id": "overlap",
         "label": "Domain overlap",
         "pair_field": "overlap_pairs",
         "default_metric": "overlap_vertices",
         "metrics": OVERLAP_METRICS,
-    },
-    {
-        "id": "shape",
-        "label": "Range metrics",
-        "pair_field": "shape_pairs",
-        "default_metric": "combined",
-        "metrics": SHAPE_METRICS,
     },
 ]
 
@@ -373,139 +374,163 @@ def prepare_data(viewer_dir: Path) -> dict:
         for item in timesteps
     }
 
-    shape_pairs = []
-    for pair in match_data.get("pairwise_matches", []):
-        source_timestep_index = safe_int(pair.get("source_timestep_index"))
-        target_timestep_index = safe_int(pair.get("target_timestep_index"))
-        source_timestep = overlap_timestep_by_index.get(source_timestep_index, {})
-        target_timestep = overlap_timestep_by_index.get(target_timestep_index, {})
-        matches = []
-        for match in pair.get("matches", []):
-            source_sheet_id = safe_int(match.get("source_sheet_id"))
-            target_sheet_id = safe_int(match.get("target_sheet_id"))
-            source_node = overlap_node_by_timestep_sheet.get((source_timestep_index, source_sheet_id), {})
-            target_node = overlap_node_by_timestep_sheet.get((target_timestep_index, target_sheet_id), {})
-            metrics = {}
-            for metric in SHAPE_METRICS:
-                value = safe_float(match.get(metric["field"]))
-                metrics[metric["id"]] = value
-                shape_maxima[metric["id"]] = max(shape_maxima[metric["id"]], value)
+    def build_shape_pairs(pairwise_matches):
+        built_pairs = []
+        for pair in pairwise_matches or []:
+            source_timestep_index = safe_int(pair.get("source_timestep_index"))
+            target_timestep_index = safe_int(pair.get("target_timestep_index"))
+            source_timestep = overlap_timestep_by_index.get(source_timestep_index, {})
+            target_timestep = overlap_timestep_by_index.get(target_timestep_index, {})
+            matches = []
+            for match in pair.get("matches", []):
+                source_sheet_id = safe_int(match.get("source_sheet_id"))
+                target_sheet_id = safe_int(match.get("target_sheet_id"))
+                source_node = overlap_node_by_timestep_sheet.get((source_timestep_index, source_sheet_id), {})
+                target_node = overlap_node_by_timestep_sheet.get((target_timestep_index, target_sheet_id), {})
+                metrics = {}
+                for metric in SHAPE_METRICS:
+                    value = safe_float(match.get(metric["field"]))
+                    metrics[metric["id"]] = value
+                    shape_maxima[metric["id"]] = max(shape_maxima[metric["id"]], value)
 
-            source_num_vertices = safe_int(source_node.get("num_vertices")) if source_node else safe_int(match.get("source_num_vertices"))
-            target_num_vertices = safe_int(target_node.get("num_vertices")) if target_node else safe_int(match.get("target_num_vertices"))
-            matches.append(
+                source_num_vertices = safe_int(source_node.get("num_vertices")) if source_node else safe_int(match.get("source_num_vertices"))
+                target_num_vertices = safe_int(target_node.get("num_vertices")) if target_node else safe_int(match.get("target_num_vertices"))
+                matches.append(
+                    {
+                        "source_sheet_id": source_sheet_id,
+                        "target_sheet_id": target_sheet_id,
+                        "source_rank": safe_int(match.get("source_rank")),
+                        "target_rank": safe_int(match.get("target_rank")),
+                        "source_area": safe_float(match.get("source_area")),
+                        "target_area": safe_float(match.get("target_area")),
+                        "source_num_vertices": source_num_vertices,
+                        "target_num_vertices": target_num_vertices,
+                        "source_node_id": str(source_node.get("id", "")),
+                        "target_node_id": str(target_node.get("id", "")),
+                        "source_node_area": safe_float(source_node.get("area")),
+                        "target_node_area": safe_float(target_node.get("area")),
+                        "source_rsijson_file": str(source_timestep.get("rsijson_file", "")),
+                        "target_rsijson_file": str(target_timestep.get("rsijson_file", "")),
+                        "source_rsi_file": str(source_timestep.get("rsi_file", "")),
+                        "target_rsi_file": str(target_timestep.get("rsi_file", "")),
+                        "metrics": metrics,
+                    }
+                )
+
+            built_pairs.append(
                 {
-                    "source_sheet_id": source_sheet_id,
-                    "target_sheet_id": target_sheet_id,
-                    "source_rank": safe_int(match.get("source_rank")),
-                    "target_rank": safe_int(match.get("target_rank")),
-                    "source_area": safe_float(match.get("source_area")),
-                    "target_area": safe_float(match.get("target_area")),
-                    "source_num_vertices": source_num_vertices,
-                    "target_num_vertices": target_num_vertices,
-                    "source_node_id": str(source_node.get("id", "")),
-                    "target_node_id": str(target_node.get("id", "")),
-                    "source_node_area": safe_float(source_node.get("area")),
-                    "target_node_area": safe_float(target_node.get("area")),
+                    "source_timestep_index": source_timestep_index,
+                    "source_label": str(pair.get("source_label", "")),
+                    "source_stem": str(pair.get("source_stem", "")),
+                    "target_timestep_index": target_timestep_index,
+                    "target_label": str(pair.get("target_label", "")),
+                    "target_stem": str(pair.get("target_stem", "")),
                     "source_rsijson_file": str(source_timestep.get("rsijson_file", "")),
                     "target_rsijson_file": str(target_timestep.get("rsijson_file", "")),
                     "source_rsi_file": str(source_timestep.get("rsi_file", "")),
                     "target_rsi_file": str(target_timestep.get("rsi_file", "")),
-                    "metrics": metrics,
+                    "global_bounds": pair.get("global_bounds", []),
+                    "pair_count": safe_int(pair.get("pair_count")),
+                    "matches": matches,
                 }
             )
+        return built_pairs
 
-        shape_pairs.append(
-            {
-                "source_timestep_index": source_timestep_index,
-                "source_label": str(pair.get("source_label", "")),
-                "source_stem": str(pair.get("source_stem", "")),
-                "target_timestep_index": target_timestep_index,
-                "target_label": str(pair.get("target_label", "")),
-                "target_stem": str(pair.get("target_stem", "")),
-                "source_rsijson_file": str(source_timestep.get("rsijson_file", "")),
-                "target_rsijson_file": str(target_timestep.get("rsijson_file", "")),
-                "source_rsi_file": str(source_timestep.get("rsi_file", "")),
-                "target_rsi_file": str(target_timestep.get("rsi_file", "")),
-                "global_bounds": pair.get("global_bounds", []),
-                "pair_count": safe_int(pair.get("pair_count")),
-                "matches": matches,
-            }
-        )
+    raw_shape_pairs_by_stride = match_data.get("pairwise_matches_by_stride")
+    if isinstance(raw_shape_pairs_by_stride, dict):
+        shape_pairs_by_stride = {
+            str(safe_int(stride_key, 1)): build_shape_pairs(pairs or [])
+            for stride_key, pairs in raw_shape_pairs_by_stride.items()
+        }
+    else:
+        shape_pairs_by_stride = {"1": build_shape_pairs(match_data.get("pairwise_matches", []))}
+    shape_pairs = shape_pairs_by_stride.get("1", [])
 
     overlap_node_index = {
         node.get("id"): node
         for node in overlap_data.get("nodes", [])
     }
-    overlap_pairs_by_key: dict[tuple[int, int], dict] = {}
-    for link in overlap_data.get("links", []):
-        source_index = safe_int(link.get("source_timestep_index"))
-        target_index = safe_int(link.get("target_timestep_index"))
-        key = (source_index, target_index)
-        pair = overlap_pairs_by_key.get(key)
-        if pair is None:
-            pair = {
-                "source_timestep_index": source_index,
-                "source_label": timestep_label_by_index.get(source_index, str(link.get("source_timestep_label", source_index))),
-                "source_stem": timestep_stem_by_index.get(source_index, ""),
-                "source_rsijson_file": str(link.get("source_rsijson_file", "") or overlap_timestep_by_index.get(source_index, {}).get("rsijson_file", "")),
-                "source_rsi_file": str(link.get("source_rsi_file", "") or overlap_timestep_by_index.get(source_index, {}).get("rsi_file", "")),
-                "target_timestep_index": target_index,
-                "target_label": timestep_label_by_index.get(target_index, str(link.get("target_timestep_label", target_index))),
-                "target_stem": timestep_stem_by_index.get(target_index, ""),
-                "target_rsijson_file": str(link.get("target_rsijson_file", "") or overlap_timestep_by_index.get(target_index, {}).get("rsijson_file", "")),
-                "target_rsi_file": str(link.get("target_rsi_file", "") or overlap_timestep_by_index.get(target_index, {}).get("rsi_file", "")),
-                "pair_count": 0,
-                "matches": [],
+
+    def build_overlap_pairs(overlap_links):
+        pairs_by_key: dict[tuple[int, int], dict] = {}
+        for link in overlap_links or []:
+            source_index = safe_int(link.get("source_timestep_index"))
+            target_index = safe_int(link.get("target_timestep_index"))
+            key = (source_index, target_index)
+            pair = pairs_by_key.get(key)
+            if pair is None:
+                pair = {
+                    "source_timestep_index": source_index,
+                    "source_label": timestep_label_by_index.get(source_index, str(link.get("source_timestep_label", source_index))),
+                    "source_stem": timestep_stem_by_index.get(source_index, ""),
+                    "source_rsijson_file": str(link.get("source_rsijson_file", "") or overlap_timestep_by_index.get(source_index, {}).get("rsijson_file", "")),
+                    "source_rsi_file": str(link.get("source_rsi_file", "") or overlap_timestep_by_index.get(source_index, {}).get("rsi_file", "")),
+                    "target_timestep_index": target_index,
+                    "target_label": timestep_label_by_index.get(target_index, str(link.get("target_timestep_label", target_index))),
+                    "target_stem": timestep_stem_by_index.get(target_index, ""),
+                    "target_rsijson_file": str(link.get("target_rsijson_file", "") or overlap_timestep_by_index.get(target_index, {}).get("rsijson_file", "")),
+                    "target_rsi_file": str(link.get("target_rsi_file", "") or overlap_timestep_by_index.get(target_index, {}).get("rsi_file", "")),
+                    "pair_count": 0,
+                    "matches": [],
+                }
+                pairs_by_key[key] = pair
+
+            source_node = overlap_node_index.get(link.get("source"), {})
+            target_node = overlap_node_index.get(link.get("target"), {})
+            source_percent = safe_float(link.get("source_percent"))
+            target_percent = safe_float(link.get("target_percent"))
+            overlap_vertices = safe_float(link.get("overlap_vertices"))
+            max_percent = max(source_percent, target_percent)
+
+            metrics = {
+                "overlap_vertices": overlap_vertices,
+                "overlap_source_percent": source_percent,
+                "overlap_target_percent": target_percent,
+                "overlap_max_percent": max_percent,
             }
-            overlap_pairs_by_key[key] = pair
+            for metric_id, value in metrics.items():
+                overlap_maxima[metric_id] = max(overlap_maxima[metric_id], value)
 
-        source_node = overlap_node_index.get(link.get("source"), {})
-        target_node = overlap_node_index.get(link.get("target"), {})
-        source_percent = safe_float(link.get("source_percent"))
-        target_percent = safe_float(link.get("target_percent"))
-        overlap_vertices = safe_float(link.get("overlap_vertices"))
-        max_percent = max(source_percent, target_percent)
+            pair["matches"].append(
+                {
+                    "source_sheet_id": safe_int(link.get("source_sheet_id")),
+                    "target_sheet_id": safe_int(link.get("target_sheet_id")),
+                    "source_rank": safe_int(link.get("source_rank")),
+                    "target_rank": safe_int(link.get("target_rank")),
+                    "source_area": safe_float(link.get("source_area")),
+                    "target_area": safe_float(link.get("target_area")),
+                    "source_num_vertices": safe_int(link.get("source_num_vertices")),
+                    "target_num_vertices": safe_int(link.get("target_num_vertices")),
+                    "metrics": metrics,
+                    "overlap_vertices": safe_int(link.get("overlap_vertices")),
+                    "source_percent": source_percent,
+                    "target_percent": target_percent,
+                    "source_node_id": str(link.get("source", "")),
+                    "target_node_id": str(link.get("target", "")),
+                    "source_node_area": safe_float(source_node.get("area")),
+                    "target_node_area": safe_float(target_node.get("area")),
+                    "source_rsijson_file": str(link.get("source_rsijson_file", "")),
+                    "target_rsijson_file": str(link.get("target_rsijson_file", "")),
+                    "source_rsi_file": str(link.get("source_rsi_file", "")),
+                    "target_rsi_file": str(link.get("target_rsi_file", "")),
+                }
+            )
+            pair["pair_count"] += 1
 
-        metrics = {
-            "overlap_vertices": overlap_vertices,
-            "overlap_source_percent": source_percent,
-            "overlap_target_percent": target_percent,
-            "overlap_max_percent": max_percent,
-        }
-        for metric_id, value in metrics.items():
-            overlap_maxima[metric_id] = max(overlap_maxima[metric_id], value)
-
-        pair["matches"].append(
-            {
-                "source_sheet_id": safe_int(link.get("source_sheet_id")),
-                "target_sheet_id": safe_int(link.get("target_sheet_id")),
-                "source_rank": safe_int(link.get("source_rank")),
-                "target_rank": safe_int(link.get("target_rank")),
-                "source_area": safe_float(link.get("source_area")),
-                "target_area": safe_float(link.get("target_area")),
-                "source_num_vertices": safe_int(link.get("source_num_vertices")),
-                "target_num_vertices": safe_int(link.get("target_num_vertices")),
-                "metrics": metrics,
-                "overlap_vertices": safe_int(link.get("overlap_vertices")),
-                "source_percent": source_percent,
-                "target_percent": target_percent,
-                "source_node_id": str(link.get("source", "")),
-                "target_node_id": str(link.get("target", "")),
-                "source_node_area": safe_float(source_node.get("area")),
-                "target_node_area": safe_float(target_node.get("area")),
-                "source_rsijson_file": str(link.get("source_rsijson_file", "")),
-                "target_rsijson_file": str(link.get("target_rsijson_file", "")),
-                "source_rsi_file": str(link.get("source_rsi_file", "")),
-                "target_rsi_file": str(link.get("target_rsi_file", "")),
-            }
+        return sorted(
+            pairs_by_key.values(),
+            key=lambda item: (item["source_timestep_index"], item["target_timestep_index"]),
         )
-        pair["pair_count"] += 1
 
-    overlap_pairs = sorted(
-        overlap_pairs_by_key.values(),
-        key=lambda item: (item["source_timestep_index"], item["target_timestep_index"]),
-    )
+    raw_overlap_links_by_stride = overlap_data.get("links_by_stride")
+    if isinstance(raw_overlap_links_by_stride, dict):
+        overlap_pairs_by_stride = {
+            str(safe_int(stride_key, 1)): build_overlap_pairs(links or [])
+            for stride_key, links in raw_overlap_links_by_stride.items()
+        }
+    else:
+        overlap_pairs_by_stride = {"1": build_overlap_pairs(overlap_data.get("links", []))}
+    overlap_pairs = overlap_pairs_by_stride.get("1", [])
 
     metric_maxima = {}
     metric_maxima.update(shape_maxima)
@@ -523,6 +548,9 @@ def prepare_data(viewer_dir: Path) -> dict:
             "shape_score_components": list(SHAPE_SCORE_DEFAULT_WEIGHTS.keys()),
             "shape_score_default_weights": SHAPE_SCORE_DEFAULT_WEIGHTS,
             "tracking_analysis_thresholds": list(TRACKING_ANALYSIS_THRESHOLDS),
+            "timestep_strides": list(range(1, max(1, safe_int(SANKEY_TIMESTEP_STRIDE_MAX, 1)) + 1)),
+            "default_timestep_stride": 1,
+            "max_timestep_stride": max(1, safe_int(SANKEY_TIMESTEP_STRIDE_MAX, 1)),
             "tracking_analysis_preferred_threshold": TRACKING_ANALYSIS_PREFERRED_THRESHOLD,
             "tracking_analysis_top_intervals": TRACKING_ANALYSIS_TOP_INTERVALS,
             "tracking_analysis_top_features": TRACKING_ANALYSIS_TOP_FEATURES,
@@ -544,6 +572,8 @@ def prepare_data(viewer_dir: Path) -> dict:
         "timesteps": timesteps,
         "shape_pairs": shape_pairs,
         "overlap_pairs": overlap_pairs,
+        "shape_pairs_by_stride": shape_pairs_by_stride,
+        "overlap_pairs_by_stride": overlap_pairs_by_stride,
         "viewer": {
             "generated_from": {
                 "matches": str(MATCHES_FILE),
@@ -580,6 +610,18 @@ def apply_current_tracking_analysis_meta(data: dict) -> dict:
     meta["centroid_axis_diagonal_colors"] = CENTROID_AXIS_DIAGONAL_COLORS
     meta["viewer_default_top_sheets"] = max(1, safe_int(VIEWER_DEFAULT_TOP_SHEETS, 10))
     meta["tracking_analysis_thresholds"] = list(TRACKING_ANALYSIS_THRESHOLDS)
+    available_stride_keys = set()
+    for field in ("shape_pairs_by_stride", "overlap_pairs_by_stride"):
+        by_stride = data.get(field)
+        if isinstance(by_stride, dict):
+            available_stride_keys.update(str(key) for key in by_stride.keys())
+    if available_stride_keys:
+        timestep_strides = sorted({max(1, safe_int(key, 1)) for key in available_stride_keys})
+    else:
+        timestep_strides = [1]
+    meta["timestep_strides"] = timestep_strides
+    meta["default_timestep_stride"] = 1
+    meta["max_timestep_stride"] = max(timestep_strides)
     meta["tracking_analysis_preferred_threshold"] = TRACKING_ANALYSIS_PREFERRED_THRESHOLD
     meta["tracking_analysis_top_intervals"] = TRACKING_ANALYSIS_TOP_INTERVALS
     meta["tracking_analysis_top_features"] = TRACKING_ANALYSIS_TOP_FEATURES
@@ -630,7 +672,7 @@ def write_index_html() -> Path:
   <header>
     <div class="title-block">
       <h1>Reeb Flow Visualizer</h1>
-      <p>Compare domain-overlap and range metrics in synchronized Sankey panels.</p>
+      <p>Explore time-varying Reeb-space sheets with linked Sankey, image, and analysis views.</p>
     </div>
     <div class="header-actions">
       <button id="zoomOut">Zoom out</button>
@@ -652,10 +694,6 @@ def write_index_html() -> Path:
         <p class="hint">Drag on the bar to create a range. Click a range to select it. Delete removes the selected range.</p>
       </section>
 
-      <section>
-        <h2>Summary</h2>
-        <dl id="stats"></dl>
-      </section>
 
       <section>
         <h2>Layout</h2>
@@ -676,6 +714,10 @@ def write_index_html() -> Path:
         <label>
           Top Sheets
           <input id="topSheets" type="number" min="1" step="1" value="{max(1, safe_int(VIEWER_DEFAULT_TOP_SHEETS, 10))}">
+        </label>
+        <label>
+          Timestep Sampling
+          <select id="timestepStride"></select>
         </label>
         <label>
           Node Color
@@ -1580,10 +1622,30 @@ d3.json("data.json").then(data => {
     1,
     Math.floor(Number(data?.meta?.viewer_default_top_sheets) || 10)
   );
+  const rawTimestepStrideOptions = Array.isArray(data?.meta?.timestep_strides) && data.meta.timestep_strides.length
+    ? data.meta.timestep_strides
+    : [1];
+  function hasPairDataForStride(stride) {
+    const key = String(Math.max(1, Math.floor(Number(stride) || 1)));
+    if (key === "1" && (Array.isArray(data?.shape_pairs) || Array.isArray(data?.overlap_pairs))) return true;
+    return Boolean(
+      (data?.shape_pairs_by_stride && Array.isArray(data.shape_pairs_by_stride[key])) ||
+      (data?.overlap_pairs_by_stride && Array.isArray(data.overlap_pairs_by_stride[key]))
+    );
+  }
+  const timestepStrideOptions = [...new Set(rawTimestepStrideOptions
+    .map(value => Math.max(1, Math.floor(Number(value) || 1)))
+    .filter(value => Number.isFinite(value) && hasPairDataForStride(value)))]
+    .sort((a, b) => a - b);
+  if (!timestepStrideOptions.length) timestepStrideOptions.push(1);
+  const defaultTimestepStride = timestepStrideOptions.includes(Number(data?.meta?.default_timestep_stride))
+    ? Number(data.meta.default_timestep_stride)
+    : timestepStrideOptions[0];
   const state = {
     ranges: (data.meta.default_ranges && data.meta.default_ranges.length ? data.meta.default_ranges : [{start: 0, end: 20}]).map(r => ({...r})),
     selectedRangeIndex: 0,
-    panels: [{ id: 1, dataMode: "overlap", metricId: "overlap_vertices", threshold: 0, panelHeight: PANEL_HEIGHT_DEFAULT }],
+    timestepStride: defaultTimestepStride,
+    panels: [{ id: 1, dataMode: "shape", metricId: "shape_iou", threshold: 0, panelHeight: PANEL_HEIGHT_DEFAULT }],
     nextPanelId: 2,
     rangeDrag: null,
     viewportDrag: null,
@@ -1697,7 +1759,7 @@ d3.json("data.json").then(data => {
   const linkMax = data.meta.link_thickness_max || 16;
   const timestepMax = timestepLookup.maxIndex;
   const VIEWPORT_ANCHOR_Y = 0.50;
-  const ZOOM_MIN = 0.1;
+  const ZOOM_MIN = 0.005;
   const ZOOM_MAX = 20;
   const ZOOM_STEP = 1.2;
   const PAN_DRAG_THRESHOLD = 4;
@@ -1726,50 +1788,60 @@ d3.json("data.json").then(data => {
   const shapeIncomingByNode = new Map();
   const overlapOutgoingByNode = new Map();
   const overlapIncomingByNode = new Map();
-  for (const pair of (Array.isArray(data.overlap_pairs) ? data.overlap_pairs : [])) {
-    overlapPairLookup.set(`${pair.source_timestep_index}:${pair.target_timestep_index}`, pair);
-    for (const match of (pair.matches || [])) {
-      const key = `${pair.source_timestep_index}:${match.source_sheet_id}->${pair.target_timestep_index}:${match.target_sheet_id}`;
-      const enriched = {
-        ...match,
-        source_timestep_index: pair.source_timestep_index,
-        target_timestep_index: pair.target_timestep_index,
-        source_label: pair.source_label,
-        target_label: pair.target_label,
-        source_stem: pair.source_stem || "",
-        target_stem: pair.target_stem || "",
-      };
-      overlapMatchLookup.set(key, enriched);
-      const sourceKey = `${pair.source_timestep_index}:${match.source_sheet_id}`;
-      const targetKey = `${pair.target_timestep_index}:${match.target_sheet_id}`;
-      if (!overlapOutgoingByNode.has(sourceKey)) overlapOutgoingByNode.set(sourceKey, []);
-      if (!overlapIncomingByNode.has(targetKey)) overlapIncomingByNode.set(targetKey, []);
-      overlapOutgoingByNode.get(sourceKey).push(enriched);
-      overlapIncomingByNode.get(targetKey).push(enriched);
+
+  function selectedStride() {
+    const value = Math.max(1, Math.floor(Number(state.timestepStride) || 1));
+    return timestepStrideOptions.includes(value) ? value : timestepStrideOptions[0];
+  }
+
+  function pairArrayForField(field, stride = selectedStride()) {
+    const key = String(Math.max(1, Math.floor(Number(stride) || 1)));
+    const byStride = data?.[`${field}_by_stride`];
+    if (byStride && Array.isArray(byStride[key])) return byStride[key];
+    if (key === "1" && Array.isArray(data?.[field])) return data[field];
+    return [];
+  }
+
+  function clearPairLookups() {
+    shapePairLookup.clear();
+    overlapPairLookup.clear();
+    shapeMatchLookup.clear();
+    overlapMatchLookup.clear();
+    shapeOutgoingByNode.clear();
+    shapeIncomingByNode.clear();
+    overlapOutgoingByNode.clear();
+    overlapIncomingByNode.clear();
+  }
+
+  function populatePairLookupsForMode(modeId, pairLookup, matchLookup, outgoingByNode, incomingByNode) {
+    for (const pair of pairsForMode(modeId)) {
+      pairLookup.set(`${pair.source_timestep_index}:${pair.target_timestep_index}`, pair);
+      for (const match of (pair.matches || [])) {
+        const key = `${pair.source_timestep_index}:${match.source_sheet_id}->${pair.target_timestep_index}:${match.target_sheet_id}`;
+        const enriched = {
+          ...match,
+          source_timestep_index: pair.source_timestep_index,
+          target_timestep_index: pair.target_timestep_index,
+          source_label: pair.source_label,
+          target_label: pair.target_label,
+          source_stem: pair.source_stem || "",
+          target_stem: pair.target_stem || "",
+        };
+        matchLookup.set(key, enriched);
+        const sourceKey = `${pair.source_timestep_index}:${match.source_sheet_id}`;
+        const targetKey = `${pair.target_timestep_index}:${match.target_sheet_id}`;
+        if (!outgoingByNode.has(sourceKey)) outgoingByNode.set(sourceKey, []);
+        if (!incomingByNode.has(targetKey)) incomingByNode.set(targetKey, []);
+        outgoingByNode.get(sourceKey).push(enriched);
+        incomingByNode.get(targetKey).push(enriched);
+      }
     }
   }
 
-  for (const pair of (Array.isArray(data.shape_pairs) ? data.shape_pairs : [])) {
-    shapePairLookup.set(`${pair.source_timestep_index}:${pair.target_timestep_index}`, pair);
-    for (const match of (pair.matches || [])) {
-      const key = `${pair.source_timestep_index}:${match.source_sheet_id}->${pair.target_timestep_index}:${match.target_sheet_id}`;
-      const enriched = {
-        ...match,
-        source_timestep_index: pair.source_timestep_index,
-        target_timestep_index: pair.target_timestep_index,
-        source_label: pair.source_label,
-        target_label: pair.target_label,
-        source_stem: pair.source_stem || "",
-        target_stem: pair.target_stem || "",
-      };
-      shapeMatchLookup.set(key, enriched);
-      const sourceKey = `${pair.source_timestep_index}:${match.source_sheet_id}`;
-      const targetKey = `${pair.target_timestep_index}:${match.target_sheet_id}`;
-      if (!shapeOutgoingByNode.has(sourceKey)) shapeOutgoingByNode.set(sourceKey, []);
-      if (!shapeIncomingByNode.has(targetKey)) shapeIncomingByNode.set(targetKey, []);
-      shapeOutgoingByNode.get(sourceKey).push(enriched);
-      shapeIncomingByNode.get(targetKey).push(enriched);
-    }
+  function refreshPairLookups() {
+    clearPairLookups();
+    populatePairLookupsForMode("overlap", overlapPairLookup, overlapMatchLookup, overlapOutgoingByNode, overlapIncomingByNode);
+    populatePairLookupsForMode("shape", shapePairLookup, shapeMatchLookup, shapeOutgoingByNode, shapeIncomingByNode);
   }
 
   function clamp(n, low, high) {
@@ -2290,13 +2362,24 @@ d3.json("data.json").then(data => {
     return ranges.some(r => timestep >= r.start && timestep <= r.end);
   }
 
+  function visibleTimestepIndexSet() {
+    const ranges = normalizedRanges();
+    const visible = new Set();
+    const stride = selectedStride();
+    for (const range of ranges.length ? ranges : [{ start: 0, end: timestepMax }]) {
+      for (let t = range.start; t <= range.end; t += stride) visible.add(t);
+    }
+    return visible;
+  }
+
   function visibleTimesteps() {
     const ranges = normalizedRanges();
-    if (!ranges.length) return data.timesteps.slice();
+    const active = ranges.length ? ranges : [{ start: 0, end: timestepMax }];
     const visible = [];
     const seen = new Set();
-    for (const range of ranges) {
-      for (let t = range.start; t <= range.end; t += 1) {
+    const stride = selectedStride();
+    for (const range of active) {
+      for (let t = range.start; t <= range.end; t += stride) {
         if (seen.has(t)) continue;
         const ts = timestepLookup.itemAt(t);
         if (ts) visible.push(ts);
@@ -2321,7 +2404,7 @@ d3.json("data.json").then(data => {
   function pairsForMode(modeId, _panel = null) {
     const field = pairFieldForMode(modeId);
     if (!field) return [];
-    return Array.isArray(data[field]) ? data[field] : [];
+    return pairArrayForField(field, selectedStride());
   }
 
   function metricLabel(modeId, metricId) {
@@ -2349,9 +2432,10 @@ d3.json("data.json").then(data => {
 
   function vertexThetaStats(metricId = vertexMetricDefault) {
     const id = overlapMetricIds.includes(metricId) ? metricId : vertexMetricDefault;
-    if (vertexThetaCache.has(id)) return vertexThetaCache.get(id);
+    const cacheId = `${selectedStride()}:${id}`;
+    if (vertexThetaCache.has(cacheId)) return vertexThetaCache.get(cacheId);
     const scores = [];
-    for (const pair of (Array.isArray(data.overlap_pairs) ? data.overlap_pairs : [])) {
+    for (const pair of pairsForMode("overlap")) {
       const sourceIndex = Number(pair.source_timestep_index);
       const sourceSheets = timestepByIndex.get(sourceIndex)?.sheets || [];
       const bySource = groupMatchesByField(pair.matches || [], "source_sheet_id");
@@ -2631,12 +2715,12 @@ d3.json("data.json").then(data => {
   }
 
   function domainRangeDisagreementData() {
-    const cacheKey = "domain-range-complementarity";
+    const cacheKey = `domain-range-complementarity:stride${selectedStride()}`;
     if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
 
     const examples = [];
     const summary = [];
-    for (const shapePair of (Array.isArray(data.shape_pairs) ? data.shape_pairs : [])) {
+    for (const shapePair of pairsForMode("shape")) {
       const sourceIndex = Number(shapePair.source_timestep_index);
       const targetIndex = Number(shapePair.target_timestep_index);
       if (!Number.isFinite(sourceIndex) || !Number.isFinite(targetIndex)) continue;
@@ -2852,10 +2936,10 @@ d3.json("data.json").then(data => {
   }
 
   function domainRangeEventScoreSeries(theta) {
-    const cacheKey = `domain-range-event-score-series:${thresholdKey(theta)}`;
+    const cacheKey = `domain-range-event-score-series:stride${selectedStride()}:${thresholdKey(theta)}`;
     if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
     const rows = [];
-    for (const shapePair of (Array.isArray(data.shape_pairs) ? data.shape_pairs : [])) {
+    for (const shapePair of pairsForMode("shape")) {
       const sourceIndex = Number(shapePair.source_timestep_index);
       const targetIndex = Number(shapePair.target_timestep_index);
       const overlapPair = overlapPairLookup.get(`${sourceIndex}:${targetIndex}`);
@@ -2885,7 +2969,7 @@ d3.json("data.json").then(data => {
     const theta = panelTheta(panel);
     const windowSizeRaw = Math.max(3, Math.floor(Number(DOMAIN_RANGE_CORRELATION_WINDOW) || 9));
     const windowSize = windowSizeRaw % 2 === 0 ? windowSizeRaw + 1 : windowSizeRaw;
-    const cacheKey = `domain-range-spearman:${thresholdKey(theta)}:${windowSize}`;
+    const cacheKey = `domain-range-spearman:stride${selectedStride()}:${thresholdKey(theta)}:${windowSize}`;
     if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
     const series = domainRangeEventScoreSeries(theta);
     const rows = [];
@@ -3146,7 +3230,7 @@ d3.json("data.json").then(data => {
 
   function computeRuntimeSensitivity(panel) {
     ensurePanelAnalysis(panel);
-    const cacheKey = `sensitivity:${analysisMetricKey(panel)}`;
+    const cacheKey = `sensitivity:stride${selectedStride()}:${analysisMetricKey(panel)}`;
     if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
     const rows = analysisThresholdOptions(panel).map(threshold => {
       const intervalResult = computeRuntimeIntervals(panel, threshold);
@@ -3853,11 +3937,11 @@ d3.json("data.json").then(data => {
   function computeDomainStabilityRows(panel) {
     ensurePanelAnalysis(panel);
     const theta = panelTheta(panel);
-    const cacheKey = `domain-stability:${thresholdKey(theta)}`;
+    const cacheKey = `domain-stability:stride${selectedStride()}:${thresholdKey(theta)}`;
     if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
 
     const series = [];
-    for (const pair of (Array.isArray(data.overlap_pairs) ? data.overlap_pairs : [])) {
+    for (const pair of pairsForMode("overlap")) {
       const sourceIndex = Number(pair.source_timestep_index);
       const targetIndex = Number(pair.target_timestep_index);
       if (!Number.isFinite(sourceIndex) || !Number.isFinite(targetIndex)) continue;
@@ -4570,13 +4654,13 @@ d3.json("data.json").then(data => {
 
     const tabs = panel.dataMode === "overlap"
       ? [
-          ["intervals", "Domain intervals"],
+          ["intervals", "Interesting domain intervals"],
           ["tracks", "Domain continuing features"],
           ["sensitivity", "Domain sensitivity"],
           ["disagreement", "Domain/range complementarity"],
         ]
       : [
-          ["intervals", "Range intervals"],
+          ["intervals", "Interesting range intervals"],
           ["tracks", "Range continuing features"],
           ["sensitivity", "Range sensitivity"],
           ["disagreement", "Domain/range complementarity"],
@@ -4617,7 +4701,8 @@ d3.json("data.json").then(data => {
       const rows = analysisIntervals(panel);
       const visibleRows = rows.slice(0, Math.min(panel.analysis.topIntervals, rows.length));
       const controls = content.append("div").attr("class", "analysis-actions");
-      controls.append("span").attr("class", "analysis-hint").text(`Show/highlight top intervals out of ${rows.length}`);
+      const intervalKind = panel.dataMode === "overlap" ? "interesting domain intervals" : "interesting range intervals";
+      controls.append("span").attr("class", "analysis-hint").text(`Show/highlight top ${intervalKind} out of ${rows.length}`);
       const countInput = controls.append("input")
         .attr("type", "number")
         .attr("min", 1)
@@ -4629,11 +4714,11 @@ d3.json("data.json").then(data => {
         renderAll();
       });
       controls.append("button").attr("type", "button").text("Highlight")
-        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(visibleRows.map(item => intervalHighlightPayload(item, panel)), `Top ${visibleRows.length} intervals`), false));
+        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(visibleRows.map(item => intervalHighlightPayload(item, panel)), `Top ${visibleRows.length} ${intervalKind}`), false));
 
       renderIntervalScoreGraph(content, panel, visibleRows);
 
-      if (!rows.length) content.append("div").attr("class", "analysis-hint").text("No interval analysis for this theta.");
+      if (!rows.length) content.append("div").attr("class", "analysis-hint").text(`No ${intervalKind} analysis for this theta.`);
       return;
     }
 
@@ -5091,26 +5176,15 @@ d3.json("data.json").then(data => {
     const image = nodeMediaStack(node);
     const incoming = bestContinuationForNode(node, "incoming", panel);
     const outgoing = bestContinuationForNode(node, "outgoing", panel);
-    const imageFile = node.thumbnail ? imageFilename(node.thumbnail) : "N/A";
-    const fiberImageFile = node.fiber_surface_image ? imageFilename(node.fiber_surface_image) : "N/A";
-    const rsiFile = pathFilename(node.rsi_file) || "N/A";
-    const rsijsonFile = pathFilename(node.rsijson_file) || "N/A";
     return `
       <h3>Sheet ${escapeHtml(node.sheet_id)}</h3>
       <div class="meta-list">
         <div>Timestep</div><div>${escapeHtml(node.timestep_label)}</div>
-        <div>Stem</div><div>${escapeHtml(node.stem || "N/A")}</div>
-        <div>Node ID</div><div>${escapeHtml(node.node_id || "N/A")}</div>
         <div>Rank</div><div>${escapeHtml(node.rank)}</div>
         <div>Area</div><div>${escapeHtml(formatScore(node.area))}</div>
         <div>Domain vertices</div><div>${escapeHtml(node.num_vertices)}</div>
         <div>Best incoming continuation</div><div>${escapeHtml(incoming.text)}</div>
         <div>Best outgoing continuation</div><div>${escapeHtml(outgoing.text)}</div>
-        <div>Centroid color</div><div>${colorSwatch(node.centroid_color)}</div>
-        <div>RSI</div><div>${escapeHtml(rsiFile)}</div>
-        <div>RSI JSON</div><div>${escapeHtml(rsijsonFile)}</div>
-        <div>Image</div><div>${escapeHtml(imageFile || "N/A")}</div>
-        <div>Fiber image</div><div>${escapeHtml(fiberImageFile || "N/A")}</div>
       </div>
       ${image}
     `;
@@ -5121,32 +5195,21 @@ d3.json("data.json").then(data => {
     const targetNode = sheetByTimestepAndId(link.target_timestep_index, link.target_sheet_id);
     const sourceImage = nodeMediaStack(sourceNode);
     const targetImage = nodeMediaStack(targetNode);
-    const sourceRsi = pathFilename(link.source_rsi_file || sourceNode?.rsi_file) || "N/A";
-    const targetRsi = pathFilename(link.target_rsi_file || targetNode?.rsi_file) || "N/A";
-    const sourceRsijson = pathFilename(link.source_rsijson_file || sourceNode?.rsijson_file) || "N/A";
-    const targetRsijson = pathFilename(link.target_rsijson_file || targetNode?.rsijson_file) || "N/A";
     const metricValueNow = metricValue(link, panel, panel.metricId);
     const continuation = continuationLinkInfo(link, panel);
-    const metricMax = metricMaxForPanel(panel, panel.metricId);
-    const metricRatio = metricMax > 0 ? clamp(metricValueNow / metricMax, 0, 1) : 0;
     const scoreRows = metricsForMode(panel.dataMode)
       .map(metric => `<div>${escapeHtml(metric.label)}</div><div>${escapeHtml(formatScore(metricValue(link, panel, metric.id)))}</div>`)
       .join("");
     return `
-      <h3>Match ${escapeHtml(link.source_sheet_id)} → ${escapeHtml(link.target_sheet_id)}</h3>
+      <h3>Sheet ${escapeHtml(link.source_sheet_id)} → ${escapeHtml(link.target_sheet_id)}</h3>
       <div class="meta-list">
         <div>Source timestep</div><div>${escapeHtml(link.source_label)}</div>
         <div>Target timestep</div><div>${escapeHtml(link.target_label)}</div>
-        <div>Source stem</div><div>${escapeHtml(link.source_stem || sourceNode?.stem || "N/A")}</div>
-        <div>Target stem</div><div>${escapeHtml(link.target_stem || targetNode?.stem || "N/A")}</div>
-        <div>Source RSI</div><div>${escapeHtml(sourceRsi)}</div>
-        <div>Target RSI</div><div>${escapeHtml(targetRsi)}</div>
-        <div>Source RSI JSON</div><div>${escapeHtml(sourceRsijson)}</div>
-        <div>Target RSI JSON</div><div>${escapeHtml(targetRsijson)}</div>
+        <div>Source sheet</div><div>S${escapeHtml(link.source_sheet_id)}${Number.isFinite(Number(link.source_rank)) ? `, rank ${escapeHtml(link.source_rank)}` : ""}</div>
+        <div>Target sheet</div><div>S${escapeHtml(link.target_sheet_id)}${Number.isFinite(Number(link.target_rank)) ? `, rank ${escapeHtml(link.target_rank)}` : ""}</div>
         <div>${escapeHtml(metricLabel(panel.dataMode, panel.metricId))}</div><div>${escapeHtml(formatScore(metricValueNow))}</div>
         <div>Continuation score</div><div>${escapeHtml(continuation.text)}</div>
         <div>Domain support</div><div>${escapeHtml(formatDomainSupport(domainSupportForLink(link)))}</div>
-        <div>Normalized</div><div>${escapeHtml(formatScore(metricRatio * 100))}%</div>
       </div>
       <div class="tooltip-grid" style="margin-top:10px;">
         <div>${sourceImage}</div>
@@ -5187,50 +5250,19 @@ d3.json("data.json").then(data => {
     const longestTrackText = longestTracks.length
       ? `${longestTracks.length} feature${longestTracks.length === 1 ? "" : "s"}, length ${formatTrackGroupCount(trackLength(longestTracks[0]))}`
       : "None at current theta";
-    const imageFile = node.thumbnail ? imageFilename(node.thumbnail) : "N/A";
-    const fiberImageFile = node.fiber_surface_image ? imageFilename(node.fiber_surface_image) : "N/A";
-    const rawTable = scalarMetadataTable({
-      node_id: node.node_id || "",
-      sheet_id: node.sheet_id,
-      rank: node.rank,
-      timestep_index: node.timestep_index,
-      timestep_label: node.timestep_label || "",
-      stem: node.stem || "",
-      area: node.area,
-      num_vertices: node.num_vertices,
-      analysis_theta: panelTheta(panel),
-      best_incoming_continuation: incoming.text,
-      best_outgoing_continuation: outgoing.text,
-      longest_continuing_features_through_node: longestTrackText,
-      rsi_file: node.rsi_file || "",
-      rsijson_file: node.rsijson_file || "",
-      thumbnail: node.thumbnail || "",
-      fiber_surface_image: node.fiber_surface_image || "",
-      bbox: formatArrayValue(node.bbox),
-      centroid: formatArrayValue(node.centroid),
-      centroid_color: node.centroid_color || "",
-      centroid_color_position: formatArrayValue(node.centroid_color_position)
-    });
     detailsContent.innerHTML = `
       <h3>Sheet ${escapeHtml(node.sheet_id)}</h3>
       ${image}
       <div class="meta-list">
         <div>Timestep</div><div>${escapeHtml(node.timestep_label)}</div>
-        <div>Stem</div><div>${escapeHtml(node.stem || "N/A")}</div>
-        <div>Node ID</div><div>${escapeHtml(node.node_id || "N/A")}</div>
         <div>Rank</div><div>${escapeHtml(node.rank)}</div>
         <div>Area</div><div>${escapeHtml(formatScore(node.area))}</div>
         <div>Domain vertices</div><div>${escapeHtml(node.num_vertices)}</div>
         <div>Best incoming continuation</div><div>${escapeHtml(incoming.text)}</div>
         <div>Best outgoing continuation</div><div>${escapeHtml(outgoing.text)}</div>
         <div>Longest continuing feature</div><div>${escapeHtml(longestTrackText)}</div>
-        <div>Centroid color</div><div>${colorSwatch(node.centroid_color)}</div>
-        <div>RSI file</div><div>${escapeHtml(node.rsi_file || "N/A")}</div>
-        <div>RSI JSON file</div><div>${escapeHtml(node.rsijson_file || "N/A")}</div>
-        <div>Image file</div><div>${escapeHtml(imageFile)}</div>
-        <div>Fiber image file</div><div>${escapeHtml(fiberImageFile)}</div>
+        <div>Centroid</div><div>${escapeHtml(formatArrayValue(node.centroid))}</div>
       </div>
-      ${rawTable}
     `;
   }
 
@@ -5252,71 +5284,17 @@ d3.json("data.json").then(data => {
     const selectedMetricValue = metricValue(link, panel, panel.metricId);
     const continuation = continuationLinkInfo(link, panel);
     const domainSupport = domainSupportForLink(link);
-    const sourceImageFile = sourceNode?.thumbnail ? imageFilename(sourceNode.thumbnail) : "N/A";
-    const targetImageFile = targetNode?.thumbnail ? imageFilename(targetNode.thumbnail) : "N/A";
-    const sourceFiberImageFile = sourceNode?.fiber_surface_image ? imageFilename(sourceNode.fiber_surface_image) : "N/A";
-    const targetFiberImageFile = targetNode?.fiber_surface_image ? imageFilename(targetNode.fiber_surface_image) : "N/A";
-    const sourceRsi = link.source_rsi_file || sourceNode?.rsi_file || "";
-    const targetRsi = link.target_rsi_file || targetNode?.rsi_file || "";
-    const sourceRsijson = link.source_rsijson_file || sourceNode?.rsijson_file || "";
-    const targetRsijson = link.target_rsijson_file || targetNode?.rsijson_file || "";
     const metricRows = metricsForMode(panel.dataMode)
       .map(metric => `<div>${escapeHtml(metric.label)}</div><div>${escapeHtml(formatScore(metricValue(link, panel, metric.id)))}</div>`)
       .join("");
-    const rawTable = scalarMetadataTable({
-      mode: panel.dataMode,
-      metric_id: panel.metricId,
-      source_timestep_index: link.source_timestep_index,
-      target_timestep_index: link.target_timestep_index,
-      source_label: link.source_label || "",
-      target_label: link.target_label || "",
-      source_stem: link.source_stem || "",
-      target_stem: link.target_stem || "",
-      source_sheet_id: link.source_sheet_id,
-      target_sheet_id: link.target_sheet_id,
-      source_rank: link.source_rank,
-      target_rank: link.target_rank,
-      source_area: link.source_area,
-      target_area: link.target_area,
-      source_num_vertices: link.source_num_vertices,
-      target_num_vertices: link.target_num_vertices,
-      source_percent: link.source_percent,
-      target_percent: link.target_percent,
-      overlap_vertices: link.overlap_vertices,
-      source_node_id: link.source_node_id || "",
-      target_node_id: link.target_node_id || "",
-      source_node_area: link.source_node_area,
-      target_node_area: link.target_node_area,
-      source_rsi_file: sourceRsi,
-      target_rsi_file: targetRsi,
-      source_rsijson_file: sourceRsijson,
-      target_rsijson_file: targetRsijson,
-      source_fiber_surface_image: sourceNode?.fiber_surface_image || "",
-      target_fiber_surface_image: targetNode?.fiber_surface_image || "",
-      selected_metric: selectedMetricLabel,
-      selected_metric_value: selectedMetricValue,
-      analysis_theta: continuation.theta,
-      continuation_score: continuation.score,
-      continuation_status: continuation.status,
-      domain_source_retention: domainSupport.match ? 100 * domainSupport.sourceRetention : null,
-      domain_target_inheritance: domainSupport.match ? 100 * domainSupport.targetInheritance : null,
-      domain_bidirectional_support: domainSupport.match ? 100 * domainSupport.bidirectional : null,
-      width: link.width,
-      opacity: link.opacity,
-      score: link.score
-    });
     detailsContent.innerHTML = `
-      <h3>Link ${escapeHtml(link.source_sheet_id)} → ${escapeHtml(link.target_sheet_id)}</h3>
+      <h3>Link S${escapeHtml(link.source_sheet_id)} → S${escapeHtml(link.target_sheet_id)}</h3>
       <div class="meta-list">
         <div>Mode</div><div>${escapeHtml(modeLabel(panel.dataMode))}</div>
         <div>Source timestep</div><div>${escapeHtml(link.source_label)}</div>
         <div>Target timestep</div><div>${escapeHtml(link.target_label)}</div>
-        <div>Source stem</div><div>${escapeHtml(link.source_stem || sourceNode?.stem || "N/A")}</div>
-        <div>Target stem</div><div>${escapeHtml(link.target_stem || targetNode?.stem || "N/A")}</div>
-        <div>Source image file</div><div>${escapeHtml(sourceImageFile)}</div>
-        <div>Target image file</div><div>${escapeHtml(targetImageFile)}</div>
-        <div>Source fiber image file</div><div>${escapeHtml(sourceFiberImageFile)}</div>
-        <div>Target fiber image file</div><div>${escapeHtml(targetFiberImageFile)}</div>
+        <div>Source sheet</div><div>S${escapeHtml(link.source_sheet_id)}${Number.isFinite(Number(link.source_rank)) ? `, rank ${escapeHtml(link.source_rank)}` : ""}</div>
+        <div>Target sheet</div><div>S${escapeHtml(link.target_sheet_id)}${Number.isFinite(Number(link.target_rank)) ? `, rank ${escapeHtml(link.target_rank)}` : ""}</div>
         <div>${escapeHtml(selectedMetricLabel)}</div><div>${escapeHtml(formatScore(selectedMetricValue))}</div>
         <div>Continuation score</div><div>${escapeHtml(continuation.text)}</div>
         <div>Domain support</div><div>${escapeHtml(formatDomainSupport(domainSupport))}</div>
@@ -5326,7 +5304,6 @@ d3.json("data.json").then(data => {
         <div>${targetImage}</div>
       </div>
       <div class="meta-list">${metricRows}</div>
-      ${rawTable}
     `;
   }
 
@@ -5412,8 +5389,8 @@ d3.json("data.json").then(data => {
   function normalizePresetPanel(raw, fallbackId) {
     const panel = {
       id: Number(raw?.id) || fallbackId,
-      dataMode: String(raw?.dataMode || "overlap"),
-      metricId: String(raw?.metricId || "overlap_vertices"),
+      dataMode: String(raw?.dataMode || "shape"),
+      metricId: String(raw?.metricId || "shape_iou"),
       threshold: clamp(Number(raw?.threshold) || 0, 0, 100),
       shapeWeights: raw?.shapeWeights ? cloneJson(raw.shapeWeights) : cloneDefaultShapeWeights(),
       analysis: raw?.analysis ? cloneJson(raw.analysis) : null,
@@ -5427,6 +5404,7 @@ d3.json("data.json").then(data => {
   function syncLayoutControlsToDom() {
     const orderingNode = document.getElementById("orderingMode");
     const topSheetsNode = document.getElementById("topSheets");
+    const timestepStrideNode = document.getElementById("timestepStride");
     const nodeColorNode = document.getElementById("nodeColorMode");
     const darknessNode = document.getElementById("linkDarkness");
     const darknessValueNode = document.getElementById("linkDarknessValue");
@@ -5434,6 +5412,7 @@ d3.json("data.json").then(data => {
     const strongestOutgoingNode = document.getElementById("strongestOutgoingOnly");
     if (orderingNode) orderingNode.value = state.layoutControls.orderingMode;
     if (topSheetsNode) topSheetsNode.value = String(normalizeTopSheets(state.layoutControls.topSheets));
+    if (timestepStrideNode) timestepStrideNode.value = String(selectedStride());
     if (nodeColorNode) nodeColorNode.value = state.layoutControls.nodeColorMode;
     if (darknessNode) darknessNode.value = String(clamp(state.layoutControls.linkDarkness, 0, 100));
     if (darknessValueNode) darknessValueNode.textContent = `${clamp(state.layoutControls.linkDarkness, 0, 100)}%`;
@@ -5556,7 +5535,8 @@ d3.json("data.json").then(data => {
           columns.push({ type: "gap", span: hiddenTimesteps });
         }
       }
-      for (let t = range.start; t <= range.end; t += 1) {
+      const stride = selectedStride();
+      for (let t = range.start; t <= range.end; t += stride) {
         if (seen.has(t)) continue;
         const ts = timestepLookup.itemAt(t);
         if (!ts) continue;
@@ -5573,10 +5553,7 @@ d3.json("data.json").then(data => {
     const ranges = normalizedRanges();
     const threshold = clamp(Number(thresholdPercent) || 0, 0, 100) / 100;
     const metricMax = metricMaxForPanel(panel, panel.metricId);
-    const visible = new Set();
-    for (const range of ranges.length ? ranges : [{ start: 0, end: timestepMax }]) {
-      for (let t = range.start; t <= range.end; t += 1) visible.add(t);
-    }
+    const visible = visibleTimestepIndexSet();
 
     for (const pair of pairs) {
       if (!visible.has(pair.source_timestep_index) || !visible.has(pair.target_timestep_index)) continue;
@@ -6260,10 +6237,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     const ranges = normalizedRanges();
     const visible = visibleTimesteps();
     const visibleNodes = visible.reduce((sum, t) => sum + (t.sheets?.length || 0), 0);
-    const visibleSet = new Set();
-    for (const range of ranges.length ? ranges : [{ start: 0, end: timestepMax }]) {
-      for (let t = range.start; t <= range.end; t += 1) visibleSet.add(t);
-    }
+    const visibleSet = visibleTimestepIndexSet();
     const pairCountByMode = dataModes.map(mode => {
       const pairs = pairsForMode(mode.id);
       const count = pairs.filter(pair =>
@@ -6278,6 +6252,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       ["Nodes", String(visibleNodes)],
       ["Pairs", pairCountByMode],
       ["Ranges", String(ranges.length)],
+      ["Sampling", `every ${selectedStride()} timestep${selectedStride() === 1 ? "" : "s"}`],
       ["Max area", formatScore(areaMax)],
     ];
 
@@ -6646,6 +6621,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     const orderingNode = document.getElementById("orderingMode");
     const nodeSizeNode = document.getElementById("nodeSizeMode");
     const topSheetsNode = document.getElementById("topSheets");
+    const timestepStrideNode = document.getElementById("timestepStride");
     const nodeColorNode = document.getElementById("nodeColorMode");
     const darknessNode = document.getElementById("linkDarkness");
     const darknessValueNode = document.getElementById("linkDarknessValue");
@@ -6682,6 +6658,29 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         if (event.key !== "Enter") return;
         commitTopSheets(event.target.value);
         event.target.blur();
+      });
+    }
+
+    if (timestepStrideNode) {
+      timestepStrideNode.innerHTML = "";
+      timestepStrideOptions.forEach(stride => {
+        const option = document.createElement("option");
+        option.value = String(stride);
+        const suffix = stride === 2 ? "nd" : (stride === 3 ? "rd" : "th");
+        option.textContent = stride === 1 ? "every timestep" : `every ${stride}${suffix} timestep`;
+        timestepStrideNode.appendChild(option);
+      });
+      timestepStrideNode.value = String(selectedStride());
+      timestepStrideNode.addEventListener("change", event => {
+        const next = Math.max(1, Math.floor(Number(event.target.value) || 1));
+        state.timestepStride = timestepStrideOptions.includes(next) ? next : timestepStrideOptions[0];
+        timestepStrideNode.value = String(state.timestepStride);
+        analysisRuntimeCache.clear();
+        vertexThetaCache.clear();
+        refreshPairLookups();
+        state.panels.forEach(panel => clearAnalysisSelectionsOnly(panel));
+        state.analysisFocusPulse = null;
+        renderAll();
       });
     }
 
@@ -6732,7 +6731,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     state.panels.push({
       id: state.nextPanelId++,
       dataMode: "shape",
-      metricId: "combined",
+      metricId: "shape_iou",
       threshold: 0,
       shapeWeights: cloneDefaultShapeWeights(),
       analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], selectedTrackKeys: [], selectedDisagreementKeys: [], selectedDomainStabilityKeys: [], selectedCorrelationKeys: [], trackChooserGroupKey: "", highlight: null } : null,
@@ -6794,6 +6793,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
   camera.clearViewFocus();
   installFigureExportApi();
   bindImageZoomViewer();
+  refreshPairLookups();
   bindLayoutControls();
   initRangeDispatcher();
   renderAll();

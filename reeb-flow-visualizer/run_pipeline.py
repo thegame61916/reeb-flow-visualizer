@@ -4,6 +4,7 @@ import stage_01_run_fv99 as s1
 import stage_02_build_sankey_data as s2
 import stage_03_compute_sheet_overlaps as s3
 import stage_04_compute_sheet_fiber_surfaces as s4
+import stage_04c_compute_adaptive_fiber_surfaces as s4c
 import stage_06_analyze_tracking_results as s6
 
 from compareSheetShapes.compare_sheet_shapes import (
@@ -17,6 +18,7 @@ from common import (
     RUN_STAGE_3B_OVERLAPS,
     RUN_STAGE_4A_SHEET_RENDERING,
     RUN_STAGE_4B_SHEET_FIBER_SURFACES,
+    RUN_STAGE_4C_ADAPTIVE_FIBER_SURFACES,
     RUN_STAGE_5A_BUILD_UNIFIED_SANKEY_DATA,
     RUN_STAGE_5B_TRACKING_ANALYSIS,
     RUN_STAGE_5C_UNIFIED_SANKEY_VIEWER,
@@ -79,6 +81,14 @@ def enabled_stages():
             (
                 "Stage 4B: compute sheet fiber surfaces",
                 s4.compute_sheet_fiber_surfaces_stage,
+            )
+        )
+
+    if RUN_STAGE_4C_ADAPTIVE_FIBER_SURFACES:
+        stages.append(
+            (
+                "Stage 4C: compute adaptive f fiber surfaces",
+                s4c.compute_adaptive_fiber_surfaces_stage,
             )
         )
 

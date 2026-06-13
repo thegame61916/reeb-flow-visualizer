@@ -2,8 +2,8 @@
 
 This note summarizes the current MVK results from:
 
-- `/media/mohit/4TB_kingston_tufA2/hpc/datasets/MVK_s1`
-- `/media/mohit/4TB_kingston_tufA2/hpc/datasets/MVK_s2`
+- `/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/MVK_s1`
+- `/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/MVK_s2`
 
 It uses the current generated artifacts as the baseline. I also tested the
 near-origin low-scalar exclusion in memory, without overwriting the baseline

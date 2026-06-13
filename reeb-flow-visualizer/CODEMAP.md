@@ -8,7 +8,7 @@ time-varying Reeb-space sheets. The generated viewer lives entirely in:
 Serve that directory directly:
 
 ```bash
-cd /media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene/sankey/unified_sankey_viewer
+cd /home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/stilbene/sankey/unified_sankey_viewer
 python3 -m http.server 8000
 ```
 

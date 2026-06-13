@@ -46,11 +46,10 @@ OVERLAP_METRICS = (
 )
 
 KNOWN_DATASET_DIRS = (
-    Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/MVK_s1"),
-    Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/MVK_s2"),
-    Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene"),
-    Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/torusGrowing"),
-    Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/torusMoving"),
+    Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/MVK_s1"),
+    Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/MVK_s2"),
+    Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/stilbene"),
+    Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/torus"),
 )
 
 
@@ -1526,7 +1525,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--all-known",
         action="store_true",
-        help="Analyze MVK_s1, MVK_s2, stilbene, torusGrowing, and torusMoving.",
+        help="Analyze MVK_s1, MVK_s2, stilbene, and torus.",
     )
     parser.add_argument(
         "--thresholds",

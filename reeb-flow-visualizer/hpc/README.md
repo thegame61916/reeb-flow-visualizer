@@ -103,7 +103,7 @@ python3 hpc/prepare_failed_timestep_reruns.py stilbene
 By default this scans:
 
 ```bash
-/media/mohit/4TB_kingston_tufA2/hpc/datasets
+/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets
 ```
 
 and uploads these files to the matching dataset under the Tetralith output root:
@@ -172,7 +172,7 @@ python3 hpc/perturb_failed_locally_upload.py --dataset stilbene
 By default, the script scans each local artifact copy under:
 
 ```bash
-/media/mohit/4TB_kingston_tufA2/hpc/datasets/<dataset>
+/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/<dataset>
 ```
 
 and writes per dataset:

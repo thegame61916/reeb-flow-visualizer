@@ -16,11 +16,10 @@ Repository:
 Generated datasets inspected:
 
 ```text
-/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/MVK_s1
-/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/MVK_s2
-/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/stilbene
-/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/torusGrowing
-/media/mohit/8tbh/postdoc/timeVaryingReebFeatures/torusMoving
+/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/MVK_s1
+/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/MVK_s2
+/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/stilbene
+/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/torus
 ```
 
 Main result files inspected:

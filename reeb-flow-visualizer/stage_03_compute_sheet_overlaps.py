@@ -11,6 +11,7 @@ from common import (
     OVERLAP_WARNINGS_LOG_FILE,
     RANGE_SCORE_DEFAULT_WEIGHTS,
     RSI_JSON_DIR,
+    SANKEY_TIMESTEP_STRIDE_MAX,
 )
 
 SHAPE_MATCHES_FILE = (
@@ -19,6 +20,16 @@ SHAPE_MATCHES_FILE = (
     / "results"
     / "sheet_shape_matches.json"
 )
+
+def configured_strides(max_stride=None):
+    value = SANKEY_TIMESTEP_STRIDE_MAX if max_stride is None else max_stride
+    try:
+        count = int(value)
+    except Exception:
+        count = 1
+    count = max(1, count)
+    return list(range(1, count + 1))
+
 
 RANGE_METRIC_FIELDS = (
     "range_combined_score",
@@ -182,23 +193,36 @@ def compute_link(source_timestep, target_timestep, source_sheet, target_sheet):
     }
 
 
+def compute_links_by_stride(timesteps, max_stride=None):
+    links_by_stride = {}
+
+    for stride in configured_strides(max_stride):
+        links = []
+        if len(timesteps) <= stride:
+            links_by_stride[str(stride)] = links
+            continue
+        for index in range(0, len(timesteps) - stride):
+            source_timestep = timesteps[index]
+            target_timestep = timesteps[index + stride]
+            for source_sheet in source_timestep["sheets"]:
+                for target_sheet in target_timestep["sheets"]:
+                    link = compute_link(
+                        source_timestep,
+                        target_timestep,
+                        source_sheet,
+                        target_sheet,
+                    )
+
+                    if link["overlap_vertices"] > 0:
+                        links.append(link)
+
+        links_by_stride[str(stride)] = links
+
+    return links_by_stride
+
+
 def compute_links(timesteps):
-    links = []
-
-    for source_timestep, target_timestep in zip(timesteps, timesteps[1:]):
-        for source_sheet in source_timestep["sheets"]:
-            for target_sheet in target_timestep["sheets"]:
-                link = compute_link(
-                    source_timestep,
-                    target_timestep,
-                    source_sheet,
-                    target_sheet,
-                )
-
-                if link["overlap_vertices"] > 0:
-                    links.append(link)
-
-    return links
+    return compute_links_by_stride(timesteps, 1).get("1", [])
 
 
 def load_shape_match_index(warning_lines):
@@ -233,7 +257,17 @@ def load_shape_match_index(warning_lines):
     pair_count = 0
     match_count = 0
 
-    for pair in payload.get("pairwise_matches", []):
+    raw_pairs_by_stride = payload.get("pairwise_matches_by_stride")
+    if isinstance(raw_pairs_by_stride, dict):
+        pair_groups = [
+            pair
+            for pairs in raw_pairs_by_stride.values()
+            for pair in (pairs or [])
+        ]
+    else:
+        pair_groups = payload.get("pairwise_matches", [])
+
+    for pair in pair_groups:
         pair_count += 1
         source_stem = str(pair.get("source_stem", "")).strip()
         target_stem = str(pair.get("target_stem", "")).strip()
@@ -442,7 +476,9 @@ def compute_sheet_overlaps_stage():
                 flush=True,
             )
 
-    links = compute_links(timesteps)
+    links_by_stride = compute_links_by_stride(timesteps, SANKEY_TIMESTEP_STRIDE_MAX)
+    links = links_by_stride.get("1", [])
+    all_links = [link for stride_links in links_by_stride.values() for link in stride_links]
     warning_lines.extend(find_warnings(timesteps))
     (
         shape_match_index,
@@ -451,7 +487,7 @@ def compute_sheet_overlaps_stage():
         shape_match_count,
     ) = load_shape_match_index(warning_lines)
     range_metrics_attached, range_metric_lookup_counts = attach_range_metrics(
-        links,
+        all_links,
         shape_match_index,
     )
 
@@ -467,6 +503,8 @@ def compute_sheet_overlaps_stage():
         "num_timesteps": len(timesteps),
         "num_nodes": len(nodes),
         "num_links": len(links),
+        "max_timestep_stride": SANKEY_TIMESTEP_STRIDE_MAX,
+        "timestep_strides": configured_strides(SANKEY_TIMESTEP_STRIDE_MAX),
         "range_metric_fields": list(RANGE_METRIC_FIELDS),
         "range_score_default_weights": RANGE_SCORE_DEFAULT_WEIGHTS,
         "range_metric_maxima": range_metric_maxima,
@@ -480,6 +518,7 @@ def compute_sheet_overlaps_stage():
         ],
         "nodes": nodes,
         "links": links,
+        "links_by_stride": links_by_stride,
     }
 
     OVERLAP_FILE.write_text(json.dumps(output, indent=2, allow_nan=False))
@@ -490,5 +529,6 @@ def compute_sheet_overlaps_stage():
     print(f"Warning log: {OVERLAP_WARNINGS_LOG_FILE}")
     print(f"Nodes: {len(nodes)}")
     print(f"Links: {len(links)}")
+    print("Links by stride: " + ", ".join(f"{stride}={len(stride_links)}" for stride, stride_links in links_by_stride.items()))
     print(f"Links with range metrics: {range_metrics_attached}")
     print(f"Range metric lookup: {range_metric_lookup_counts}")

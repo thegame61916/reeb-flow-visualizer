@@ -59,6 +59,7 @@ from common import (
     RS_DIR,
     SHAPE_SCORE_DEFAULT_WEIGHTS,
     SHAPE_MATCHING_SKIPPED_LOG_FILE,
+    SANKEY_TIMESTEP_STRIDE_MAX,
     SHEET_VTP_CACHE_DIR,
     TOP_N_SHEETS,
     TTK_BUILD_LIB_DIR,
@@ -92,6 +93,16 @@ TIMESTEP_INDEX_FILE = CACHE_DIR / "timestep_index.json"
 
 MATCHES_FILE = RESULTS_DIR / "sheet_shape_matches.json"
 SUMMARY_FILE = RESULTS_DIR / "sheet_shape_summary.json"
+
+
+def configured_strides(max_stride: int | None = None) -> list[int]:
+    value = SANKEY_TIMESTEP_STRIDE_MAX if max_stride is None else max_stride
+    try:
+        count = int(value)
+    except Exception:
+        count = 1
+    count = max(1, count)
+    return list(range(1, count + 1))
 
 
 @dataclass(frozen=True)
@@ -950,6 +961,7 @@ def compare_all_pairs(
     global_bounds: tuple[float, float, float, float],
     library_path: str,
     rerun_cache: bool = False,
+    max_stride: int | None = None,
 ) -> dict:
     if rerun_cache:
         if CACHE_DIR.exists():
@@ -975,65 +987,97 @@ def compare_all_pairs(
             recompute_bounds=not manifest_ok,
         )
 
-    adjacent_pairs = list(zip(stems, stems[1:]))
+    strides = configured_strides(max_stride)
+    pairs_by_stride: dict[int, list[tuple[str, str]]] = {
+        stride: list(zip(stems, stems[stride:]))
+        for stride in strides
+    }
 
-    results = []
-    missing_pairs: list[tuple[str, str]] = []
+    results_by_key: dict[tuple[str, str], dict] = {}
+    missing_pairs: list[tuple[int, str, str]] = []
 
-    for source_stem, target_stem in adjacent_pairs:
-        cached = load_pair_cache(source_stem, target_stem)
-        if cached is not None and cached.get("global_bounds") == list(global_bounds):
-            results.append(cached)
-            print(f"[match existing] {cached['source_label']} -> {cached['target_label']}", flush=True)
-        else:
-            missing_pairs.append((source_stem, target_stem))
+    for stride, stride_pairs in pairs_by_stride.items():
+        for source_stem, target_stem in stride_pairs:
+            cached = load_pair_cache(source_stem, target_stem)
+            if cached is not None and cached.get("global_bounds") == list(global_bounds):
+                results_by_key[(source_stem, target_stem)] = cached
+                print(
+                    f"[match existing stride {stride}] {cached['source_label']} -> {cached['target_label']}",
+                    flush=True,
+                )
+            else:
+                missing_pairs.append((stride, source_stem, target_stem))
 
     if missing_pairs:
         with ProcessPoolExecutor(max_workers=workers) as pool:
             futures = {
-                pool.submit(compare_pair, source_stem, target_stem, global_bounds): (source_stem, target_stem)
-                for source_stem, target_stem in missing_pairs
+                pool.submit(compare_pair, source_stem, target_stem, global_bounds): (stride, source_stem, target_stem)
+                for stride, source_stem, target_stem in missing_pairs
             }
             for i, future in enumerate(as_completed(futures), start=1):
+                stride, source_stem, target_stem = futures[future]
                 result = future.result()
                 save_pair_cache(result)
-                results.append(result)
+                results_by_key[(source_stem, target_stem)] = result
                 print(
-                    f"[match {i}/{len(futures)}] {result['source_label']} -> {result['target_label']}",
+                    f"[match {i}/{len(futures)} stride {stride}] {result['source_label']} -> {result['target_label']}",
                     flush=True,
                 )
 
-    results.sort(key=lambda item: item["source_timestep_index"])
+    results_by_stride: dict[str, list[dict]] = {}
+    for stride, stride_pairs in pairs_by_stride.items():
+        results = [
+            results_by_key[(source_stem, target_stem)]
+            for source_stem, target_stem in stride_pairs
+            if (source_stem, target_stem) in results_by_key
+        ]
+        results.sort(key=lambda item: (item["source_timestep_index"], item["target_timestep_index"]))
+        results_by_stride[str(stride)] = results
 
+    stride_one_results = results_by_stride.get("1", [])
     payload = {
         "num_timesteps": len(timesteps),
         "grid_size": GRID_SIZE,
         "top_n_sheets": TOP_N_SHEETS,
         "combined_score_weights": SHAPE_SCORE_DEFAULT_WEIGHTS,
         "global_bounds": list(global_bounds),
-        "pairwise_matches": results,
+        "timestep_strides": strides,
+        "max_timestep_stride": max(strides),
+        "pairwise_matches": stride_one_results,
+        "pairwise_matches_by_stride": results_by_stride,
     }
     write_text_atomic(MATCHES_FILE, json.dumps(payload, indent=2))
 
+    summaries_by_stride = {}
+    for stride_key, results in results_by_stride.items():
+        summaries_by_stride[stride_key] = {
+            "num_pairs": len(results),
+            "max_pair_count": max((item["pair_count"] for item in results), default=0),
+            "avg_pair_count": float(np.mean([item["pair_count"] for item in results])) if results else 0.0,
+            "top_pairs_by_match_count": sorted(
+                (
+                    {
+                        "source_label": item["source_label"],
+                        "target_label": item["target_label"],
+                        "pair_count": item["pair_count"],
+                        "max_score": item["matches"][0]["final_score"] if item["matches"] else 0.0,
+                        "top_matches": item["matches"][:10],
+                    }
+                    for item in results
+                ),
+                key=lambda x: (x["pair_count"], x["max_score"]),
+                reverse=True,
+            )[:20],
+        }
+
     summary = {
-        "num_pairs": len(results),
-        "max_pair_count": max((item["pair_count"] for item in results), default=0),
-        "avg_pair_count": float(np.mean([item["pair_count"] for item in results])) if results else 0.0,
+        "num_pairs": len(stride_one_results),
+        "max_pair_count": max((item["pair_count"] for item in stride_one_results), default=0),
+        "avg_pair_count": float(np.mean([item["pair_count"] for item in stride_one_results])) if stride_one_results else 0.0,
         "combined_score_weights": SHAPE_SCORE_DEFAULT_WEIGHTS,
-        "top_pairs_by_match_count": sorted(
-            (
-                {
-                    "source_label": item["source_label"],
-                    "target_label": item["target_label"],
-                    "pair_count": item["pair_count"],
-                    "max_score": item["matches"][0]["final_score"] if item["matches"] else 0.0,
-                    "top_matches": item["matches"][:10],
-                }
-                for item in results
-            ),
-            key=lambda x: (x["pair_count"], x["max_score"]),
-            reverse=True,
-        )[:20],
+        "timestep_strides": strides,
+        "summaries_by_stride": summaries_by_stride,
+        "top_pairs_by_match_count": summaries_by_stride.get("1", {}).get("top_pairs_by_match_count", []),
     }
     write_text_atomic(SUMMARY_FILE, json.dumps(summary, indent=2))
     return payload
@@ -1055,6 +1099,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--clear-cache", action="store_true", help="Delete cache and results before running.")
     parser.add_argument("--library-path", help="Extra LD_LIBRARY_PATH entries for fv99.")
     parser.add_argument("--top", type=int, default=TOP_N_SHEETS, help="Top N sheets per timestep.")
+    parser.add_argument("--max-stride", type=int, default=SANKEY_TIMESTEP_STRIDE_MAX, help="Compute direct timestep pairs for strides 1..N.")
     args = parser.parse_args(argv)
 
     TOP_N_SHEETS = args.top
@@ -1089,7 +1134,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             bounds = cached
 
-    compare_all_pairs(timesteps, args.workers, bounds, library_path, rerun_cache=False)
+    compare_all_pairs(timesteps, args.workers, bounds, library_path, rerun_cache=False, max_stride=args.max_stride)
 
     print(f"Wrote matches: {MATCHES_FILE}")
     print(f"Wrote summary: {SUMMARY_FILE}")

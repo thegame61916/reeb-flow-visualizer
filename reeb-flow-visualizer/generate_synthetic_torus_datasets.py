@@ -27,7 +27,7 @@ from typing import Callable, Iterable
 
 # ================= USER SETTINGS =================
 
-DATASET_ROOT = Path("/media/mohit/8tbh/postdoc/timeVaryingReebFeatures")
+DATASET_ROOT = Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets")
 GROWING_DATASET_NAME = "torusGrowing"
 MOVING_DATASET_NAME = "torusMoving"
 

@@ -25,7 +25,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-DEFAULT_LOCAL_ROOT = Path("/media/mohit/4TB_kingston_tufA2/hpc/datasets")
+DEFAULT_LOCAL_ROOT = Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets")
 DEFAULT_REMOTE_HOST = "x_mohsh@tetralith.nsc.liu.se"
 DEFAULT_REMOTE_DATASETS_ROOT = "/proj/reeb-space-storage/users/x_mohsh/datasets"
 DEFAULT_PERTURB_SCRIPT = Path(

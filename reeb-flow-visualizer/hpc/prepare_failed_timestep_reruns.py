@@ -110,7 +110,7 @@ def upload_files(remote_host: str, remote_output_root: str, dataset: str, files:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("datasets", nargs="*", help="Dataset names. Defaults to every directory under --local-root.")
-    parser.add_argument("--local-root", default="/media/mohit/4TB_kingston_tufA2/hpc/datasets")
+    parser.add_argument("--local-root", default="/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets")
     parser.add_argument("--remote-host", default="x_mohsh@tetralith.nsc.liu.se")
     parser.add_argument("--remote-output-root", default="/proj/reeb-space-storage/users/x_mohsh/hpc_outputs/datasets")
     parser.add_argument("--no-upload", action="store_true", help="Only write local rerun lists; do not rsync to Tetralith.")
