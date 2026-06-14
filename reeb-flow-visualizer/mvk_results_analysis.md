@@ -116,27 +116,28 @@ not at its maximum.
 
 Domain/range target disagreement then explains why the two rankings differ. It
 asks whether the target chosen by range shape and the target chosen by domain
-overlap are the same for a given source sheet. The strongest disagreement
-summaries include transition-window examples:
+overlap are the same for a given source sheet. The disagreement score is now
+computed from normalized range and domain losses, so it is useful as a bounded
+relative ranking. Strong transition-window examples include:
 
 | Dataset | Interval | Agreement fraction | Strongest disagreement score |
 |---|---:|---:|---:|
-| MVK_s1 | `1240->1244` | `0.050` | `40.15` |
-| MVK_s1 | `1220->1240` | `0.105` | `35.91` |
-| MVK_s1 | `1200->1220` | `0.105` | `22.73` |
-| MVK_s2 | `1244->1248` | `0.050` | `44.34` |
-| MVK_s2 | `1220->1240` | `0.100` | `43.85` |
-| MVK_s2 | `1248->1252` | `0.100` | `42.72` |
+| MVK_s1 | `1240->1244` | `0.050` | `0.737` |
+| MVK_s1 | `1220->1240` | `0.105` | `0.732` |
+| MVK_s1 | `1280->1300` | `0.000` | `0.369` |
+| MVK_s2 | `1244->1248` | `0.050` | `0.801` |
+| MVK_s2 | `1220->1240` | `0.100` | `0.798` |
+| MVK_s2 | `1248->1252` | `0.100` | `0.755` |
 
 Insight from disagreement: in the transition window, range and domain often
 prefer different targets for the same source sheet. This suggests that a sheet
 can keep a similar range-space footprint while its supporting vertices move, or
 that the same vertices can start supporting a different range-space feature.
 
-Recommendation: keep the target-disagreement table/detail view because it gives
-actionable source/target examples for figures. De-emphasize only the aggregate
-Spearman correlation and unnormalized complementarity magnitude, because those
-summaries are harder to interpret than the selected source/target examples.
+Recommendation: keep the target-disagreement graph/detail view because it gives
+actionable source/target examples for figures. De-emphasize the aggregate
+Spearman correlation, which is harder to interpret than the selected
+source/target examples.
 
 ## Metric Usefulness
 
@@ -194,5 +195,4 @@ Useful but secondary:
 De-emphasize or remove from the main analysis flow:
 
 - Domain/range Spearman correlation.
-- Unnormalized complementarity magnitude.
 - Low-origin scalar filtering for MVK; it did not change the range conclusion.

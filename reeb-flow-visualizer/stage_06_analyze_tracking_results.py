@@ -195,6 +195,12 @@ def get_overlap_metrics(match: dict) -> dict[str, float]:
     }
 
 
+def normalized_overlap_max_score(match: dict | None) -> float:
+    if match is None:
+        return 0.0
+    return max(0.0, min(1.0, get_overlap_metrics(match)["overlap_max_percent"] / 100.0))
+
+
 def metric_summary_row(
     dataset: str,
     scope: str,
@@ -630,6 +636,10 @@ def collect_sheet_lifetimes(
 ) -> list[dict]:
     rows: list[dict] = []
     node_meta = sheet_lookup(data)
+    timestep_label_by_index = {
+        safe_int(timestep.get("timestep_index")): str(timestep.get("label"))
+        for timestep in data.get("timesteps", [])
+    }
 
     for threshold in thresholds:
         edges = build_edges(data, threshold)
@@ -665,9 +675,8 @@ def collect_sheet_lifetimes(
             areas = [safe_float(sheet.get("area")) for sheet in sheets]
             ranks = [safe_int(sheet.get("rank")) for sheet in sheets]
             timestep_labels = [
-                str(data["timesteps"][node[0]].get("label"))
+                timestep_label_by_index.get(node[0], str(node[0]))
                 for node in nodes
-                if 0 <= node[0] < len(data.get("timesteps", []))
             ]
 
             node_path = [node_key(timestep, sheet_id) for timestep, sheet_id in nodes]
@@ -1054,7 +1063,8 @@ def collect_domain_shape_disagreements(data: dict) -> tuple[list[dict], list[dic
             shape_target = safe_int(shape_best.get("target_sheet_id"))
             overlap_target = safe_int(overlap_best.get("target_sheet_id"))
             shape_score = get_shape_metrics(shape_best)["combined"]
-            overlap_score = get_overlap_metrics(overlap_best)["overlap_max_percent"]
+            overlap_percent = get_overlap_metrics(overlap_best)["overlap_max_percent"]
+            overlap_score = normalized_overlap_max_score(overlap_best)
             if shape_target == overlap_target:
                 agreements += 1
                 continue
@@ -1080,11 +1090,7 @@ def collect_domain_shape_disagreements(data: dict) -> tuple[list[dict], list[dic
                 if shape_for_overlap_target
                 else 0.0
             )
-            overlap_score_for_range_target = (
-                get_overlap_metrics(overlap_for_shape_target)["overlap_max_percent"]
-                if overlap_for_shape_target
-                else 0.0
-            )
+            overlap_score_for_range_target = normalized_overlap_max_score(overlap_for_shape_target)
             shape_loss = max(0.0, shape_score - shape_score_for_domain_target)
             overlap_loss = max(0.0, overlap_score - overlap_score_for_range_target)
             confidence = min(shape_score, overlap_score)
@@ -1100,7 +1106,8 @@ def collect_domain_shape_disagreements(data: dict) -> tuple[list[dict], list[dic
                 "shape_target_sheet_id": shape_target,
                 "overlap_target_sheet_id": overlap_target,
                 "shape_score": shape_score,
-                "overlap_max_percent": overlap_score,
+                "overlap_max_percent": overlap_percent,
+                "overlap_score": overlap_score,
                 "shape_score_for_domain_target": shape_score_for_domain_target,
                 "overlap_score_for_range_target": overlap_score_for_range_target,
                 "shape_loss": shape_loss,

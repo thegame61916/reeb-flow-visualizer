@@ -27,8 +27,6 @@ analyses.
 
 - Domain/range Spearman correlation was removed from the viewer because it did
   not provide a clean paper result in MVK, stilbene, or torus.
-- Unnormalized complementarity magnitude. If this feature stays, normalize the
-  domain percentage to `[0, 1]` and label it as exploratory.
 - `area_ratio` as a main correspondence metric. It has weak agreement with the
   shape-based target, especially for stilbene.
 - `bbox_iou` and `centroid_similarity` as primary metric choices. They are
@@ -43,6 +41,9 @@ analyses.
   optional domain-support inspection.
 
 ## Implementation Note
+
+- Unnormalized complementarity magnitude has been fixed by normalizing the
+  domain percentage to `[0, 1]` before computing domain/range disagreement.
 
 `stage_06_analyze_tracking_results.py` now looks up sheets by `timestep_index`
 instead of list position. Keep this behavior aligned with the browser runtime,

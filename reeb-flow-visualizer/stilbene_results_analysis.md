@@ -110,9 +110,9 @@ top disagreement summaries now compare all 20 source sheets:
 
 | Interval | Compared sources | Agreement fraction | Max disagreement score |
 |---:|---:|---:|---:|
-| `5260->5280` | `20` | `0.000` | `44.53` |
-| `8940->8960` | `20` | `0.050` | `43.92` |
-| `9060->9080` | `20` | `0.050` | `43.14` |
+| `8940->8960` | `20` | `0.050` | `0.881` |
+| `9060->9080` | `20` | `0.050` | `0.852` |
+| `5260->5280` | `20` | `0.000` | `0.845` |
 
 This can support targeted visual inspection. Domain event ranking remains the
 main domain-space result, while disagreement can help choose concrete

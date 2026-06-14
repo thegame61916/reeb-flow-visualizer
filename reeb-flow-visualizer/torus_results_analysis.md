@@ -88,9 +88,9 @@ the synthetic range transition:
 
 | Interval | Compared sources | Agreement fraction | Max disagreement score |
 |---:|---:|---:|---:|
-| `48->49` | `7` | `0.143` | `42.94` |
-| `49->50` | `7` | `0.143` | `42.70` |
-| `41->42` | `11` | `0.091` | `42.32` |
+| `48->49` | `7` | `0.143` | `0.909` |
+| `49->50` | `7` | `0.143` | `0.906` |
+| `41->42` | `11` | `0.091` | `0.894` |
 
 This gives a concrete insight: the synthetic transition is not only a high
 range-event interval; it is also a place where range and domain matching select

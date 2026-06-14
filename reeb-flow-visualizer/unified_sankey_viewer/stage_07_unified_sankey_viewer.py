@@ -679,6 +679,7 @@ def configure_dataset_paths(base_dir: Path) -> None:
     global MATCHES_FILE
     global UNIFIED_VIEWER_DIR
     global TRACKING_DATA_FILE
+    global TRACKING_ANALYSIS_VIEWER_FILE
     global SHEET_IMAGE_DIR
     global FIBER_SURFACE_IMAGE_DIR
     global OVERLAP_FILE
@@ -690,6 +691,7 @@ def configure_dataset_paths(base_dir: Path) -> None:
     MATCHES_FILE = STORAGE_ROOT / "results" / "sheet_shape_matches.json"
     UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
     TRACKING_DATA_FILE = OUTPUT_DIR / "tracking_data.json"
+    TRACKING_ANALYSIS_VIEWER_FILE = OUTPUT_DIR / "tracking_analysis" / "viewer_analysis.json"
     SHEET_IMAGE_DIR = BASE_DIR / "sheetRendering"
     FIBER_SURFACE_IMAGE_DIR = BASE_DIR / "sheetFiberSurfaceImages"
     OVERLAP_FILE = OUTPUT_DIR / "sheet_overlaps.json"
@@ -2566,7 +2568,7 @@ d3.json("data.json").then(data => {
       defaultTheta: quantile(VERTEX_THETA_QUANTILE),
       options: options.length ? options : [0.5],
     };
-    vertexThetaCache.set(id, result);
+    vertexThetaCache.set(cacheId, result);
     return result;
   }
 
@@ -2677,7 +2679,7 @@ d3.json("data.json").then(data => {
   function analysisCacheKey(kind, panel, thetaOverride = null) {
     ensurePanelAnalysis(panel);
     const theta = thetaOverride === null || thetaOverride === undefined ? panel.analysis.theta : thetaOverride;
-    return `${kind}:${analysisMetricKey(panel)}:${thresholdKey(theta)}`;
+    return `${kind}:stride${selectedStride()}:${analysisMetricKey(panel)}:${thresholdKey(theta)}`;
   }
 
   function analysisMetricScale(panel) {
@@ -2775,6 +2777,10 @@ d3.json("data.json").then(data => {
     return Number.isFinite(value) ? value : 0;
   }
 
+  function normalizedOverlapMaxScore(match) {
+    return clamp(overlapMaxPercent(match) / 100, 0, 1);
+  }
+
   function bestOverlapMatch(matches) {
     let best = null;
     let bestScore = Number.NEGATIVE_INFINITY;
@@ -2837,7 +2843,8 @@ d3.json("data.json").then(data => {
         const shapeTarget = Number(shapeBest.target_sheet_id);
         const overlapTarget = Number(overlapBest.target_sheet_id);
         const shapeScore = analysisCombinedScore(shapeBest);
-        const overlapScore = overlapMaxPercent(overlapBest);
+        const overlapPercent = overlapMaxPercent(overlapBest);
+        const overlapScore = normalizedOverlapMaxScore(overlapBest);
         if (shapeTarget === overlapTarget) {
           agreements += 1;
           continue;
@@ -2846,7 +2853,7 @@ d3.json("data.json").then(data => {
         const shapeForDomainTarget = shapeMatches.find(match => Number(match.target_sheet_id) === overlapTarget) || null;
         const overlapForRangeTarget = (overlapMatches || []).find(match => Number(match.target_sheet_id) === shapeTarget) || null;
         const shapeScoreForDomainTarget = shapeForDomainTarget ? analysisCombinedScore(shapeForDomainTarget) : 0;
-        const overlapScoreForRangeTarget = overlapForRangeTarget ? overlapMaxPercent(overlapForRangeTarget) : 0;
+        const overlapScoreForRangeTarget = overlapForRangeTarget ? normalizedOverlapMaxScore(overlapForRangeTarget) : 0;
         const shapeLoss = Math.max(0, shapeScore - shapeScoreForDomainTarget);
         const overlapLoss = Math.max(0, overlapScore - overlapScoreForRangeTarget);
         const confidence = Math.min(shapeScore, overlapScore);
@@ -2861,7 +2868,8 @@ d3.json("data.json").then(data => {
           shape_target_sheet_id: shapeTarget,
           overlap_target_sheet_id: overlapTarget,
           shape_score: shapeScore,
-          overlap_max_percent: overlapScore,
+          overlap_max_percent: overlapPercent,
+          overlap_score: overlapScore,
           shape_score_for_domain_target: shapeScoreForDomainTarget,
           overlap_score_for_range_target: overlapScoreForRangeTarget,
           shape_loss: shapeLoss,
@@ -4172,8 +4180,8 @@ d3.json("data.json").then(data => {
         <div>Disagreement fraction</div><div>${escapeHtml(formatScore(100 * Number(item.disagreement_fraction || 0)))}%</div>
         <div>Strongest source sheet</div><div>S${escapeHtml(strongest.source_sheet_id ?? "-")}</div>
         <div>Range target</div><div>S${escapeHtml(strongest.shape_target_sheet_id ?? "-")} (${escapeHtml(formatScore(strongest.shape_score))})</div>
-        <div>Domain target</div><div>S${escapeHtml(strongest.overlap_target_sheet_id ?? "-")} (${escapeHtml(formatScore(strongest.overlap_max_percent))})</div>
-        <div>Range / domain loss</div><div>${escapeHtml(formatScore(strongest.shape_loss))} / ${escapeHtml(formatScore(strongest.overlap_loss))}</div>
+        <div>Domain target</div><div>S${escapeHtml(strongest.overlap_target_sheet_id ?? "-")} (${escapeHtml(formatScore(strongest.overlap_max_percent))}%)</div>
+        <div>Range / domain normalized loss</div><div>${escapeHtml(formatScore(strongest.shape_loss))} / ${escapeHtml(formatScore(strongest.overlap_loss))}</div>
       </div>`;
   }
 
@@ -4190,7 +4198,7 @@ d3.json("data.json").then(data => {
       yValue: item => Number(item.max_disagreement_score),
       sort: (a, b) => intervalTimeFs(a) - intervalTimeFs(b),
       xLabel: "time (fs)",
-      yLabel: "max complementarity score",
+      yLabel: "max disagreement score",
       xTickFormat: value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits),
       yTickFormat: value => formatScore(value),
       drawLine: false,
