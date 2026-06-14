@@ -4652,20 +4652,9 @@ d3.json("data.json").then(data => {
         .attr("class", "analysis-subtitle")
         .text("Highest local complementarity intervals");
       renderDisagreementScoreGraph(content, panel, visibleRows);
-
       if (!rankedRows.length) {
         content.append("div").attr("class", "analysis-hint").text("No domain/range complementarity examples were found.");
-        return;
       }
-
-      const list = content.append("div").attr("class", "analysis-list");
-      visibleRows.slice(0, 12).forEach((item, index) => {
-        const strongest = item.strongest_disagreement || {};
-        const row = list.append("button").attr("type", "button").attr("class", "analysis-row");
-        row.append("strong").text(`${index + 1}. ${item.source_label} -> ${item.target_label}: ${item.disagreement_count}/${item.compared_sources} differ`);
-        row.append("span").text(`max score ${formatScore(item.max_disagreement_score)}, strongest S${strongest.source_sheet_id ?? "-"}: range S${strongest.shape_target_sheet_id ?? "-"}, domain S${strongest.overlap_target_sheet_id ?? "-"}`);
-        row.on("click", () => toggleDisagreementGraphSelection(panel, item));
-      });
       return;
     }
   }
