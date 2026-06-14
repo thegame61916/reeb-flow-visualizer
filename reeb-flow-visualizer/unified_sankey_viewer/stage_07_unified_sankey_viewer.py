@@ -8,6 +8,7 @@ import json
 import math
 import shutil
 import time
+import argparse
 from pathlib import Path
 
 from common import (
@@ -20,7 +21,6 @@ from common import (
     SHEET_IMAGE_DIR,
     SHAPE_SCORE_DEFAULT_WEIGHTS,
     SANKEY_TIMESTEP_STRIDE_MAX,
-    TRACKING_ANALYSIS_CORRELATION_WINDOW,
     TRACKING_ANALYSIS_EVENT_SCORE_TERMS,
     TRACKING_ANALYSIS_PREFERRED_THRESHOLD,
     TRACKING_ANALYSIS_THRESHOLDS,
@@ -279,7 +279,7 @@ def load_timestep_cache(viewer_dir: Path) -> tuple[list[dict], float, int, tuple
     max_area = 0.0
     max_vertices = 0
 
-    for data in cache_items:
+    for timestep_index, data in enumerate(cache_items):
         sheets = []
         stem = str(data.get("stem", ""))
         for sheet in data.get("sheets", []):
@@ -305,14 +305,14 @@ def load_timestep_cache(viewer_dir: Path) -> tuple[list[dict], float, int, tuple
 
         timesteps.append(
             {
-                "timestep_index": safe_int(data.get("timestep_index")),
+                "timestep_index": timestep_index,
+                "source_timestep_index": safe_int(data.get("timestep_index")),
                 "label": str(data.get("label", "")),
                 "stem": stem,
                 "sheets": sheets,
             }
         )
 
-    timesteps.sort(key=lambda item: item["timestep_index"])
     return timesteps, max_area, max_vertices, centroid_color_bounds
 
 def load_match_data() -> dict:
@@ -373,12 +373,31 @@ def prepare_data(viewer_dir: Path) -> dict:
         safe_int(item.get("timestep_index")): str(item.get("stem", ""))
         for item in timesteps
     }
+    timestep_index_by_stem = {
+        str(item.get("stem", "")): safe_int(item.get("timestep_index"))
+        for item in timesteps
+        if item.get("stem")
+    }
+    timestep_index_by_label = {
+        str(item.get("label", "")): safe_int(item.get("timestep_index"))
+        for item in timesteps
+        if item.get("label") != ""
+    }
+
+    def canonical_pair_index(pair: dict, side: str) -> int:
+        stem = str(pair.get(f"{side}_stem", ""))
+        if stem and stem in timestep_index_by_stem:
+            return timestep_index_by_stem[stem]
+        label = str(pair.get(f"{side}_label", ""))
+        if label and label in timestep_index_by_label:
+            return timestep_index_by_label[label]
+        return safe_int(pair.get(f"{side}_timestep_index"))
 
     def build_shape_pairs(pairwise_matches):
         built_pairs = []
         for pair in pairwise_matches or []:
-            source_timestep_index = safe_int(pair.get("source_timestep_index"))
-            target_timestep_index = safe_int(pair.get("target_timestep_index"))
+            source_timestep_index = canonical_pair_index(pair, "source")
+            target_timestep_index = canonical_pair_index(pair, "target")
             source_timestep = overlap_timestep_by_index.get(source_timestep_index, {})
             target_timestep = overlap_timestep_by_index.get(target_timestep_index, {})
             matches = []
@@ -555,7 +574,6 @@ def prepare_data(viewer_dir: Path) -> dict:
             "tracking_analysis_top_intervals": TRACKING_ANALYSIS_TOP_INTERVALS,
             "tracking_analysis_top_features": TRACKING_ANALYSIS_TOP_FEATURES,
             "tracking_analysis_top_disagreements": TRACKING_ANALYSIS_TOP_DISAGREEMENTS,
-            "tracking_analysis_correlation_window": TRACKING_ANALYSIS_CORRELATION_WINDOW,
             "tracking_analysis_event_score_terms": list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS),
             "tracking_analysis_event_score_formula": tracking_analysis_event_score_formula_text(),
             "global_area_max": max_area,
@@ -585,9 +603,12 @@ def prepare_data(viewer_dir: Path) -> dict:
     }
 
 
-def write_json_file(data: dict, path: Path) -> Path:
+def write_json_file(data: dict, path: Path, *, compact: bool = False) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, allow_nan=False))
+    if compact:
+        path.write_text(json.dumps(data, separators=(",", ":"), allow_nan=False))
+    else:
+        path.write_text(json.dumps(data, indent=2, allow_nan=False))
     return path
 
 
@@ -595,8 +616,92 @@ def write_tracking_data_json(data: dict) -> Path:
     return write_json_file(data, TRACKING_DATA_FILE)
 
 
+def compact_viewer_match(match: dict) -> dict:
+    compact = {
+        "source_sheet_id": safe_int(match.get("source_sheet_id")),
+        "target_sheet_id": safe_int(match.get("target_sheet_id")),
+        "source_rank": safe_int(match.get("source_rank")),
+        "target_rank": safe_int(match.get("target_rank")),
+        "metrics": match.get("metrics", {}),
+    }
+    return compact
+
+
+def compact_viewer_pair(pair: dict) -> dict:
+    compact = {
+        "source_timestep_index": safe_int(pair.get("source_timestep_index")),
+        "source_label": str(pair.get("source_label", "")),
+        "source_stem": str(pair.get("source_stem", "")),
+        "source_rsijson_file": str(pair.get("source_rsijson_file", "")),
+        "source_rsi_file": str(pair.get("source_rsi_file", "")),
+        "target_timestep_index": safe_int(pair.get("target_timestep_index")),
+        "target_label": str(pair.get("target_label", "")),
+        "target_stem": str(pair.get("target_stem", "")),
+        "target_rsijson_file": str(pair.get("target_rsijson_file", "")),
+        "target_rsi_file": str(pair.get("target_rsi_file", "")),
+        "pair_count": safe_int(pair.get("pair_count")),
+        "matches": [compact_viewer_match(match) for match in pair.get("matches", [])],
+    }
+    if pair.get("global_bounds"):
+        compact["global_bounds"] = pair.get("global_bounds", [])
+    return compact
+
+
+def compact_viewer_data(data: dict) -> dict:
+    compact = {
+        key: value
+        for key, value in data.items()
+        if key not in {"shape_pairs", "overlap_pairs", "shape_pairs_by_stride", "overlap_pairs_by_stride"}
+    }
+    for field in ("shape_pairs_by_stride", "overlap_pairs_by_stride"):
+        by_stride = data.get(field)
+        if isinstance(by_stride, dict):
+            compact[field] = {
+                str(stride): [compact_viewer_pair(pair) for pair in pairs or []]
+                for stride, pairs in by_stride.items()
+            }
+    return compact
+
+
 def write_viewer_data_json(data: dict) -> Path:
-    return write_json_file(data, UNIFIED_VIEWER_DIR / "data.json")
+    return write_json_file(
+        compact_viewer_data(data),
+        UNIFIED_VIEWER_DIR / "data.json",
+        compact=True,
+    )
+
+
+def configure_dataset_paths(base_dir: Path) -> None:
+    global BASE_DIR
+    global OUTPUT_DIR
+    global STORAGE_ROOT
+    global TIMESTEP_CACHE_DIR
+    global MATCHES_FILE
+    global UNIFIED_VIEWER_DIR
+    global TRACKING_DATA_FILE
+    global SHEET_IMAGE_DIR
+    global FIBER_SURFACE_IMAGE_DIR
+    global OVERLAP_FILE
+
+    BASE_DIR = base_dir
+    OUTPUT_DIR = BASE_DIR / "sankey"
+    STORAGE_ROOT = BASE_DIR / "compareSheetShapesCache"
+    TIMESTEP_CACHE_DIR = STORAGE_ROOT / "cache" / "timesteps"
+    MATCHES_FILE = STORAGE_ROOT / "results" / "sheet_shape_matches.json"
+    UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
+    TRACKING_DATA_FILE = OUTPUT_DIR / "tracking_data.json"
+    SHEET_IMAGE_DIR = BASE_DIR / "sheetRendering"
+    FIBER_SURFACE_IMAGE_DIR = BASE_DIR / "sheetFiberSurfaceImages"
+    OVERLAP_FILE = OUTPUT_DIR / "sheet_overlaps.json"
+
+
+def dataset_arg_path(value: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path.resolve()
+
+
 
 
 def apply_current_tracking_analysis_meta(data: dict) -> dict:
@@ -626,7 +731,6 @@ def apply_current_tracking_analysis_meta(data: dict) -> dict:
     meta["tracking_analysis_top_intervals"] = TRACKING_ANALYSIS_TOP_INTERVALS
     meta["tracking_analysis_top_features"] = TRACKING_ANALYSIS_TOP_FEATURES
     meta["tracking_analysis_top_disagreements"] = TRACKING_ANALYSIS_TOP_DISAGREEMENTS
-    meta["tracking_analysis_correlation_window"] = TRACKING_ANALYSIS_CORRELATION_WINDOW
     meta["tracking_analysis_event_score_terms"] = list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS)
     meta["tracking_analysis_event_score_formula"] = tracking_analysis_event_score_formula_text()
     return data
@@ -1775,7 +1879,6 @@ d3.json("data.json").then(data => {
   const ANALYSIS_DOT_RADIUS = 5.6;
   const ANALYSIS_DOT_SELECTED_RADIUS = 7.0;
   const ANALYSIS_DOT_HIT_RADIUS = 12;
-  const DOMAIN_RANGE_CORRELATION_WINDOW = Math.max(3, Math.floor(Number(data.meta?.tracking_analysis_correlation_window) || 9));
   const TRACK_GRAPH_GROUP_PIXEL_SIZE = 18;
 
   const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 });
@@ -2505,12 +2608,7 @@ d3.json("data.json").then(data => {
         disagreementGraphZoomScale: 1,
         disagreementGraphFocus: null,
         disagreementGraphKey: "",
-        correlationGraphHeight: INTERVAL_GRAPH_HEIGHT_DEFAULT,
-        correlationGraphZoomScale: 1,
-        correlationGraphFocus: null,
-        correlationGraphKey: "",
         selectedDisagreementKeys: [],
-        selectedCorrelationKeys: [],
         selectedDomainStabilityKeys: [],
         selectedIntervalKeys: [],
         selectedTrackKeys: [],
@@ -2541,12 +2639,7 @@ d3.json("data.json").then(data => {
     panel.analysis.disagreementGraphZoomScale = Number.isFinite(Number(panel.analysis.disagreementGraphZoomScale))
       ? Number(panel.analysis.disagreementGraphZoomScale)
       : 1;
-    panel.analysis.correlationGraphHeight = clampIntervalGraphHeight(panel.analysis.correlationGraphHeight);
-    panel.analysis.correlationGraphZoomScale = Number.isFinite(Number(panel.analysis.correlationGraphZoomScale))
-      ? Number(panel.analysis.correlationGraphZoomScale)
-      : 1;
     if (!Array.isArray(panel.analysis.selectedDisagreementKeys)) panel.analysis.selectedDisagreementKeys = [];
-    if (!Array.isArray(panel.analysis.selectedCorrelationKeys)) panel.analysis.selectedCorrelationKeys = [];
     if (!Array.isArray(panel.analysis.selectedDomainStabilityKeys)) panel.analysis.selectedDomainStabilityKeys = [];
     if (!Array.isArray(panel.analysis.selectedIntervalKeys)) {
       panel.analysis.selectedIntervalKeys = Array.isArray(panel.analysis.selectedIntervals)
@@ -2841,175 +2934,6 @@ d3.json("data.json").then(data => {
     };
     analysisRuntimeCache.set(cacheKey, result);
     return result;
-  }
-
-  function averageRanks(values) {
-    const sorted = values
-      .map((value, index) => ({ value: Number(value), index }))
-      .filter(item => Number.isFinite(item.value))
-      .sort((a, b) => a.value - b.value || a.index - b.index);
-    const ranks = new Array(values.length).fill(Number.NaN);
-    let i = 0;
-    while (i < sorted.length) {
-      let j = i + 1;
-      while (j < sorted.length && sorted[j].value === sorted[i].value) j += 1;
-      const rank = (i + 1 + j) / 2;
-      for (let k = i; k < j; k += 1) ranks[sorted[k].index] = rank;
-      i = j;
-    }
-    return ranks;
-  }
-
-  function spearmanCorrelation(xValues, yValues) {
-    const pairs = [];
-    for (let i = 0; i < Math.min(xValues.length, yValues.length); i += 1) {
-      const x = Number(xValues[i]);
-      const y = Number(yValues[i]);
-      if (Number.isFinite(x) && Number.isFinite(y)) pairs.push({ x, y });
-    }
-    if (pairs.length < 3) return null;
-    const xRanks = averageRanks(pairs.map(item => item.x));
-    const yRanks = averageRanks(pairs.map(item => item.y));
-    const meanX = meanNumber(xRanks);
-    const meanY = meanNumber(yRanks);
-    let numerator = 0;
-    let denomX = 0;
-    let denomY = 0;
-    for (let i = 0; i < pairs.length; i += 1) {
-      const dx = xRanks[i] - meanX;
-      const dy = yRanks[i] - meanY;
-      numerator += dx * dy;
-      denomX += dx * dx;
-      denomY += dy * dy;
-    }
-    if (denomX <= 0 || denomY <= 0) return null;
-    return numerator / Math.sqrt(denomX * denomY);
-  }
-
-  function bestScoreForMatches(matches, scoreFn) {
-    let best = 0;
-    for (const match of matches || []) {
-      const score = Number(scoreFn(match));
-      if (Number.isFinite(score) && score > best) best = score;
-    }
-    return best;
-  }
-
-  function eventScoreForPair(pair, theta, scoreFn) {
-    const sourceIndex = Number(pair.source_timestep_index);
-    const targetIndex = Number(pair.target_timestep_index);
-    if (!Number.isFinite(sourceIndex) || !Number.isFinite(targetIndex)) return null;
-
-    const sourceSheets = timestepByIndex.get(sourceIndex)?.sheets || [];
-    const targetSheets = timestepByIndex.get(targetIndex)?.sheets || [];
-    const bySource = groupMatchesByField(pair.matches || [], "source_sheet_id");
-    const byTarget = groupMatchesByField(pair.matches || [], "target_sheet_id");
-    const bestSourceScores = sourceSheets.map(sheet => bestScoreForMatches(bySource.get(Number(sheet.sheet_id)) || [], scoreFn));
-    const bestTargetScores = targetSheets.map(sheet => bestScoreForMatches(byTarget.get(Number(sheet.sheet_id)) || [], scoreFn));
-    const sourceWeakCount = bestSourceScores.filter(value => value < theta).length;
-    const targetWeakCount = bestTargetScores.filter(value => value < theta).length;
-    let possibleSplits = 0;
-    for (const matches of bySource.values()) {
-      if ((matches || []).filter(match => Number(scoreFn(match)) >= theta).length >= 2) possibleSplits += 1;
-    }
-    let possibleMerges = 0;
-    for (const matches of byTarget.values()) {
-      if ((matches || []).filter(match => Number(scoreFn(match)) >= theta).length >= 2) possibleMerges += 1;
-    }
-    const meanBestScore = meanNumber(bestSourceScores);
-    const components = {
-      source_weak_count: sourceWeakCount,
-      target_weak_count: targetWeakCount,
-      possible_splits: possibleSplits,
-      possible_merges: possibleMerges,
-      continuation_gap_source_count: (1 - meanBestScore) * Math.max(sourceSheets.length, 1),
-    };
-    return {
-      source_timestep_index: sourceIndex,
-      target_timestep_index: targetIndex,
-      source_label: pair.source_label,
-      target_label: pair.target_label,
-      mean_best_score: meanBestScore,
-      event_score: analysisEventScore(components),
-      ...components,
-    };
-  }
-
-  function domainRangeEventScoreSeries(theta) {
-    const cacheKey = `domain-range-event-score-series:stride${selectedStride()}:${thresholdKey(theta)}`;
-    if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
-    const rows = [];
-    for (const shapePair of pairsForMode("shape")) {
-      const sourceIndex = Number(shapePair.source_timestep_index);
-      const targetIndex = Number(shapePair.target_timestep_index);
-      const overlapPair = overlapPairLookup.get(`${sourceIndex}:${targetIndex}`);
-      if (!overlapPair) continue;
-      const rangeEvent = eventScoreForPair(shapePair, theta, match => analysisCombinedScore(match));
-      const domainEvent = eventScoreForPair(overlapPair, theta, match => overlapMaxPercent(match) / 100);
-      if (!rangeEvent || !domainEvent) continue;
-      rows.push({
-        id: `domain-range-event:${sourceIndex}:${targetIndex}`,
-        source_timestep_index: sourceIndex,
-        target_timestep_index: targetIndex,
-        source_label: shapePair.source_label,
-        target_label: shapePair.target_label,
-        pair_label: `${shapePair.source_label || sourceIndex}->${shapePair.target_label || targetIndex}`,
-        range_event_score: rangeEvent.event_score,
-        domain_event_score: domainEvent.event_score,
-        range_mean_best_score: rangeEvent.mean_best_score,
-        domain_mean_best_score: domainEvent.mean_best_score,
-      });
-    }
-    rows.sort((a, b) => Number(a.source_timestep_index) - Number(b.source_timestep_index) || Number(a.target_timestep_index) - Number(b.target_timestep_index));
-    analysisRuntimeCache.set(cacheKey, rows);
-    return rows;
-  }
-
-  function domainRangeSpearmanRows(panel) {
-    const theta = panelTheta(panel);
-    const windowSizeRaw = Math.max(3, Math.floor(Number(DOMAIN_RANGE_CORRELATION_WINDOW) || 9));
-    const windowSize = windowSizeRaw % 2 === 0 ? windowSizeRaw + 1 : windowSizeRaw;
-    const cacheKey = `domain-range-spearman:stride${selectedStride()}:${thresholdKey(theta)}:${windowSize}`;
-    if (analysisRuntimeCache.has(cacheKey)) return analysisRuntimeCache.get(cacheKey);
-    const series = domainRangeEventScoreSeries(theta);
-    const rows = [];
-    if (series.length >= 3) {
-      const half = Math.floor(windowSize / 2);
-      for (let i = 0; i < series.length; i += 1) {
-        let start = Math.max(0, i - half);
-        let end = Math.min(series.length, i + half + 1);
-        if (end - start < Math.min(windowSize, series.length)) {
-          if (start === 0) end = Math.min(series.length, start + Math.min(windowSize, series.length));
-          if (end === series.length) start = Math.max(0, end - Math.min(windowSize, series.length));
-        }
-        const windowRows = series.slice(start, end);
-        const rho = spearmanCorrelation(
-          windowRows.map(item => item.range_event_score),
-          windowRows.map(item => item.domain_event_score),
-        );
-        if (!Number.isFinite(Number(rho))) continue;
-        const center = series[i];
-        const first = windowRows[0];
-        const last = windowRows[windowRows.length - 1];
-        rows.push({
-          id: `domain-range-spearman:${thresholdKey(theta)}:${center.source_timestep_index}:${center.target_timestep_index}`,
-          source_timestep_index: center.source_timestep_index,
-          target_timestep_index: center.target_timestep_index,
-          source_label: center.source_label,
-          target_label: center.target_label,
-          window_start_timestep_index: first.source_timestep_index,
-          window_end_timestep_index: last.target_timestep_index,
-          window_start_label: first.source_label,
-          window_end_label: last.target_label,
-          window_count: windowRows.length,
-          spearman_rho: rho,
-          mean_range_event_score: meanNumber(windowRows.map(item => item.range_event_score)),
-          mean_domain_event_score: meanNumber(windowRows.map(item => item.domain_event_score)),
-        });
-      }
-    }
-    analysisRuntimeCache.set(cacheKey, rows);
-    return rows;
   }
 
   function computeRuntimeIntervals(panel, thetaOverride = null) {
@@ -4128,7 +4052,6 @@ d3.json("data.json").then(data => {
     panel.analysis.trackChooserGroupKey = "";
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
-    panel.analysis.selectedCorrelationKeys = [];
     const selected = panel.analysis.selectedDomainStabilityKeys || [];
     const alreadySelected = selected.includes(key);
     panel.analysis.selectedDomainStabilityKeys = alreadySelected
@@ -4230,7 +4153,6 @@ d3.json("data.json").then(data => {
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedTrackKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
-    panel.analysis.selectedCorrelationKeys = [];
     panel.analysis.selectedDisagreementKeys = alreadySelected ? [] : [key];
     panel.analysis.highlight = aggregateSelectedDisagreementHighlight(panel);
     if (!alreadySelected) queueAnalysisFocusPulse(panel, payload);
@@ -4277,102 +4199,6 @@ d3.json("data.json").then(data => {
       aggregateHighlight: aggregateSelectedDisagreementHighlight,
       onClick: toggleDisagreementGraphSelection,
       resizeTitle: "Drag to resize domain/range complementarity plot"
-    });
-  }
-
-  function correlationSummaryKey(item) {
-    return String(item?.id || `domain_range_spearman:${Number(item?.source_timestep_index)}:${Number(item?.target_timestep_index)}`);
-  }
-
-  function correlationHighlightPayload(item) {
-    return {
-      id: correlationSummaryKey(item),
-      correlationKey: correlationSummaryKey(item),
-      label: "Domain/range Spearman window",
-      nodes: [],
-      links: [],
-      start: Number(item?.window_start_timestep_index ?? item?.source_timestep_index),
-      end: Number(item?.window_end_timestep_index ?? item?.target_timestep_index),
-    };
-  }
-
-  function selectedCorrelationKeySet(panel) {
-    ensurePanelAnalysis(panel);
-    return new Set((panel.analysis.selectedCorrelationKeys || []).filter(Boolean));
-  }
-
-  function aggregateSelectedCorrelationHighlight(panel) {
-    ensurePanelAnalysis(panel);
-    const selectedKeys = selectedCorrelationKeySet(panel);
-    if (!selectedKeys.size) return null;
-    const selected = domainRangeSpearmanRows(panel)
-      .filter(item => selectedKeys.has(correlationSummaryKey(item)))
-      .map(correlationHighlightPayload);
-    if (!selected.length) return null;
-    return {
-      ...combinedHighlight(selected, "Selected domain/range Spearman window"),
-      id: "selected-domain-range-spearman",
-      correlationKeys: selected.map(item => item.correlationKey).filter(Boolean),
-    };
-  }
-
-  function toggleCorrelationGraphSelection(panel, item) {
-    ensurePanelAnalysis(panel);
-    const payload = correlationHighlightPayload(item);
-    const key = payload.correlationKey;
-    if (!key) return;
-    const selected = panel.analysis.selectedCorrelationKeys || [];
-    const alreadySelected = selected.includes(key);
-    panel.analysis.selectedIntervalKeys = [];
-    panel.analysis.selectedTrackKeys = [];
-    panel.analysis.trackChooserGroupKey = "";
-    panel.analysis.selectedDisagreementKeys = [];
-    panel.analysis.selectedDomainStabilityKeys = [];
-    panel.analysis.selectedCorrelationKeys = alreadySelected ? [] : [key];
-    panel.analysis.highlight = aggregateSelectedCorrelationHighlight(panel);
-    if (!alreadySelected) queueAnalysisFocusPulse(panel, payload);
-    expandRangesForHighlight(panel.analysis.highlight);
-    renderAll();
-  }
-
-  function correlationGraphTooltip(item) {
-    return `
-      <strong>Window ${escapeHtml(item.window_start_label || item.window_start_timestep_index)} -> ${escapeHtml(item.window_end_label || item.window_end_timestep_index)}</strong>
-      <div class="tooltip-grid" style="margin-top:8px;">
-        <div>Center interval</div><div>${escapeHtml(intervalTimestepPrimary(item, "source"))} -> ${escapeHtml(intervalTimestepPrimary(item, "target"))}</div>
-        <div>Time</div><div>${escapeHtml(formatIntervalFs(intervalTimeFs(item)))}</div>
-        <div>Spearman rho</div><div>${escapeHtml(formatScore(item.spearman_rho))}</div>
-        <div>Window intervals</div><div>${escapeHtml(item.window_count)}</div>
-        <div>Mean range event score</div><div>${escapeHtml(formatScore(item.mean_range_event_score))}</div>
-        <div>Mean domain event score</div><div>${escapeHtml(formatScore(item.mean_domain_event_score))}</div>
-      </div>`;
-  }
-
-  function renderCorrelationGraph(container, panel, rows) {
-    renderAnalysisPointGraph(container, panel, rows, {
-      id: "domain-range-spearman",
-      heightKey: "correlationGraphHeight",
-      zoomKey: "correlationGraphZoomScale",
-      focusKey: "correlationGraphFocus",
-      graphKey: "correlationGraphKey",
-      selectedKeysKey: "selectedCorrelationKeys",
-      keyFn: correlationSummaryKey,
-      stateKey: panel => `domain-range-spearman:${thresholdKey(panelTheta(panel))}:${DOMAIN_RANGE_CORRELATION_WINDOW}`,
-      xValue: intervalTimeFs,
-      yValue: item => Number(item.spearman_rho),
-      sort: (a, b) => intervalTimeFs(a) - intervalTimeFs(b),
-      xLabel: "time (fs)",
-      yLabel: "local Spearman rho",
-      xTickFormat: value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits),
-      yTickFormat: value => formatScore(value),
-      yDomain: () => [-1, 1],
-      ySingleValuePad: 0.25,
-      drawLine: true,
-      tooltip: correlationGraphTooltip,
-      selectedKeySet: selectedCorrelationKeySet,
-      aggregateHighlight: aggregateSelectedCorrelationHighlight,
-      onClick: toggleCorrelationGraphSelection,
-      resizeTitle: "Drag to resize domain/range correlation plot"
     });
   }
 
@@ -4477,7 +4303,6 @@ d3.json("data.json").then(data => {
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
-    panel.analysis.selectedCorrelationKeys = [];
     panel.analysis.trackChooserGroupKey = "";
     panel.analysis.selectedTrackKeys = [...new Set(tracks.map(trackKeyFromItem).filter(Boolean))];
     panel.analysis.highlight = aggregateSelectedTrackHighlight(panel);
@@ -4495,7 +4320,6 @@ d3.json("data.json").then(data => {
     panel.analysis.trackChooserGroupKey = "";
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
-    panel.analysis.selectedCorrelationKeys = [];
     const selected = panel.analysis.selectedIntervalKeys || [];
     const alreadySelected = selected.includes(key);
     panel.analysis.selectedIntervalKeys = alreadySelected
@@ -4515,7 +4339,6 @@ d3.json("data.json").then(data => {
     panel.analysis.selectedIntervalKeys = [];
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
-    panel.analysis.selectedCorrelationKeys = [];
     const selected = panel.analysis.selectedTrackKeys || [];
     const alreadySelected = selected.includes(key);
     panel.analysis.selectedTrackKeys = alreadySelected
@@ -4566,7 +4389,6 @@ d3.json("data.json").then(data => {
     panel.analysis.trackChooserGroupKey = "";
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
-    panel.analysis.selectedCorrelationKeys = [];
     panel.analysis.highlight = null;
     if (state.analysisFocusPulse?.panelId === panel.id) state.analysisFocusPulse = null;
   }
@@ -4578,7 +4400,6 @@ d3.json("data.json").then(data => {
     panel.analysis.trackChooserGroupKey = "";
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
-    panel.analysis.selectedCorrelationKeys = [];
     state.analysisFocusPulse = null;
     panel.analysis.highlight = highlight;
     if (focusRange && highlight && Number.isFinite(Number(highlight.start)) && Number.isFinite(Number(highlight.end))) {
@@ -4600,7 +4421,6 @@ d3.json("data.json").then(data => {
     panel.analysis.trackChooserGroupKey = "";
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
-    panel.analysis.selectedCorrelationKeys = [];
     state.analysisFocusPulse = null;
     panel.analysis.highlight = null;
     renderAll();
@@ -4641,7 +4461,6 @@ d3.json("data.json").then(data => {
       panel.analysis.selectedTrackKeys = [];
       panel.analysis.selectedDisagreementKeys = [];
       panel.analysis.selectedDomainStabilityKeys = [];
-      panel.analysis.selectedCorrelationKeys = [];
       state.analysisFocusPulse = null;
       panel.analysis.highlight = null;
       renderAll();
@@ -4680,13 +4499,11 @@ d3.json("data.json").then(data => {
             panel.analysis.trackChooserGroupKey = "";
             if (id !== "disagreement") {
               panel.analysis.selectedDisagreementKeys = [];
-              panel.analysis.selectedCorrelationKeys = [];
             }
             if (id === "disagreement") {
               panel.analysis.selectedIntervalKeys = [];
               panel.analysis.selectedTrackKeys = [];
               panel.analysis.selectedDomainStabilityKeys = [];
-              panel.analysis.selectedCorrelationKeys = [];
               panel.analysis.highlight = null;
             }
             state.analysisFocusPulse = null;
@@ -4797,7 +4614,6 @@ d3.json("data.json").then(data => {
             panel.analysis.trackChooserGroupKey = "";
             panel.analysis.selectedDisagreementKeys = [];
             panel.analysis.selectedDomainStabilityKeys = [];
-            panel.analysis.selectedCorrelationKeys = [];
             state.analysisFocusPulse = null;
             panel.analysis.highlight = null;
             renderAll();
@@ -4832,20 +4648,10 @@ d3.json("data.json").then(data => {
           false
         ));
 
-      const correlationRows = domainRangeSpearmanRows(panel);
-      content.append("div")
-        .attr("class", "analysis-subtitle")
-        .text(`Sliding-window Spearman correlation, ${DOMAIN_RANGE_CORRELATION_WINDOW} intervals`);
-      renderCorrelationGraph(content, panel, correlationRows);
-
       content.append("div")
         .attr("class", "analysis-subtitle")
         .text("Highest local complementarity intervals");
       renderDisagreementScoreGraph(content, panel, visibleRows);
-
-      if (!correlationRows.length) {
-        content.append("div").attr("class", "analysis-hint").text("No local domain/range Spearman values could be computed for this theta.");
-      }
 
       if (!rankedRows.length) {
         content.append("div").attr("class", "analysis-hint").text("No domain/range complementarity examples were found.");
@@ -6734,7 +6540,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       metricId: "shape_iou",
       threshold: 0,
       shapeWeights: cloneDefaultShapeWeights(),
-      analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], selectedTrackKeys: [], selectedDisagreementKeys: [], selectedDomainStabilityKeys: [], selectedCorrelationKeys: [], trackChooserGroupKey: "", highlight: null } : null,
+      analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], selectedTrackKeys: [], selectedDisagreementKeys: [], selectedDomainStabilityKeys: [], trackChooserGroupKey: "", highlight: null } : null,
       panelHeight: clampPanelHeight(activePanel?.panelHeight ?? PANEL_HEIGHT_DEFAULT)
     });
     renderAll();
@@ -6806,11 +6612,11 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     return path
 
 
-def build_unified_sankey_viewer_stage() -> None:
+def build_unified_sankey_viewer_stage(*, rebuild_data: bool = False) -> None:
     if not MATCHES_FILE.exists():
         raise FileNotFoundError(f"Expected match results at {MATCHES_FILE}")
 
-    if not TRACKING_DATA_FILE.exists():
+    if rebuild_data or not TRACKING_DATA_FILE.exists():
         build_unified_sankey_data_stage()
 
     if UNIFIED_VIEWER_DIR.exists():
@@ -6836,8 +6642,29 @@ def build_unified_sankey_viewer_stage() -> None:
     print("  http://localhost:8000")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build the unified Sankey dashboard for one dataset."
+    )
+    parser.add_argument(
+        "--base-dir",
+        type=dataset_arg_path,
+        default=None,
+        help="Dataset base directory. Defaults to common.BASE_DIR.",
+    )
+    parser.add_argument(
+        "--rebuild-data",
+        action="store_true",
+        help="Regenerate sankey/tracking_data.json before writing viewer assets.",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
-    build_unified_sankey_viewer_stage()
+    args = parse_args()
+    if args.base_dir is not None:
+        configure_dataset_paths(args.base_dir)
+    build_unified_sankey_viewer_stage(rebuild_data=args.rebuild_data)
     return 0
 
 

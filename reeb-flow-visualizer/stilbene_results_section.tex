@@ -1,0 +1,107 @@
+\section{Stilbene Case Study: Long Molecular Sheet Evolution}
+\label{sec:results-stilbene}
+
+The stilbene dataset provides a larger molecular trajectory for testing whether
+Reeb-space sheet tracking remains useful beyond the MVK transition case. We use
+the same top-20 sheet selection and range-space shape-IoU correspondence score.
+The strongest results are interval-level range events and long-lived sheet
+families.
+
+\subsection{Range-Space Event Intervals}
+
+\begin{table}[t]
+  \centering
+  \caption{Important stilbene intervals identified by range-space Reeb-sheet
+  tracking with threshold \(\theta=0.5\).}
+  \label{tab:stilbene-events}
+  \begin{tabular}{lrrrl}
+    \toprule
+    Interval & Score & Mean best & Weak source/target & Observation \\
+    \midrule
+    11915--11920 & 54.49 & 0.276 & 20/20 & strongest range reconfiguration \\
+    11920--11925 & 53.44 & 0.328 & 20/20 & continuation of late event \\
+    9380--9400 & 35.94 & 0.478 & 13/12 & earlier secondary event \\
+    9660--9680 & 28.99 & 0.550 & 9/9 & secondary local reconfiguration \\
+    11910--11915 & 28.13 & 0.494 & 9/9 & onset of late event \\
+    2420--2440 & 27.65 & 0.518 & 9/9 & earlier secondary event \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+After correcting duplicate timestep indices in the generated stilbene viewer
+data, the dominant range-space event occurs at \(11915\)--\(11920\), followed by
+\(11920\)--\(11925\). Unlike MVK, we do not currently tie these intervals to an
+external application-level transition label; instead, they demonstrate that the
+tracking pipeline identifies sheet reconfiguration intervals in a longer
+molecular sequence.
+
+\subsection{Long-Lived Feature Families}
+
+The event intervals coexist with long-lived sheet tracks. The longest
+threshold-\(0.5\) tracks include sheet \(86\rightarrow6270\) over labels
+\(2100\)--\(5340\), with length 163 and mean continuation score 0.860; sheet
+\(38\rightarrow19239\) over labels \(9400\)--\(11255\), with length 162 and mean
+score 0.844; and sheet \(19\rightarrow53844\) over labels \(5540\)--\(8700\),
+with length 159 and mean score 0.916. These tracks show that prominent
+range-space sheets can remain coherent over long portions of the stilbene
+trajectory even when short intervals exhibit strong reconfiguration.
+
+\subsection{Stride And Threshold Sensitivity}
+
+The \(11915\)--\(11920\) event is the top event for thresholds
+\(\theta=0.3\) through \(\theta=0.7\). The sampling-stride check also preserves
+the same late event: the top intervals at strides 1, 2, 3, and 4 are
+\(11915\)--\(11920\), \(11910\)--\(11920\), \(11905\)--\(11920\), and
+\(11900\)--\(11920\), respectively. Thus the late stilbene event is stable
+under both threshold and timestep-stride changes.
+
+\subsection{Metric Interpretation}
+
+For stilbene, the combined score is identical to shape IoU. Shape IoU should
+therefore remain the primary range metric. The best-target agreement fractions
+against the combined score are 1.000 for shape IoU, 0.882 for bounding-box IoU,
+0.849 for centroid similarity, and 0.568 for area ratio. Domain overlap agrees
+with the shape-based target only 0.022 of the time. This supports using domain
+overlap as a separate spatial-support view, not as a substitute for
+range-space sheet tracking.
+
+\subsection{Domain Events}
+
+The domain event ranking provides a second view of the stilbene trajectory: it
+identifies intervals where the same vertices stop supporting the same
+Reeb-sheet behavior. The strongest domain events are \(8440\)--\(8460\),
+\(8400\)--\(8420\), \(6940\)--\(6960\), \(8420\)--\(8440\), and
+\(6920\)--\(6940\), each with weak domain continuations for all top sheets.
+These intervals do not duplicate the range-event ranking; they indicate
+separate domain-support reorganization events that should be inspected in the
+domain view.
+
+Domain/range target disagreement is now also useful for targeted visual checks:
+the strongest corrected examples, such as \(5260\)--\(5280\),
+\(8940\)--\(8960\), and \(9060\)--\(9080\), compare all 20 source sheets and
+show low agreement between range-selected and domain-selected targets. We use
+the domain event ranking as the main domain-space evidence and disagreement as
+a way to choose concrete source/target examples.
+
+\begin{figure*}[t]
+  \centering
+  \fbox{\parbox{0.92\linewidth}{
+  Placeholder: stilbene range-event overview. Suggested panels: one around
+  9380--9680 highlighting 9380--9400 and 9660--9680, and one around
+  11900--11935 highlighting 11915--11920 and 11920--11925. Show the event graph
+  and corresponding Sankey columns.}}
+  \caption{Stilbene range-space event intervals identify a robust late sheet
+  reconfiguration, with secondary earlier/local events.}
+  \label{fig:stilbene-range-events}
+\end{figure*}
+
+\begin{figure}[t]
+  \centering
+  \fbox{\parbox{0.88\linewidth}{
+  Placeholder: stilbene long-lived tracks. Highlight tracks
+  \(86\rightarrow6270\), \(38\rightarrow19239\), and \(19\rightarrow53844\), and
+  include clicked sheet/fiber detail views for one event interval.}}
+  \caption{Long-lived stilbene Reeb-sheet tracks coexist with strong range
+  event intervals.}
+  \label{fig:stilbene-long-lived-tracks}
+\end{figure}

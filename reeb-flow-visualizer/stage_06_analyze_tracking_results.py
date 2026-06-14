@@ -404,9 +404,13 @@ def sheet_lookup(data: dict) -> dict[tuple[int, int], dict]:
 
 
 def sheets_for_timestep(data: dict, timestep_index: int) -> list[dict]:
+    target_index = safe_int(timestep_index)
     timesteps = data.get("timesteps", [])
-    if 0 <= timestep_index < len(timesteps):
-        return list(timesteps[timestep_index].get("sheets", []))
+    for timestep in timesteps:
+        if safe_int(timestep.get("timestep_index")) == target_index:
+            return list(timestep.get("sheets", []))
+    if 0 <= target_index < len(timesteps) and "timestep_index" not in timesteps[target_index]:
+        return list(timesteps[target_index].get("sheets", []))
     return []
 
 

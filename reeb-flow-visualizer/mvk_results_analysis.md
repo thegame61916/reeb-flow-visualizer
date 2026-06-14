@@ -1,37 +1,20 @@
 # MVK Results Analysis
 
-This note summarizes the current MVK results from:
+This note summarizes the regenerated MVK results from:
 
 - `/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/MVK_s1`
 - `/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/MVK_s2`
 
-It uses the current generated artifacts as the baseline. I also tested the
-near-origin low-scalar exclusion in memory, without overwriting the baseline
-outputs.
+The analysis uses the current `sankey/unified_sankey_viewer/data.json`,
+`sankey/tracking_data.json`, `sankey/tracking_analysis/*.csv`, and
+`sankey/tracking_analysis/viewer_analysis.json` artifacts.
 
-External references used for comparison:
+Important implementation note: `stage_06_analyze_tracking_results.py` was
+updated to look up sheets by `timestep_index` instead of assuming that
+`timesteps[i]` has index `i`. This matters for non-uniformly ordered timestep
+lists and keeps the exported diagnostics aligned with the browser viewer.
 
-- Main CSP/image-moment paper:
-  `https://vgl.csa.iisc.ac.in/pdf/pub/Paper_Continuous_Scatterplot_and_Image_Moments_for_Time_Varying_Bivariate_Field_Analysis.pdf`
-- Supplementary material:
-  `https://vgl.csa.iisc.ac.in/pdf/pub/Supp_Material_Continuous_Scatterplot_and_Image_Moments_for_Time_Varying_Bivariate_Field_Analysis.pdf`
-
-## Files Inspected
-
-For both `MVK_s1` and `MVK_s2`, the analysis used:
-
-- `sankey/unified_sankey_viewer/data.json`
-- `sankey/tracking_data.json`
-- `sankey/sheet_overlaps.json`
-- `sankey/rsi_json/*.rsijson`
-- `sankey/tracking_analysis/*.csv`
-- `sankey/tracking_analysis/viewer_analysis.json`
-- `compareSheetShapesCache/results/sheet_shape_summary.json`
-- `compareSheetShapesCache/cache/matches/*.json`
-- `downsampledGrids/*.vtu`
-- `sheetInfo/*.rsi`
-
-The viewer maps a timestep label to femtoseconds as:
+The MVK timestep labels convert to femtoseconds as:
 
 ```text
 time_fs = step_label / 41.341374575751
@@ -39,282 +22,177 @@ time_fs = step_label / 41.341374575751
 
 Thus labels `1240-1280` correspond to approximately `30.00-30.96 fs`.
 
-## Relationship To Previous MVK Findings
+## Alignment Check After Rerun
 
-The previous continuous-scatterplot and image-moment study reports an important
-MVK transition window near the S2 to S1 approach to the conical intersection,
-with dense sampling around approximately `29-31 fs`. It also reports strong
-changes in the oxygen track after about `26 fs`, and changes involving the vinyl
-carbon atoms C3 and C4 near the transition.
+The main MVK result is still aligned with the previous writeup: range-space
+Reeb-sheet event scores recover the known MVK transition region near
+`29-31 fs`. There is no new qualitative finding that changes the paper story.
 
-Our strongest range-space Reeb-sheet event scores occur in the same temporal
-neighborhood:
+There are two factual updates from the rerun:
 
-| Dataset | Top range interval | Time window | Event score | Mean best range score | Interpretation |
+- In `MVK_s1`, `1200->1220` is now the strongest range event, followed by
+  `1180->1200`. The same transition window remains dominant.
+- In `MVK_s2`, the post-transition interval is now `1340->1380`, not
+  `1340->1360`, because the current artifacts do not contain
+  `step_01360.rsijson`. Its event score is stronger than before.
+
+## Range-Space Event Intervals
+
+Event scores use the range/shape score with threshold `theta = 0.5`. In the
+current configuration, `combined` is identical to `shape_iou`.
+
+| Dataset | Interval | Time window | Event score | Mean best score | Interpretation |
 |---|---:|---:|---:|---:|---|
-| MVK_s1 | `1180->1200` | `28.54->29.03 fs` | `36.66` | `0.467` | Start of strong range-sheet reconfiguration. |
-| MVK_s1 | `1200->1220` | `29.03->29.51 fs` | `35.77` | `0.412` | Strongest continuation loss in MVK_s1. |
+| MVK_s1 | `1200->1220` | `29.03->29.51 fs` | `35.77` | `0.412` | Strongest MVK_s1 range continuation loss. |
+| MVK_s1 | `1180->1200` | `28.54->29.03 fs` | `34.63` | `0.468` | Start of strong range-sheet reconfiguration. |
 | MVK_s1 | `1276->1280` | `30.86->30.96 fs` | `31.70` | `0.515` | Late dense-window reconfiguration. |
-| MVK_s2 | `1140->1160` | `27.58->28.06 fs` | `37.21` | `0.439` | Earliest strong range-sheet reconfiguration. |
-| MVK_s2 | `1160->1180` | `28.06->28.54 fs` | `30.71` | `0.440` | Continuation of the same event window. |
-| MVK_s2 | `1340->1360` | `32.41->32.90 fs` | `22.54` | `0.573` | Post-transition range reconfiguration. |
+| MVK_s2 | `1140->1160` | `27.58->28.06 fs` | `37.21` | `0.439` | Earliest strong MVK_s2 range reconfiguration. |
+| MVK_s2 | `1340->1380` | `32.41->33.38 fs` | `33.14` | `0.443` | Post-transition range reconfiguration; spans missing `1360`. |
+| MVK_s2 | `1160->1180` | `28.06->28.54 fs` | `30.71` | `0.440` | Continuation of the main event window. |
 
-This is the clearest result: Reeb-space range-sheet tracking independently
-marks the same broad transition interval reported by the CSP/image-moment
-analysis. It does not yet identify C3, C4, or oxygen by itself, because the
-current sheet tracking does not attach atom labels to sheets. The sheet and
-fiber-surface image views should be used to inspect whether the selected sheets
-are spatially close to the carbonyl oxygen and vinyl C3/C4 region.
+This supports the same application-level connection as before: Reeb-space sheet
+tracking independently marks the broad transition window reported by the prior
+continuous-scatterplot/image-moment MVK analysis. The current metrics do not
+identify oxygen, C3, or C4 directly; that claim still needs sheet/fiber views
+with atom-aware inspection.
 
-## What The Current Method Adds
+## Long-Lived Reeb-Sheet Tracks
 
-The CSP/image-moment paper gives timestep-level and atom-track summaries of the
-continuous scatterplot. Our Reeb-space analysis adds feature-level continuity:
-it tracks individual sheets and shows which prominent sheets persist, weaken,
-split, merge, or switch correspondence.
+The range metric also gives persistent feature families.
 
-The range metric gives several long-lived feature families:
+| Dataset | Time span | Sheet endpoints | Rank range | Mean continuation |
+|---|---:|---|---:|---:|
+| MVK_s1 | `0.00->35.80 fs` | `0 -> 6341` | `1-1` | `0.978` |
+| MVK_s1 | `0.00->35.80 fs` | `5251 -> 8` | `2-2` | `0.950` |
+| MVK_s1 | `0.00->35.80 fs` | `4 -> 5` | `3-3` | `0.896` |
+| MVK_s2 | `0.00->35.80 fs` | `24 -> 503` | `2-4` | `0.900` |
+| MVK_s2 | `0.00->27.58 fs` | `22 -> 1892` | `1-1` | `0.948` |
+| MVK_s2 | `13.06->35.80 fs` | `2 -> 0` | `1-4` | `0.899` |
 
-| Dataset | Track | Time span | Sheet path endpoints | Rank range | Mean continuation |
-|---|---:|---:|---|---:|---:|
-| MVK_s1 | Range track | `0.00->35.80 fs` | `sheet 0 -> sheet 6341` | `1-1` | `0.978` |
-| MVK_s1 | Range track | `0.00->35.80 fs` | `sheet 5251 -> sheet 8` | `2-2` | `0.950` |
-| MVK_s1 | Range track | `0.00->35.80 fs` | `sheet 4 -> sheet 5` | `3-3` | `0.896` |
-| MVK_s2 | Range track | `0.00->35.80 fs` | `sheet 24 -> sheet 503` | `2-4` | `0.901` |
-| MVK_s2 | Range track | `0.00->27.58 fs` | `sheet 22 -> sheet 1892` | `1-1` | `0.948` |
-| MVK_s2 | Range track | `13.06->35.80 fs` | `sheet 2 -> sheet 0` | `1-4` | `0.900` |
+These tracks are useful evidence that the method gives feature-level temporal
+structure, not only independent timestep descriptors.
 
-These tracks are useful evidence that large Reeb-space sheets can be followed as
-features, not only remeasured independently at each timestep. The event
-diagnostics then identify where those feature correspondences become weak.
+## Sampling-Stride Check
 
-## Domain-Space Versus Range-Space Results
+The same broad MVK transition is recovered under the precomputed timestep
+strides from 1 to 4.
 
-Range-space similarity answers: do two sheets occupy a similar region and shape
-in the bivariate range? Domain-space overlap answers: do the same mesh vertices
-continue to support corresponding sheets?
+| Dataset | Stride | Top range interval | Event score | Interpretation |
+|---|---:|---:|---:|---|
+| MVK_s1 | 1 | `1200->1220` | `35.77` | Main peak at `29.03-29.51 fs`. |
+| MVK_s1 | 2 | `1180->1220` | `47.66` | Coarser window covers the same peak. |
+| MVK_s1 | 3 | `1160->1220` | `49.71` | Coarser window still centers on the transition. |
+| MVK_s1 | 4 | `1140->1220` | `50.39` | Coarser window expands over the same event. |
+| MVK_s2 | 1 | `1140->1160` | `37.21` | Main peak at `27.58-28.06 fs`. |
+| MVK_s2 | 2 | `1140->1180` | `50.55` | Same early transition window. |
+| MVK_s2 | 3 | `1120->1180` | `53.39` | Same early transition window. |
+| MVK_s2 | 4 | `1100->1180` | `53.80` | Same early transition window. |
 
-The two modes are complementary for MVK.
+Conclusion: the MVK range-event result is robust to the available sampling
+strides.
 
-Range-space intervals concentrate around the known photochemical transition
-window:
+## Domain-Space Events And Complementarity
 
-- MVK_s1: `28.54-31.45 fs`
-- MVK_s2: `27.58-29.51 fs`, with another event at `32.41-32.90 fs`
+Domain event ranking is useful and should stay in the results. It answers a
+different question from range-space ranking: when do the same mesh vertices stop
+supporting the same sheet behavior? It is not expected to reproduce the
+CSP/image-moment timing, because that prior work analyzes range-space
+descriptors rather than persistent vertex support.
 
-Domain-space intervals instead emphasize early and mid-trajectory spatial
-support churn:
+Current top domain-overlap events at threshold `theta = 0.5`:
 
-| Dataset | Top domain interval | Time window | Domain event score | Mean best normalized overlap |
-|---|---:|---:|---:|---:|
-| MVK_s1 | `460->480` | `11.13->11.61 fs` | `49.34` | `0.108` |
-| MVK_s1 | `960->980` | `23.22->23.71 fs` | `49.11` | `0.095` |
-| MVK_s1 | `780->800` | `18.87->19.35 fs` | `49.08` | `0.096` |
-| MVK_s2 | `320->340` | `7.74->8.22 fs` | `52.63` | `0.068` |
-| MVK_s2 | `300->320` | `7.26->7.74 fs` | `52.60` | `0.070` |
-| MVK_s2 | `260->280` | `6.29->6.77 fs` | `52.58` | `0.071` |
+| Dataset | Top domain interval | Domain event score | Mean best overlap | Weak source/target | Interpretation |
+|---|---:|---:|---:|---:|---|
+| MVK_s1 | `740->760` | `57.07` | `0.147` | `20/20` | Strong spatial-support behavior change. |
+| MVK_s1 | `760->780` | `56.98` | `0.151` | `20/20` | Continuation of the same support-change band. |
+| MVK_s1 | `820->840` | `56.96` | `0.152` | `20/20` | Later support-change band. |
+| MVK_s2 | `560->580` | `56.70` | `0.165` | `20/20` | Strong spatial-support behavior change. |
+| MVK_s2 | `960->980` | `56.57` | `0.171` | `20/20` | Later support-change band. |
+| MVK_s2 | `520->540` | `56.48` | `0.176` | `20/20` | Early/mid support-change band. |
 
-The domain intervals do not duplicate the range transition story. They show that
-spatial support can reorganize substantially even when the strongest
-range-space event is elsewhere. This is useful if framed as a different
-question: range asks about feature geometry in the bivariate map, while domain
-asks about which parts of the molecule/domain support those features.
+These intervals are a separate result direction: they identify when the domain
+support of prominent sheets changes, even when the range-space event score is
+not at its maximum.
 
-## Domain-Change Diagnostic
+Domain/range target disagreement then explains why the two rankings differ. It
+asks whether the target chosen by range shape and the target chosen by domain
+overlap are the same for a given source sheet. The strongest disagreement
+summaries include transition-window examples:
 
-The domain-change diagnostic uses source retention, target inheritance,
-split/merge counts, and a churn term. It is more directly interpretable than raw
-domain interval scores for MVK.
+| Dataset | Interval | Agreement fraction | Strongest disagreement score |
+|---|---:|---:|---:|
+| MVK_s1 | `1240->1244` | `0.050` | `40.15` |
+| MVK_s1 | `1220->1240` | `0.105` | `35.91` |
+| MVK_s1 | `1200->1220` | `0.105` | `22.73` |
+| MVK_s2 | `1244->1248` | `0.050` | `44.34` |
+| MVK_s2 | `1220->1240` | `0.100` | `43.85` |
+| MVK_s2 | `1248->1252` | `0.100` | `42.72` |
 
-Top domain-change intervals:
+Insight from disagreement: in the transition window, range and domain often
+prefer different targets for the same source sheet. This suggests that a sheet
+can keep a similar range-space footprint while its supporting vertices move, or
+that the same vertices can start supporting a different range-space feature.
 
-| Dataset | Top interval | Time window | Domain-change score | Mean retention | Mean inheritance | Churn |
-|---|---:|---:|---:|---:|---:|---:|
-| MVK_s1 | `720->740` | `17.42->17.90 fs` | `40.96` | `0.149` | `0.156` | `0.848` |
-| MVK_s1 | `560->580` | `13.55->14.03 fs` | `40.86` | `0.163` | `0.151` | `0.843` |
-| MVK_s1 | `660->680` | `15.96->16.45 fs` | `40.84` | `0.156` | `0.160` | `0.842` |
-| MVK_s2 | `320->340` | `7.74->8.22 fs` | `39.41` | `0.181` | `0.179` | `0.820` |
-| MVK_s2 | `300->320` | `7.26->7.74 fs` | `39.40` | `0.177` | `0.183` | `0.820` |
-| MVK_s2 | `280->300` | `6.77->7.26 fs` | `39.38` | `0.185` | `0.177` | `0.819` |
+Recommendation: keep the target-disagreement table/detail view because it gives
+actionable source/target examples for figures. De-emphasize only the aggregate
+Spearman correlation and unnormalized complementarity magnitude, because those
+summaries are harder to interpret than the selected source/target examples.
 
-This diagnostic seems useful, but it should be presented as a domain-support
-reorganization score, not as a replacement for range event scores.
+## Metric Usefulness
 
-## Domain/Range Complementarity
+Current metric agreement against `combined`:
 
-The current complementarity tab is useful as an exploration aid, but I would not
-make it a central paper result yet.
+| Dataset | Candidate metric | Agreement | Mean loss if used |
+|---|---|---:|---:|
+| MVK_s1 | `shape_iou` | `1.000` | `0.000` |
+| MVK_s1 | `bbox_iou` | `0.951` | `0.016` |
+| MVK_s1 | `centroid_similarity` | `0.921` | `0.028` |
+| MVK_s1 | `area_ratio` | `0.815` | `0.098` |
+| MVK_s1 | `overlap_max_percent` | `0.112` | `0.630` |
+| MVK_s2 | `shape_iou` | `1.000` | `0.000` |
+| MVK_s2 | `bbox_iou` | `0.931` | `0.014` |
+| MVK_s2 | `centroid_similarity` | `0.897` | `0.029` |
+| MVK_s2 | `area_ratio` | `0.733` | `0.134` |
+| MVK_s2 | `overlap_max_percent` | `0.077` | `0.627` |
 
-There is a scoring issue in the current implementation: the range score is on
-`0-1`, while the domain max-overlap value used in the complementarity score is a
-percentage on `0-100`. This makes the current complementarity magnitude hard to
-interpret. For this analysis, I also computed a normalized variant:
-
-```text
-range_best = best range-IoU target score in [0, 1]
-domain_best = best domain max-percent target score / 100
-
-range_loss = range_best - range_score_for_domain_chosen_target
-domain_loss = domain_best - domain_score_for_range_chosen_target
-confidence = min(range_best, domain_best)
-
-normalized_complementarity = 0.5 * (range_loss + domain_loss) * confidence
-```
-
-This normalized diagnostic gives more interpretable examples:
-
-| Dataset | Interval | Time window | Max normalized complementarity | Agreement fraction | Strongest source | Range target | Domain target |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| MVK_s1 | `1240->1244` | `29.99->30.09 fs` | `0.737` | `0.050` | `978` | `1095` | `78` |
-| MVK_s1 | `1220->1240` | `29.51->29.99 fs` | `0.732` | `0.105` | `133` | `3` | `53` |
-| MVK_s2 | `1244->1248` | `30.09->30.19 fs` | `0.801` | `0.050` | `144` | `128` | `117` |
-| MVK_s2 | `1220->1240` | `29.51->29.99 fs` | `0.798` | `0.100` | `96` | `99` | `299` |
-| MVK_s2 | `1248->1252` | `30.19->30.28 fs` | `0.755` | `0.100` | `128` | `120` | `109` |
-
-This is promising because both stages show low agreement and high normalized
-complementarity near the known transition window. However, the plot is not as
-clean as the range-event plot, and the Spearman correlation is not smooth:
-
-| Dataset | Spearman mean | Min | Median | Max |
-|---|---:|---:|---:|---:|
-| MVK_s1 baseline | `-0.094` | `-0.900` | `-0.133` | `0.783` |
-| MVK_s2 baseline | `-0.190` | `-0.850` | `-0.233` | `0.650` |
-
-Recommendation: keep complementarity in the tool for exploration, but
-de-emphasize it in the paper. If used, fix the score normalization first and
-present only selected examples near the transition window.
-
-## Low-Origin Scalar Exclusion Sensitivity
-
-I tested low-origin scalar exclusion in memory using the existing RSI files and
-VTU point arrays. The baseline output files were not modified.
-
-Tested symmetric thresholds for `orb00` and `orb01`: `0.001`, `0.003`, `0.006`,
-and `0.01`.
-
-For the requested threshold `0.003`:
-
-| Dataset | Mean excluded regular vertices | Max excluded regular vertices | Effect |
-|---|---:|---:|---|
-| MVK_s1 | `4.04%` | `7.74%` | No material improvement in event ranking. |
-| MVK_s2 | `7.24%` | `12.24%` | No material improvement in event ranking. |
-
-Across all tested thresholds, the range results are unchanged and the domain
-event/complementarity rankings remain qualitatively similar. Larger thresholds
-remove many vertices, for example `21.96%` mean exclusion in MVK_s1 and `27.78%`
-in MVK_s2 at threshold `0.01`, but they do not make the domain plots cleaner.
-
-Recommendation: do not use the low-origin filter as a main MVK result. It can be
-mentioned as a sensitivity check: removing near-origin scalar pairs did not
-change the main range-space conclusion.
-
-## Other MVK Behavior To Look For
-
-The prior CSP/image-moment study points to several chemically meaningful
-behaviors:
-
-- The transition near the conical-intersection window around `29-31 fs`.
-- Strong oxygen behavior after approximately `26 fs`.
-- Changes involving the vinyl carbons C3 and C4 around the transition.
-- A possible difference between global scatterplot change and localized atomic
-  contributors.
-
-Our method can plausibly capture the first item now: the strongest range-sheet
-event scores land in the same time window. It may also capture oxygen/C3/C4
-behavior indirectly through selected sheet/fiber-surface images, but that claim
-requires visual inspection of the molecular overlays. The current artifacts do
-not attach atom IDs to sheets, so the paper should not claim atom-specific
-identification from the metric tables alone.
-
-More general MVK photochemistry context suggests that excited-state
-reorganization of the enone system, carbonyl involvement, and torsion around the
-vinyl group are plausible behaviors to inspect. These are compatible with the
-range-space reconfiguration we see near `28-31 fs`, but we should phrase this as
-consistency rather than proof unless we add atom-aware annotations and cite the
-specific chemistry sources in the final paper.
-
-## Useful And Less Useful Tool Features
-
-Most useful for MVK:
-
-- Range-mode event intervals.
-- Range-mode continuing features.
-- Side-by-side sheet images and fiber-surface images for selected links.
-- Domain-change intervals, if framed as spatial-support reorganization.
-- The ability to highlight selected interval/feature points in the Sankey view.
-
-Useful but should be de-emphasized:
-
-- Domain/range complementarity, after score normalization.
-- Spearman domain/range correlation, mainly as an exploratory plot.
-
-Less useful as paper evidence right now:
-
-- Low-origin scalar exclusion for MVK.
-- Raw domain interval ranking alone, because it highlights valid but chemically
-  harder-to-explain spatial-support churn.
+This confirms that `shape_iou` should be the primary range metric. `bbox_iou`
+and `centroid_similarity` are mostly redundant sanity checks; `area_ratio` is
+less reliable as a correspondence metric; domain overlap is intentionally
+different and should not be treated as a substitute for range matching.
 
 ## Suggested Figures
 
-1. Range event overview around transition.
-   - Dataset: `MVK_s1` and `MVK_s2`.
-   - Viewer mode: range metrics, metric `range IoU`.
-   - Time range: `1100-1300` for both, with dense window visible.
-   - Highlight intervals:
-     - MVK_s1: `1180->1200`, `1200->1220`, `1276->1280`.
-     - MVK_s2: `1140->1160`, `1160->1180`, `1200->1220`.
-   - Purpose: show that range-sheet event scores peak near the prior
-     transition window.
+1. Range event overview around the transition.
+   - MVK_s1: highlight `1200->1220`, `1180->1200`, `1276->1280`.
+   - MVK_s2: highlight `1140->1160`, `1160->1180`, and `1340->1380`.
+   - Use range/shape mode, metric `shape_iou`, threshold `0.5`.
 
-2. Long-lived range features.
-   - MVK_s1: highlight tracks beginning at sheets `0`, `5251`, and `4`.
-   - MVK_s2: highlight tracks beginning at sheets `24`, `22`, and `2`.
-   - Purpose: show that Reeb-space sheets provide trackable feature families,
-     not just timestep-wise descriptors.
+2. Long-lived feature tracks.
+   - MVK_s1: tracks starting at sheets `0`, `5251`, and `4`.
+   - MVK_s2: tracks starting at sheets `24`, `22`, and `2`.
 
-3. Domain-support reorganization.
-   - MVK_s1: show `720->740` and/or `560->580`.
-   - MVK_s2: show `320->340` and/or `300->320`.
-   - Viewer mode: domain overlap / domain-change tab.
-   - Purpose: demonstrate that the domain mode answers a different question:
-     spatial-support churn.
-
-4. Complementarity examples near transition.
-   - MVK_s1: `1240->1244`, source sheet `978`, range target `1095`, domain
-     target `78`.
-   - MVK_s1: `1220->1240`, source sheet `133`, range target `3`, domain target
-     `53`.
-   - MVK_s2: `1244->1248`, source sheet `144`, range target `128`, domain
-     target `117`.
-   - MVK_s2: `1220->1240`, source sheet `96`, range target `99`, domain target
-     `299`.
-   - Purpose: show that range and domain can propose different correspondences
-     during the transition window.
-
-5. Sheet and fiber-surface detail panels.
-   - Use the clicked link/node detail view for the examples above.
+3. Domain/range disagreement detail views near the dense transition window.
+   - MVK_s1: `1240->1244`, strongest source sheet `978`.
+   - MVK_s2: `1244->1248`, strongest source sheet `144`.
    - Capture side-by-side sheet images and fiber-surface images.
-   - Purpose: connect metric events to actual sheet geometry and molecular
-     context.
 
-Additional data needed for stronger atom-specific claims:
+## Viewer Feature Recommendations From MVK
 
-- Atom labels or an atom-to-region annotation in the rendered molecule/fiber
-  views.
-- A manual or computed mapping from selected sheet/fiber images to oxygen, C3,
-  and C4 neighborhoods.
+Most useful:
 
-## Main Paper Narrative
+- Range/shape event intervals.
+- Domain event ranking.
+- Continuing-feature tracks.
+- Stride selector and threshold sensitivity.
+- Sankey highlighting linked to selected event/track rows.
+- Sheet and fiber-surface detail images.
 
-The MVK result should focus on three claims:
+Useful but secondary:
 
-1. Range-space Reeb-sheet tracking recovers the known transition window near
-   `29-31 fs`, independently of the prior CSP/image-moment descriptors.
-2. Reeb-space sheets provide feature-level temporal tracks, including multiple
-   long-lived range features across the full MVK trajectory.
-3. Domain-space overlap provides a complementary view of spatial support: it
-   exposes early support churn and local disagreement with range-space matching,
-   but it should not be interpreted as the same signal as range geometry.
+- Domain/range target disagreement examples.
 
-The low-origin filter and raw Spearman/complementarity plots should not be the
-central evidence. They can appear in discussion or as exploratory diagnostics.
+De-emphasize or remove from the main analysis flow:
+
+- Domain/range Spearman correlation.
+- Unnormalized complementarity magnitude.
+- Low-origin scalar filtering for MVK; it did not change the range conclusion.
