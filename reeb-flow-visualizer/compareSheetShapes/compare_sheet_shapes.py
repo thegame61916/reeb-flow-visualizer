@@ -27,7 +27,7 @@ import subprocess
 import sys
 import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Iterator
 
@@ -409,7 +409,11 @@ def filter_exportable_timesteps(
                     flush=True,
                 )
 
-    valid.sort(key=lambda timestep: timestep.index)
+    valid.sort(key=lambda timestep: timestep_sort_key(timestep.rs))
+    valid = [
+        replace(timestep, index=index)
+        for index, timestep in enumerate(valid)
+    ]
     skipped.sort(key=lambda item: timestep_sort_key(Path(str(item["vtu"]))))
     write_skipped_timesteps_log(skipped)
     if skipped:
@@ -658,7 +662,11 @@ def bounds_are_close(a: Iterable[float], b: Iterable[float]) -> bool:
     )
 
 
-def timestep_cache_is_valid(stem: str, global_bounds: tuple[float, float, float, float] | None = None) -> bool:
+def timestep_cache_is_valid(
+    stem: str,
+    expected_index: int,
+    global_bounds: tuple[float, float, float, float] | None = None,
+) -> bool:
     cache_json = TIMESTEP_CACHE_DIR / f"{stem}.json"
     cache_npz = TIMESTEP_CACHE_DIR / f"{stem}.npz"
     if not cache_json.exists() or not cache_npz.exists():
@@ -671,6 +679,7 @@ def timestep_cache_is_valid(stem: str, global_bounds: tuple[float, float, float,
         data.get("grid_size") == GRID_SIZE
         and data.get("top_n_sheets") == TOP_N_SHEETS
         and data.get("stem") == stem
+        and data.get("timestep_index") == expected_index
     ):
         return False
     if global_bounds is not None and not bounds_are_close(data.get("global_bounds", []), global_bounds):
@@ -801,7 +810,7 @@ def build_cache(timesteps: list[TimestepInput], workers: int, library_path: str,
     missing_timesteps: list[TimestepInput] = []
 
     for timestep in timesteps:
-        if timestep_cache_is_valid(timestep.stem, bounds):
+        if timestep_cache_is_valid(timestep.stem, timestep.index, bounds):
             descriptors, _masks = load_timestep_cache(timestep.stem)
             results.append(descriptors)
             print(f"[cache existing] {descriptors.stem}", flush=True)
@@ -948,10 +957,31 @@ def manifest_matches_timesteps(timesteps: list[TimestepInput]) -> bool:
         manifest = json.loads(MANIFEST_FILE.read_text())
     except Exception:
         return False
-    return (
+    if not (
         manifest.get("grid_size") == GRID_SIZE
         and manifest.get("top_n_sheets") == TOP_N_SHEETS
         and manifest.get("timesteps") == [timestep.stem for timestep in timesteps]
+    ):
+        return False
+
+    expected_indices = {timestep.stem: timestep.index for timestep in timesteps}
+    try:
+        cached_indices = json.loads(TIMESTEP_INDEX_FILE.read_text())
+    except Exception:
+        return False
+    return cached_indices == expected_indices
+
+
+def pair_cache_matches_timesteps(
+    cached: dict,
+    source: TimestepInput,
+    target: TimestepInput,
+    global_bounds: tuple[float, float, float, float],
+) -> bool:
+    return (
+        cached.get("source_timestep_index") == source.index
+        and cached.get("target_timestep_index") == target.index
+        and bounds_are_close(cached.get("global_bounds", []), global_bounds)
     )
 
 
@@ -971,6 +1001,7 @@ def compare_all_pairs(
     ensure_dirs()
 
     stems = [t.stem for t in timesteps]
+    timestep_by_stem = {timestep.stem: timestep for timestep in timesteps}
     manifest_ok = manifest_matches_timesteps(timesteps)
 
     if (
@@ -999,7 +1030,12 @@ def compare_all_pairs(
     for stride, stride_pairs in pairs_by_stride.items():
         for source_stem, target_stem in stride_pairs:
             cached = load_pair_cache(source_stem, target_stem)
-            if cached is not None and cached.get("global_bounds") == list(global_bounds):
+            source_timestep = timestep_by_stem[source_stem]
+            target_timestep = timestep_by_stem[target_stem]
+            if (
+                cached is not None
+                and pair_cache_matches_timesteps(cached, source_timestep, target_timestep, global_bounds)
+            ):
                 results_by_key[(source_stem, target_stem)] = cached
                 print(
                     f"[match existing stride {stride}] {cached['source_label']} -> {cached['target_label']}",
