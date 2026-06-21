@@ -3,7 +3,7 @@ from pathlib import Path
 
 # ================= USER SETTINGS =================
 
-BASE_DIR = Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/torus")
+BASE_DIR = Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/stilbene")
 
 DATASET_CONFIGS = {
     "stilbene": {
@@ -125,7 +125,7 @@ TRACKING_ANALYSIS_PREFERRED_THRESHOLD = 0.5
 TRACKING_ANALYSIS_TOP_INTERVALS = 12
 TRACKING_ANALYSIS_TOP_FEATURES = 12
 TRACKING_ANALYSIS_TOP_DISAGREEMENTS = 12
-TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT = 0.5
+TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT = 1.0
 
 # Event-score formula used by both precomputed tracking analysis and the
 # browser-side runtime analysis. Each term reads one component from the
@@ -180,8 +180,8 @@ RUN_STAGE_1_FV99 = False
 RUN_STAGE_2_RSI_JSON = False
 RUN_STAGE_3A_SHAPE_MATCHING = False
 RUN_STAGE_3B_OVERLAPS = False
-RUN_STAGE_4A_SHEET_RENDERING = True
-RUN_STAGE_4B_SHEET_FIBER_SURFACES = True
+RUN_STAGE_4A_SHEET_RENDERING = False
+RUN_STAGE_4B_SHEET_FIBER_SURFACES = False
 RUN_STAGE_4C_ADAPTIVE_FIBER_SURFACES = FIBER_SURFACE_ADAPTIVE_ENABLED
 RUN_STAGE_5A_BUILD_UNIFIED_SANKEY_DATA = True
 RUN_STAGE_5B_TRACKING_ANALYSIS = True

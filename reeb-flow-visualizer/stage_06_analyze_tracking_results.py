@@ -1036,102 +1036,205 @@ def collect_sensitivity_summary(event_rows: list[dict], lifetime_rows: list[dict
 
 
 def collect_domain_shape_disagreements(data: dict) -> tuple[list[dict], list[dict]]:
-    shape_groups = shape_matches_by_pair(data)
-    overlap_groups = overlap_matches_by_pair(data)
     examples: list[dict] = []
     summaries: dict[tuple[int, int], dict] = {}
+
+    def group_matches(pair: dict, field: str) -> dict[int, list[dict]]:
+        groups: dict[int, list[dict]] = defaultdict(list)
+        for match in pair.get("matches", []):
+            groups[safe_int(match.get(field))].append(match)
+        return groups
+
+    def collect_directional_examples(
+        pair: dict,
+        overlap_pair: dict,
+        direction: str,
+    ) -> dict:
+        source_index = safe_int(pair.get("source_timestep_index"))
+        target_index = safe_int(pair.get("target_timestep_index"))
+        group_field = "source_sheet_id" if direction == "forward" else "target_sheet_id"
+        choice_field = "target_sheet_id" if direction == "forward" else "source_sheet_id"
+        overlap_metric = (
+            "overlap_source_percent"
+            if direction == "forward"
+            else "overlap_target_percent"
+        )
+        compared_role = "source" if direction == "forward" else "target"
+        choice_role = "target" if direction == "forward" else "source"
+        shape_groups = group_matches(pair, group_field)
+        overlap_groups = group_matches(overlap_pair, group_field)
+
+        compared = 0
+        agreements = 0
+        direction_examples: list[dict] = []
+
+        for compared_sheet_id, overlap_matches in overlap_groups.items():
+            shape_matches = shape_groups.get(compared_sheet_id, [])
+            shape_best = best_shape_match(shape_matches, "combined")
+            overlap_best = best_overlap_match(overlap_matches, overlap_metric)
+            if shape_best is None or overlap_best is None:
+                continue
+
+            compared += 1
+            shape_choice = safe_int(shape_best.get(choice_field))
+            overlap_choice = safe_int(overlap_best.get(choice_field))
+            shape_score = get_shape_metrics(shape_best)["combined"]
+            overlap_metrics = get_overlap_metrics(overlap_best)
+            overlap_percent = overlap_metrics[overlap_metric]
+            overlap_max_percent = overlap_metrics["overlap_max_percent"]
+            overlap_score = max(0.0, min(1.0, overlap_percent / 100.0))
+            if shape_choice == overlap_choice:
+                agreements += 1
+                continue
+
+            shape_for_overlap_choice = next(
+                (
+                    match
+                    for match in shape_matches
+                    if safe_int(match.get(choice_field)) == overlap_choice
+                ),
+                None,
+            )
+            overlap_for_shape_choice = next(
+                (
+                    match
+                    for match in overlap_matches
+                    if safe_int(match.get(choice_field)) == shape_choice
+                ),
+                None,
+            )
+            shape_score_for_domain_choice = (
+                get_shape_metrics(shape_for_overlap_choice)["combined"]
+                if shape_for_overlap_choice
+                else 0.0
+            )
+            overlap_score_for_range_choice = (
+                max(0.0, min(1.0, get_overlap_metrics(overlap_for_shape_choice)[overlap_metric] / 100.0))
+                if overlap_for_shape_choice
+                else 0.0
+            )
+            shape_loss = max(0.0, shape_score - shape_score_for_domain_choice)
+            overlap_loss = max(0.0, overlap_score - overlap_score_for_range_choice)
+            confidence = min(shape_score, overlap_score)
+            disagreement_score = 0.5 * (shape_loss + overlap_loss) * confidence
+
+            if direction == "forward":
+                highlight_nodes = {
+                    node_key(source_index, compared_sheet_id),
+                    node_key(target_index, shape_choice),
+                    node_key(target_index, overlap_choice),
+                }
+                highlight_links = {
+                    link_key(source_index, compared_sheet_id, target_index, shape_choice),
+                    link_key(source_index, compared_sheet_id, target_index, overlap_choice),
+                }
+                direction_fields = {
+                    "source_sheet_id": compared_sheet_id,
+                    "shape_target_sheet_id": shape_choice,
+                    "overlap_target_sheet_id": overlap_choice,
+                    "source_node": node_key(source_index, compared_sheet_id),
+                    "shape_target_node": node_key(target_index, shape_choice),
+                    "overlap_target_node": node_key(target_index, overlap_choice),
+                    "shape_link": link_key(source_index, compared_sheet_id, target_index, shape_choice),
+                    "overlap_link": link_key(source_index, compared_sheet_id, target_index, overlap_choice),
+                }
+            else:
+                highlight_nodes = {
+                    node_key(target_index, compared_sheet_id),
+                    node_key(source_index, shape_choice),
+                    node_key(source_index, overlap_choice),
+                }
+                highlight_links = {
+                    link_key(source_index, shape_choice, target_index, compared_sheet_id),
+                    link_key(source_index, overlap_choice, target_index, compared_sheet_id),
+                }
+                direction_fields = {
+                    "target_sheet_id": compared_sheet_id,
+                    "shape_source_sheet_id": shape_choice,
+                    "overlap_source_sheet_id": overlap_choice,
+                    "target_node": node_key(target_index, compared_sheet_id),
+                    "shape_source_node": node_key(source_index, shape_choice),
+                    "overlap_source_node": node_key(source_index, overlap_choice),
+                    "shape_link": link_key(source_index, shape_choice, target_index, compared_sheet_id),
+                    "overlap_link": link_key(source_index, overlap_choice, target_index, compared_sheet_id),
+                }
+
+            example = {
+                "id": f"disagreement:{direction}:{source_index}:{target_index}:{compared_sheet_id}",
+                "direction": direction,
+                "source_timestep_index": source_index,
+                "target_timestep_index": target_index,
+                "source_label": pair.get("source_label"),
+                "target_label": pair.get("target_label"),
+                "compared_sheet_role": compared_role,
+                "compared_sheet_id": compared_sheet_id,
+                "range_choice_role": choice_role,
+                "domain_choice_role": choice_role,
+                "range_choice_sheet_id": shape_choice,
+                "domain_choice_sheet_id": overlap_choice,
+                "shape_score": shape_score,
+                "domain_overlap_metric": overlap_metric,
+                "domain_overlap_percent": overlap_percent,
+                "overlap_max_percent": overlap_max_percent,
+                "overlap_score": overlap_score,
+                "shape_score_for_domain_choice": shape_score_for_domain_choice,
+                "overlap_score_for_range_choice": overlap_score_for_range_choice,
+                "shape_score_for_domain_target": shape_score_for_domain_choice,
+                "overlap_score_for_range_target": overlap_score_for_range_choice,
+                "shape_loss": shape_loss,
+                "overlap_loss": overlap_loss,
+                "confidence": confidence,
+                "disagreement_score": disagreement_score,
+                **direction_fields,
+                "highlight": {
+                    "nodes": sorted(highlight_nodes),
+                    "links": sorted(highlight_links),
+                },
+            }
+            direction_examples.append(example)
+
+        direction_examples.sort(
+            key=lambda item: safe_float(item.get("disagreement_score")),
+            reverse=True,
+        )
+        return {
+            "examples": direction_examples,
+            "compared": compared,
+            "agreements": agreements,
+            "disagreements": len(direction_examples),
+            "max_score": safe_float(direction_examples[0].get("disagreement_score"))
+            if direction_examples
+            else 0.0,
+        }
+
+    overlap_pairs = {
+        (
+            safe_int(pair.get("source_timestep_index")),
+            safe_int(pair.get("target_timestep_index")),
+        ): pair
+        for pair in data.get("overlap_pairs", [])
+    }
 
     for pair in data.get("shape_pairs", []):
         source_index = safe_int(pair.get("source_timestep_index"))
         target_index = safe_int(pair.get("target_timestep_index"))
         pair_key = (source_index, target_index)
-        shape_source_groups = shape_groups.get(pair_key, {})
-        overlap_source_groups = overlap_groups.get(pair_key, {})
+        overlap_pair = overlap_pairs.get(pair_key)
+        if overlap_pair is None:
+            continue
 
-        compared = 0
-        agreements = 0
-        pair_examples: list[dict] = []
-
-        for source_sheet_id, overlap_matches in overlap_source_groups.items():
-            shape_matches = shape_source_groups.get(source_sheet_id, [])
-            shape_best = best_shape_match(shape_matches, "combined")
-            overlap_best = best_overlap_match(overlap_matches, "overlap_max_percent")
-            if shape_best is None or overlap_best is None:
-                continue
-
-            compared += 1
-            shape_target = safe_int(shape_best.get("target_sheet_id"))
-            overlap_target = safe_int(overlap_best.get("target_sheet_id"))
-            shape_score = get_shape_metrics(shape_best)["combined"]
-            overlap_percent = get_overlap_metrics(overlap_best)["overlap_max_percent"]
-            overlap_score = normalized_overlap_max_score(overlap_best)
-            if shape_target == overlap_target:
-                agreements += 1
-                continue
-
-            shape_for_overlap_target = next(
-                (
-                    match
-                    for match in shape_matches
-                    if safe_int(match.get("target_sheet_id")) == overlap_target
-                ),
-                None,
-            )
-            overlap_for_shape_target = next(
-                (
-                    match
-                    for match in overlap_matches
-                    if safe_int(match.get("target_sheet_id")) == shape_target
-                ),
-                None,
-            )
-            shape_score_for_domain_target = (
-                get_shape_metrics(shape_for_overlap_target)["combined"]
-                if shape_for_overlap_target
-                else 0.0
-            )
-            overlap_score_for_range_target = normalized_overlap_max_score(overlap_for_shape_target)
-            shape_loss = max(0.0, shape_score - shape_score_for_domain_target)
-            overlap_loss = max(0.0, overlap_score - overlap_score_for_range_target)
-            confidence = min(shape_score, overlap_score)
-            disagreement_score = 0.5 * (shape_loss + overlap_loss) * confidence
-
-            example = {
-                "id": f"disagreement:{source_index}:{target_index}:{source_sheet_id}",
-                "source_timestep_index": source_index,
-                "target_timestep_index": target_index,
-                "source_label": pair.get("source_label"),
-                "target_label": pair.get("target_label"),
-                "source_sheet_id": source_sheet_id,
-                "shape_target_sheet_id": shape_target,
-                "overlap_target_sheet_id": overlap_target,
-                "shape_score": shape_score,
-                "overlap_max_percent": overlap_percent,
-                "overlap_score": overlap_score,
-                "shape_score_for_domain_target": shape_score_for_domain_target,
-                "overlap_score_for_range_target": overlap_score_for_range_target,
-                "shape_loss": shape_loss,
-                "overlap_loss": overlap_loss,
-                "confidence": confidence,
-                "disagreement_score": disagreement_score,
-                "source_node": node_key(source_index, source_sheet_id),
-                "shape_target_node": node_key(target_index, shape_target),
-                "overlap_target_node": node_key(target_index, overlap_target),
-                "shape_link": link_key(source_index, source_sheet_id, target_index, shape_target),
-                "overlap_link": link_key(source_index, source_sheet_id, target_index, overlap_target),
-                "highlight": {
-                    "nodes": sorted({node_key(source_index, source_sheet_id), node_key(target_index, shape_target), node_key(target_index, overlap_target)}),
-                    "links": sorted({link_key(source_index, source_sheet_id, target_index, shape_target), link_key(source_index, source_sheet_id, target_index, overlap_target)}),
-                },
-            }
-            pair_examples.append(example)
-            examples.append(example)
-
+        forward = collect_directional_examples(pair, overlap_pair, "forward")
+        backward = collect_directional_examples(pair, overlap_pair, "backward")
+        pair_examples = [*forward["examples"], *backward["examples"]]
         if pair_examples:
             pair_examples.sort(key=lambda item: safe_float(item.get("disagreement_score")), reverse=True)
             scores = [safe_float(item.get("disagreement_score")) for item in pair_examples]
             shape_losses = [safe_float(item.get("shape_loss")) for item in pair_examples]
             overlap_losses = [safe_float(item.get("overlap_loss")) for item in pair_examples]
+            compared = safe_int(forward["compared"]) + safe_int(backward["compared"])
+            agreements = safe_int(forward["agreements"]) + safe_int(backward["agreements"])
+            disagreement_count = len(pair_examples)
+            examples.extend(pair_examples)
             summaries[pair_key] = {
                 "id": f"disagreement_pair:{source_index}:{target_index}",
                 "source_timestep_index": source_index,
@@ -1139,11 +1242,20 @@ def collect_domain_shape_disagreements(data: dict) -> tuple[list[dict], list[dic
                 "source_label": pair.get("source_label"),
                 "target_label": pair.get("target_label"),
                 "pair_label": f"{pair.get('source_label')}->{pair.get('target_label')}",
+                "compared_count": compared,
                 "compared_sources": compared,
+                "forward_compared_sources": forward["compared"],
+                "backward_compared_targets": backward["compared"],
                 "agreement_count": agreements,
-                "disagreement_count": len(pair_examples),
+                "forward_agreement_count": forward["agreements"],
+                "backward_agreement_count": backward["agreements"],
+                "disagreement_count": disagreement_count,
+                "forward_disagreement_count": forward["disagreements"],
+                "backward_disagreement_count": backward["disagreements"],
                 "agreement_fraction": agreements / compared if compared else 0.0,
-                "disagreement_fraction": len(pair_examples) / compared if compared else 0.0,
+                "disagreement_fraction": disagreement_count / compared if compared else 0.0,
+                "forward_max_disagreement_score": forward["max_score"],
+                "backward_max_disagreement_score": backward["max_score"],
                 "max_disagreement_score": max(scores) if scores else 0.0,
                 "mean_disagreement_score": mean(scores),
                 "max_shape_loss": max(shape_losses) if shape_losses else 0.0,
@@ -1211,7 +1323,7 @@ def build_viewer_analysis(
         "notes": {
             "interval_score": "Higher event score means weaker or more ambiguous sheet continuation between adjacent timesteps.",
             "track_score": "Continuing features are greedy best-combined-score tracks at the selected theta.",
-            "disagreement": "Domain-vs-range disagreements compare overlap_max_percent best targets against combined range-shape best targets.",
+            "disagreement": "Domain-vs-range disagreements compare direction-specific domain-overlap choices against combined range-shape choices: source retention for forward targets and target inheritance for backward predecessors.",
         },
     }
 

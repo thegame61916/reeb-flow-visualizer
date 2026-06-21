@@ -423,18 +423,43 @@ def sheets_to_render(rsi: RsiData, sheet_polygons) -> list[int]:
     return sheets
 
 
-def timestep_images_exist(stem: str) -> bool:
+def expected_sheet_ids_for_stem(stem: str) -> list[int]:
+    rsi_path = matching_file(RSI_DIRECTORY, stem, ".rsi")
+    rsi = read_rsi(rsi_path)
+    cached_vtp = VTP_CACHE_DIR / f"{stem}.sheets.vtp"
+    if not cached_vtp.exists():
+        raise FileNotFoundError(f"missing Stage 1 cached sheet VTP: {cached_vtp}")
+    sheet_polygons = read_sheet_vtp(cached_vtp)
+    return sheets_to_render(rsi, sheet_polygons)
+
+
+def timestep_images_complete(rs_path: Path) -> bool:
+    stem = rs_path.stem
     output_dir = OUTPUT_DIRECTORY / stem
-    return (
-        (output_dir / f"{stem}.png").exists()
-        and any(output_dir.glob("sheet_*.png"))
-    )
+    overview = output_dir / f"{stem}.png"
+    if not overview.exists():
+        return False
+
+    try:
+        expected_sheets = expected_sheet_ids_for_stem(stem)
+    except Exception as exc:
+        print(f"{stem}: cannot validate existing sheet images; rerendering. Error: {exc}", file=sys.stderr)
+        return False
+
+    missing = [sheet_id for sheet_id in expected_sheets if not (output_dir / f"sheet_{sheet_id}.png").exists()]
+    if missing:
+        preview = ", ".join(str(sheet_id) for sheet_id in missing[:12])
+        suffix = "" if len(missing) <= 12 else f", ... ({len(missing)} total)"
+        print(f"{stem}: incomplete sheet images; missing sheet(s) {preview}{suffix}", file=sys.stderr)
+        return False
+
+    return True
 
 
 def should_render_timestep(rs_path: Path) -> bool:
     if SHEET_RENDERER_REPLACE_EXISTING_IMAGES:
         return True
-    return not timestep_images_exist(rs_path.stem)
+    return not timestep_images_complete(rs_path)
 
 
 def load_or_build_sheet_vtp(

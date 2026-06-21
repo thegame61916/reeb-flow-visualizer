@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
-"""Build a unified Sankey dashboard for shape and domain overlap."""
+"""Build a unified Sankey dashboard for range and domain overlap."""
 
 from __future__ import annotations
 
 import json
 import math
+import re
 import shutil
 import time
 import argparse
@@ -23,6 +24,7 @@ from common import (
     SANKEY_TIMESTEP_STRIDE_MAX,
     TRACKING_ANALYSIS_EVENT_SCORE_TERMS,
     TRACKING_ANALYSIS_PREFERRED_THRESHOLD,
+    TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT,
     TRACKING_ANALYSIS_THRESHOLDS,
     TRACKING_ANALYSIS_TOP_DISAGREEMENTS,
     TRACKING_ANALYSIS_TOP_FEATURES,
@@ -45,25 +47,25 @@ MATCHES_FILE = STORAGE_ROOT / "results" / "sheet_shape_matches.json"
 UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
 
 SHAPE_METRICS = [
-    {"id": "shape_iou", "label": "shape overlap", "field": "shape_iou"},
-    {"id": "combined", "label": "shape overlap score", "field": "final_score"},
-    {"id": "area_ratio", "label": "shape area ratio", "field": "area_ratio"},
-    {"id": "bbox_iou", "label": "shape bbox overlap", "field": "bbox_iou"},
-    {"id": "centroid_similarity", "label": "shape centroid similarity", "field": "centroid_similarity"},
+    {"id": "shape_iou", "label": "Sheet IoU", "field": "shape_iou"},
+    {"id": "area_ratio", "label": "Sheet area ratio", "field": "area_ratio"},
+    {"id": "bbox_iou", "label": "Sheet bbox overlap", "field": "bbox_iou"},
+    {"id": "centroid_similarity", "label": "Sheet centroid distance", "field": "centroid_similarity"},
+    {"id": "combined", "label": "Combined", "field": "final_score"},
 ]
 
 OVERLAP_METRICS = [
-    {"id": "overlap_vertices", "label": "domain overlap vertices", "field": "overlap_vertices"},
-    {"id": "overlap_source_percent", "label": "source domain %", "field": "source_percent"},
-    {"id": "overlap_target_percent", "label": "target domain %", "field": "target_percent"},
-    {"id": "overlap_max_percent", "label": "max domain %", "field": "max_percent"},
+    {"id": "overlap_vertices", "label": "Domain vertex count", "field": "overlap_vertices"},
+    {"id": "overlap_source_percent", "label": "Source domain %", "field": "source_percent"},
+    {"id": "overlap_target_percent", "label": "Target domain %", "field": "target_percent"},
+    {"id": "overlap_max_percent", "label": "Max domain %", "field": "max_percent"},
 ]
 
 
 DATA_MODES = [
     {
         "id": "shape",
-        "label": "Shape overlap",
+        "label": "Range overlap",
         "pair_field": "shape_pairs",
         "default_metric": "shape_iou",
         "metrics": SHAPE_METRICS,
@@ -92,6 +94,37 @@ def safe_float(value, default=0.0):
         return float(value)
     except Exception:
         return default
+
+
+TIMESTEP_NUMBER_PATTERN = re.compile(r"(\d+)(?!.*\d)")
+
+
+def timestep_numeric_value(value) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return int(value)
+
+    match = TIMESTEP_NUMBER_PATTERN.search(str(value))
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def timestep_cache_sort_key(item: dict) -> tuple[int, int | str, str]:
+    for key in ("timestep_index", "index"):
+        numeric_value = timestep_numeric_value(item.get(key))
+        if numeric_value is not None:
+            return (0, numeric_value, str(item.get("stem", "")))
+
+    for key in ("label", "stem"):
+        numeric_value = timestep_numeric_value(item.get(key))
+        if numeric_value is not None:
+            return (1, numeric_value, str(item.get("stem", "")))
+
+    return (2, str(item.get("label", "")), str(item.get("stem", "")))
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -263,11 +296,31 @@ def find_fiber_surface_image(stem: str, sheet_id: int, viewer_dir: Path) -> str 
     return linked.relative_to(viewer_dir).as_posix()
 
 
+def refresh_media_paths(data: dict, viewer_dir: Path) -> int:
+    changed = 0
+    for timestep in data.get("timesteps", []):
+        stem = str(timestep.get("stem", ""))
+        if not stem:
+            continue
+        for sheet in timestep.get("sheets", []):
+            sheet_id = safe_int(sheet.get("sheet_id"))
+            thumbnail = find_sheet_image(stem, sheet_id, viewer_dir)
+            fiber_surface_image = find_fiber_surface_image(stem, sheet_id, viewer_dir)
+            if sheet.get("thumbnail") != thumbnail:
+                sheet["thumbnail"] = thumbnail
+                changed += 1
+            if sheet.get("fiber_surface_image") != fiber_surface_image:
+                sheet["fiber_surface_image"] = fiber_surface_image
+                changed += 1
+    return changed
+
+
 def load_timestep_cache(viewer_dir: Path) -> tuple[list[dict], float, int, tuple[float, float, float, float]]:
     if not TIMESTEP_CACHE_DIR.exists():
         raise FileNotFoundError(f"Timestep cache directory missing: {TIMESTEP_CACHE_DIR}")
 
-    cache_items = [json.loads(path.read_text()) for path in sorted(TIMESTEP_CACHE_DIR.glob("*.json"))]
+    cache_items = [json.loads(path.read_text()) for path in TIMESTEP_CACHE_DIR.glob("*.json")]
+    cache_items.sort(key=timestep_cache_sort_key)
     centroid_color_bounds: tuple[float, float, float, float] | None = None
     for data in cache_items:
         centroid_color_bounds = merge_bounds(centroid_color_bounds, safe_bounds(data.get("global_bounds")))
@@ -574,6 +627,7 @@ def prepare_data(viewer_dir: Path) -> dict:
             "tracking_analysis_top_intervals": TRACKING_ANALYSIS_TOP_INTERVALS,
             "tracking_analysis_top_features": TRACKING_ANALYSIS_TOP_FEATURES,
             "tracking_analysis_top_disagreements": TRACKING_ANALYSIS_TOP_DISAGREEMENTS,
+            "tracking_analysis_split_merge_weight": TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT,
             "tracking_analysis_event_score_terms": list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS),
             "tracking_analysis_event_score_formula": tracking_analysis_event_score_formula_text(),
             "global_area_max": max_area,
@@ -733,6 +787,7 @@ def apply_current_tracking_analysis_meta(data: dict) -> dict:
     meta["tracking_analysis_top_intervals"] = TRACKING_ANALYSIS_TOP_INTERVALS
     meta["tracking_analysis_top_features"] = TRACKING_ANALYSIS_TOP_FEATURES
     meta["tracking_analysis_top_disagreements"] = TRACKING_ANALYSIS_TOP_DISAGREEMENTS
+    meta["tracking_analysis_split_merge_weight"] = TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT
     meta["tracking_analysis_event_score_terms"] = list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS)
     meta["tracking_analysis_event_score_formula"] = tracking_analysis_event_score_formula_text()
     return data
@@ -740,8 +795,11 @@ def apply_current_tracking_analysis_meta(data: dict) -> dict:
 
 def load_tracking_data() -> dict:
     if TRACKING_DATA_FILE.exists():
-        return apply_current_tracking_analysis_meta(json.loads(TRACKING_DATA_FILE.read_text()))
-    return apply_current_tracking_analysis_meta(prepare_data(UNIFIED_VIEWER_DIR))
+        data = json.loads(TRACKING_DATA_FILE.read_text())
+    else:
+        data = prepare_data(UNIFIED_VIEWER_DIR)
+    refresh_media_paths(data, UNIFIED_VIEWER_DIR)
+    return apply_current_tracking_analysis_meta(data)
 
 
 def load_analysis_for_viewer() -> dict | None:
@@ -771,14 +829,14 @@ def write_index_html() -> Path:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Reeb Flow Visualizer</title>
+  <title>Reeb flow visualizer</title>
   <link rel="stylesheet" href="style.css?v={asset_version}">
 </head>
 <body>
   <header>
     <div class="title-block">
-      <h1>Reeb Flow Visualizer</h1>
-      <p>Explore time-varying Reeb-space sheets with linked Sankey, image, and analysis views.</p>
+      <h1>Reeb flow visualizer</h1>
+      <p>Explore time-varying reeb-space sheets with linked sankey, image, and analysis views.</p>
     </div>
     <div class="header-actions">
       <button id="zoomOut">Zoom out</button>
@@ -806,33 +864,33 @@ def write_index_html() -> Path:
         <label>
           Sorting
           <select id="orderingMode">
-            <option value="crossings" selected>crossing-minimized</option>
-            <option value="area">sheet area</option>
-            <option value="vertices">domain vertex count</option>
+            <option value="crossings" selected>Weighted crossing-reduced</option>
+            <option value="area">Sheet area</option>
+            <option value="vertices">Domain vertex count</option>
           </select>
         </label>
         <label>
-          Node Height Basis
+          Node height basis
           <select id="nodeSizeMode">
-            <option value="vertices" selected>domain vertex count</option>
+            <option value="vertices" selected>Domain vertex count</option>
           </select>
         </label>
         <label>
-          Top Sheets
+          Top sheets
           <input id="topSheets" type="number" min="1" step="1" value="{max(1, safe_int(VIEWER_DEFAULT_TOP_SHEETS, 10))}">
         </label>
         <label>
-          Timestep Sampling
+          Timestep sampling
           <select id="timestepStride"></select>
         </label>
         <label>
-          Node Color
+          Node color
           <select id="nodeColorMode">
-            <option value="solid" selected>solid</option>
-            <option value="area">sheet area</option>
-            <option value="vertices">domain vertex count</option>
-            <option value="centroid_position">centroid corners</option>
-            <option value="centroid_axis_diagonal">centroid red/blue axes</option>
+            <option value="solid" selected>Solid</option>
+            <option value="area">Sheet area</option>
+            <option value="vertices">Domain vertex count</option>
+            <option value="centroid_position">Centroid corners</option>
+            <option value="centroid_axis_diagonal">Centroid red/blue axes</option>
           </select>
         </label>
         <div id="centroidColorLegend" class="centroid-color-legend" hidden>
@@ -846,7 +904,7 @@ def write_index_html() -> Path:
           <div id="centroidYMin" class="centroid-axis-label"></div>
         </div>
         <label>
-          Link Darkness
+          Link darkness
           <input id="linkDarkness" type="range" min="0" max="100" step="1" value="55">
           <span id="linkDarknessValue">55%</span>
         </label>
@@ -970,6 +1028,26 @@ aside {
 }
 #detailsContent .media-stack .thumb {
   margin: 0;
+}
+#detailsContent .media-item {
+  display: grid;
+  gap: 4px;
+}
+#detailsContent .media-label {
+  color: #5b6673;
+  font-size: 11px;
+  font-weight: 600;
+}
+#detailsContent .media-missing {
+  align-items: center;
+  background: #f5f7fa;
+  border: 1px dashed #bdc7d2;
+  border-radius: 6px;
+  color: #6d7784;
+  display: flex;
+  font-size: 12px;
+  min-height: 46px;
+  padding: 8px;
 }
 #detailsContent .zoomable-image {
   cursor: zoom-in;
@@ -1793,13 +1871,15 @@ d3.json("data.json").then(data => {
   const metaAnalysisThresholds = Array.isArray(data.meta?.tracking_analysis_thresholds) && data.meta.tracking_analysis_thresholds.length
     ? data.meta.tracking_analysis_thresholds.map(Number).filter(Number.isFinite)
     : [0.3, 0.4, 0.5, 0.6, 0.7];
+  const configuredSplitMergeWeight = Number(data.meta?.tracking_analysis_split_merge_weight);
+  const splitMergeWeight = Number.isFinite(configuredSplitMergeWeight) ? configuredSplitMergeWeight : 1;
   const metaEventScoreTerms = Array.isArray(data.meta?.tracking_analysis_event_score_terms) && data.meta.tracking_analysis_event_score_terms.length
     ? data.meta.tracking_analysis_event_score_terms
     : [
         { component: "source_weak_count", weight: 1 },
         { component: "target_weak_count", weight: 1 },
-        { component: "possible_splits", weight: 0.5 },
-        { component: "possible_merges", weight: 0.5 },
+        { component: "possible_splits", weight: splitMergeWeight },
+        { component: "possible_merges", weight: splitMergeWeight },
         { component: "continuation_gap_source_count", weight: 1 },
       ];
   const analysisData = embeddedAnalysisData
@@ -1813,7 +1893,7 @@ d3.json("data.json").then(data => {
         preferred_threshold: Number(data.meta?.tracking_analysis_preferred_threshold) || 0.5,
         top_intervals: Number(data.meta?.tracking_analysis_top_intervals) || 12,
         top_features: Number(data.meta?.tracking_analysis_top_features) || 12,
-        split_merge_weight: 0.5,
+        split_merge_weight: splitMergeWeight,
         event_score_terms: metaEventScoreTerms,
         event_score_formula: data.meta?.tracking_analysis_event_score_formula || "",
         sensitivity: [],
@@ -2048,6 +2128,21 @@ d3.json("data.json").then(data => {
     const row = target.closest(".link-media-row");
     const stack = target.closest(".media-stack");
     if (!row || !stack) return { images: [], title: "" };
+
+    const clickedItem = target.closest(".media-item");
+    const mediaKind = target.dataset.mediaKind || clickedItem?.dataset.mediaKind || "";
+    if (mediaKind) {
+      const title = mediaKind === "fiber" ? "Fiber surface images" : "Sheet images";
+      const images = Array.from(row.querySelectorAll(".media-stack")).map((item, index) => {
+        const img = item.querySelector(`img.zoomable-image[data-media-kind="${mediaKind}"]`);
+        if (!img) return null;
+        return {
+          src: img.currentSrc || img.src,
+          label: img.dataset.zoomLabel || img.alt || (index === 0 ? "Source" : "Target")
+        };
+      }).filter(Boolean);
+      return { images: images.length > 1 ? images : [], title };
+    }
 
     const clickedStackImages = Array.from(stack.querySelectorAll("img.zoomable-image"));
     const mediaIndex = clickedStackImages.indexOf(target);
@@ -2781,6 +2876,31 @@ d3.json("data.json").then(data => {
     return clamp(overlapMaxPercent(match) / 100, 0, 1);
   }
 
+  function overlapPercentForDirection(match, direction) {
+    const metrics = match?.metrics || {};
+    const value = direction === "backward"
+      ? Number(metrics.overlap_target_percent ?? match?.target_percent ?? 0)
+      : Number(metrics.overlap_source_percent ?? match?.source_percent ?? 0);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function normalizedOverlapScoreForDirection(match, direction) {
+    return clamp(overlapPercentForDirection(match, direction) / 100, 0, 1);
+  }
+
+  function bestDirectionalOverlapMatch(matches, direction) {
+    let best = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (const match of matches || []) {
+      const score = overlapPercentForDirection(match, direction);
+      if (score > bestScore) {
+        best = match;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
   function bestOverlapMatch(matches) {
     let best = null;
     let bestScore = Number.NEGATIVE_INFINITY;
@@ -2819,6 +2939,130 @@ d3.json("data.json").then(data => {
 
     const examples = [];
     const summary = [];
+    const collectDirectionalDisagreements = (shapePair, overlapPair, direction) => {
+      const sourceIndex = Number(shapePair.source_timestep_index);
+      const targetIndex = Number(shapePair.target_timestep_index);
+      const groupField = direction === "forward" ? "source_sheet_id" : "target_sheet_id";
+      const choiceField = direction === "forward" ? "target_sheet_id" : "source_sheet_id";
+      const comparedRole = direction === "forward" ? "source" : "target";
+      const choiceRole = direction === "forward" ? "target" : "source";
+      const shapeGroups = groupMatchesByField(shapePair.matches || [], groupField);
+      const overlapGroups = groupMatchesByField(overlapPair.matches || [], groupField);
+      let compared = 0;
+      let agreements = 0;
+      const directionExamples = [];
+
+      for (const [comparedSheetIdRaw, overlapMatches] of overlapGroups.entries()) {
+        const comparedSheetId = Number(comparedSheetIdRaw);
+        const shapeMatches = shapeGroups.get(comparedSheetIdRaw) || shapeGroups.get(comparedSheetId) || [];
+        const shapeBest = bestAnalysisMatch(shapeMatches);
+        const overlapBest = bestDirectionalOverlapMatch(overlapMatches || [], direction);
+        if (!shapeBest || !overlapBest) continue;
+
+        compared += 1;
+        const shapeChoice = Number(shapeBest?.[choiceField]);
+        const overlapChoice = Number(overlapBest?.[choiceField]);
+        const shapeScore = analysisCombinedScore(shapeBest);
+        const overlapPercent = overlapPercentForDirection(overlapBest, direction);
+        const overlapMax = overlapMaxPercent(overlapBest);
+        const overlapScore = normalizedOverlapScoreForDirection(overlapBest, direction);
+        if (shapeChoice === overlapChoice) {
+          agreements += 1;
+          continue;
+        }
+
+        const shapeForDomainChoice = shapeMatches.find(match => Number(match?.[choiceField]) === overlapChoice) || null;
+        const overlapForRangeChoice = (overlapMatches || []).find(match => Number(match?.[choiceField]) === shapeChoice) || null;
+        const shapeScoreForDomainChoice = shapeForDomainChoice ? analysisCombinedScore(shapeForDomainChoice) : 0;
+        const overlapScoreForRangeChoice = overlapForRangeChoice ? normalizedOverlapScoreForDirection(overlapForRangeChoice, direction) : 0;
+        const shapeLoss = Math.max(0, shapeScore - shapeScoreForDomainChoice);
+        const overlapLoss = Math.max(0, overlapScore - overlapScoreForRangeChoice);
+        const confidence = Math.min(shapeScore, overlapScore);
+        const disagreementScore = 0.5 * (shapeLoss + overlapLoss) * confidence;
+        const directionFields = direction === "forward"
+          ? {
+              source_sheet_id: comparedSheetId,
+              shape_target_sheet_id: shapeChoice,
+              overlap_target_sheet_id: overlapChoice,
+              source_node: sheetKey(sourceIndex, comparedSheetId),
+              shape_target_node: sheetKey(targetIndex, shapeChoice),
+              overlap_target_node: sheetKey(targetIndex, overlapChoice),
+              shape_link: linkKeyParts(sourceIndex, comparedSheetId, targetIndex, shapeChoice),
+              overlap_link: linkKeyParts(sourceIndex, comparedSheetId, targetIndex, overlapChoice),
+              highlight: {
+                nodes: [
+                  sheetKey(sourceIndex, comparedSheetId),
+                  sheetKey(targetIndex, shapeChoice),
+                  sheetKey(targetIndex, overlapChoice),
+                ],
+                links: [
+                  linkKeyParts(sourceIndex, comparedSheetId, targetIndex, shapeChoice),
+                  linkKeyParts(sourceIndex, comparedSheetId, targetIndex, overlapChoice),
+                ],
+              },
+            }
+          : {
+              target_sheet_id: comparedSheetId,
+              shape_source_sheet_id: shapeChoice,
+              overlap_source_sheet_id: overlapChoice,
+              target_node: sheetKey(targetIndex, comparedSheetId),
+              shape_source_node: sheetKey(sourceIndex, shapeChoice),
+              overlap_source_node: sheetKey(sourceIndex, overlapChoice),
+              shape_link: linkKeyParts(sourceIndex, shapeChoice, targetIndex, comparedSheetId),
+              overlap_link: linkKeyParts(sourceIndex, overlapChoice, targetIndex, comparedSheetId),
+              highlight: {
+                nodes: [
+                  sheetKey(targetIndex, comparedSheetId),
+                  sheetKey(sourceIndex, shapeChoice),
+                  sheetKey(sourceIndex, overlapChoice),
+                ],
+                links: [
+                  linkKeyParts(sourceIndex, shapeChoice, targetIndex, comparedSheetId),
+                  linkKeyParts(sourceIndex, overlapChoice, targetIndex, comparedSheetId),
+                ],
+              },
+            };
+        const example = {
+          id: `disagreement:${direction}:${sourceIndex}:${targetIndex}:${comparedSheetId}`,
+          direction,
+          source_timestep_index: sourceIndex,
+          target_timestep_index: targetIndex,
+          source_label: shapePair.source_label,
+          target_label: shapePair.target_label,
+          compared_sheet_role: comparedRole,
+          compared_sheet_id: comparedSheetId,
+          range_choice_role: choiceRole,
+          domain_choice_role: choiceRole,
+          range_choice_sheet_id: shapeChoice,
+          domain_choice_sheet_id: overlapChoice,
+          shape_score: shapeScore,
+          domain_overlap_metric: direction === "backward" ? "overlap_target_percent" : "overlap_source_percent",
+          domain_overlap_percent: overlapPercent,
+          overlap_max_percent: overlapMax,
+          overlap_score: overlapScore,
+          shape_score_for_domain_choice: shapeScoreForDomainChoice,
+          overlap_score_for_range_choice: overlapScoreForRangeChoice,
+          shape_score_for_domain_target: shapeScoreForDomainChoice,
+          overlap_score_for_range_target: overlapScoreForRangeChoice,
+          shape_loss: shapeLoss,
+          overlap_loss: overlapLoss,
+          confidence,
+          disagreement_score: disagreementScore,
+          ...directionFields,
+        };
+        directionExamples.push(example);
+      }
+
+      directionExamples.sort((a, b) => Number(b.disagreement_score) - Number(a.disagreement_score));
+      return {
+        examples: directionExamples,
+        compared,
+        agreements,
+        disagreements: directionExamples.length,
+        maxScore: directionExamples.length ? Number(directionExamples[0].disagreement_score) || 0 : 0,
+      };
+    };
+
     for (const shapePair of pairsForMode("shape")) {
       const sourceIndex = Number(shapePair.source_timestep_index);
       const targetIndex = Number(shapePair.target_timestep_index);
@@ -2827,76 +3071,17 @@ d3.json("data.json").then(data => {
       const overlapPair = overlapPairLookup.get(pairKey);
       if (!overlapPair) continue;
 
-      const shapeBySource = groupMatchesByField(shapePair.matches || [], "source_sheet_id");
-      const overlapBySource = groupMatchesByField(overlapPair.matches || [], "source_sheet_id");
-      let compared = 0;
-      let agreements = 0;
-      const pairExamples = [];
-
-      for (const [sourceSheetId, overlapMatches] of overlapBySource.entries()) {
-        const shapeMatches = shapeBySource.get(sourceSheetId) || [];
-        const shapeBest = bestAnalysisMatch(shapeMatches);
-        const overlapBest = bestOverlapMatch(overlapMatches || []);
-        if (!shapeBest || !overlapBest) continue;
-
-        compared += 1;
-        const shapeTarget = Number(shapeBest.target_sheet_id);
-        const overlapTarget = Number(overlapBest.target_sheet_id);
-        const shapeScore = analysisCombinedScore(shapeBest);
-        const overlapPercent = overlapMaxPercent(overlapBest);
-        const overlapScore = normalizedOverlapMaxScore(overlapBest);
-        if (shapeTarget === overlapTarget) {
-          agreements += 1;
-          continue;
-        }
-
-        const shapeForDomainTarget = shapeMatches.find(match => Number(match.target_sheet_id) === overlapTarget) || null;
-        const overlapForRangeTarget = (overlapMatches || []).find(match => Number(match.target_sheet_id) === shapeTarget) || null;
-        const shapeScoreForDomainTarget = shapeForDomainTarget ? analysisCombinedScore(shapeForDomainTarget) : 0;
-        const overlapScoreForRangeTarget = overlapForRangeTarget ? normalizedOverlapMaxScore(overlapForRangeTarget) : 0;
-        const shapeLoss = Math.max(0, shapeScore - shapeScoreForDomainTarget);
-        const overlapLoss = Math.max(0, overlapScore - overlapScoreForRangeTarget);
-        const confidence = Math.min(shapeScore, overlapScore);
-        const disagreementScore = 0.5 * (shapeLoss + overlapLoss) * confidence;
-        const example = {
-          id: `disagreement:${sourceIndex}:${targetIndex}:${sourceSheetId}`,
-          source_timestep_index: sourceIndex,
-          target_timestep_index: targetIndex,
-          source_label: shapePair.source_label,
-          target_label: shapePair.target_label,
-          source_sheet_id: Number(sourceSheetId),
-          shape_target_sheet_id: shapeTarget,
-          overlap_target_sheet_id: overlapTarget,
-          shape_score: shapeScore,
-          overlap_max_percent: overlapPercent,
-          overlap_score: overlapScore,
-          shape_score_for_domain_target: shapeScoreForDomainTarget,
-          overlap_score_for_range_target: overlapScoreForRangeTarget,
-          shape_loss: shapeLoss,
-          overlap_loss: overlapLoss,
-          confidence,
-          disagreement_score: disagreementScore,
-          highlight: {
-            nodes: [
-              sheetKey(sourceIndex, sourceSheetId),
-              sheetKey(targetIndex, shapeTarget),
-              sheetKey(targetIndex, overlapTarget),
-            ],
-            links: [
-              linkKeyParts(sourceIndex, sourceSheetId, targetIndex, shapeTarget),
-              linkKeyParts(sourceIndex, sourceSheetId, targetIndex, overlapTarget),
-            ],
-          },
-        };
-        pairExamples.push(example);
-        examples.push(example);
-      }
+      const forward = collectDirectionalDisagreements(shapePair, overlapPair, "forward");
+      const backward = collectDirectionalDisagreements(shapePair, overlapPair, "backward");
+      const pairExamples = [...forward.examples, ...backward.examples];
 
       pairExamples.sort((a, b) => Number(b.disagreement_score) - Number(a.disagreement_score));
       const scores = pairExamples.map(item => Number(item.disagreement_score) || 0);
       const shapeLosses = pairExamples.map(item => Number(item.shape_loss) || 0);
       const overlapLosses = pairExamples.map(item => Number(item.overlap_loss) || 0);
       if (!pairExamples.length) continue;
+      const compared = forward.compared + backward.compared;
+      const agreements = forward.agreements + backward.agreements;
       summary.push({
         id: `disagreement_pair:${sourceIndex}:${targetIndex}`,
         source_timestep_index: sourceIndex,
@@ -2904,11 +3089,20 @@ d3.json("data.json").then(data => {
         source_label: shapePair.source_label,
         target_label: shapePair.target_label,
         pair_label: `${shapePair.source_label || sourceIndex}->${shapePair.target_label || targetIndex}`,
+        compared_count: compared,
         compared_sources: compared,
+        forward_compared_sources: forward.compared,
+        backward_compared_targets: backward.compared,
         agreement_count: agreements,
+        forward_agreement_count: forward.agreements,
+        backward_agreement_count: backward.agreements,
         disagreement_count: pairExamples.length,
+        forward_disagreement_count: forward.disagreements,
+        backward_disagreement_count: backward.disagreements,
         agreement_fraction: compared ? agreements / compared : 0,
         disagreement_fraction: compared ? pairExamples.length / compared : 0,
+        forward_max_disagreement_score: forward.maxScore,
+        backward_max_disagreement_score: backward.maxScore,
         max_disagreement_score: scores.length ? Math.max(...scores) : 0,
         mean_disagreement_score: meanNumber(scores),
         max_shape_loss: shapeLosses.length ? Math.max(...shapeLosses) : 0,
@@ -2917,6 +3111,7 @@ d3.json("data.json").then(data => {
         mean_overlap_loss: meanNumber(overlapLosses),
         strongest_disagreement: pairExamples[0] || null,
       });
+      examples.push(...pairExamples);
     }
 
     if (!summary.length && Array.isArray(analysisData?.domain_shape_disagreement_summary)) {
@@ -3510,7 +3705,7 @@ d3.json("data.json").then(data => {
     title.append("strong").text(`${items.length} overlapping continuing features`);
     title.append("span")
       .style("display", "block")
-      .text(`length ${formatTrackGroupRange(items, entry => entry.length, value => String(Math.round(value)))} | mean ${formatTrackGroupRange(items, entry => entry.mean_continuation_score)}`);
+      .text(`Length ${formatTrackGroupRange(items, entry => entry.length, value => String(Math.round(value)))} | mean ${formatTrackGroupRange(items, entry => entry.mean_continuation_score)}`);
     header.append("button")
       .attr("type", "button")
       .text("Close")
@@ -3541,7 +3736,7 @@ d3.json("data.json").then(data => {
     rows.select("strong")
       .text(item => `Feature ${item.track_id}: S${item.start_sheet_id} ${item.start_label} -> ${item.end_label}`);
     rows.select("span")
-      .text(item => `length ${item.length} | mean ${formatScore(item.mean_continuation_score)} | min ${formatScore(item.min_continuation_score)} | rank ${item.rank_min}/${item.rank_max}`);
+      .text(item => `Length ${item.length} | mean ${formatScore(item.mean_continuation_score)} | min ${formatScore(item.min_continuation_score)} | rank ${item.rank_min}/${item.rank_max}`);
   }
 
   function renderAnalysisPointGraph(container, panel, rows, options) {
@@ -3964,7 +4159,7 @@ d3.json("data.json").then(data => {
       const churnScore = clamp(1 - 0.5 * (meanSourceRetention + meanTargetInheritance), 0, 1);
       const sourceWeakCount = bestSourceRetentions.filter(value => value < theta).length;
       const targetWeakCount = bestTargetInheritances.filter(value => value < theta).length;
-      const domainChangeScore = sourceWeakCount + targetWeakCount + 0.5 * domainSplits + 0.5 * domainMerges + churnScore * Math.max(sourceSheets.length, 1);
+      const domainChangeScore = sourceWeakCount + targetWeakCount + splitMergeWeight * domainSplits + splitMergeWeight * domainMerges + churnScore * Math.max(sourceSheets.length, 1);
 
       series.push({
         id: `domain_stability:${thresholdKey(theta)}:${sourceIndex}:${targetIndex}`,
@@ -4170,17 +4365,30 @@ d3.json("data.json").then(data => {
 
   function disagreementGraphTooltip(item) {
     const strongest = item?.strongest_disagreement || {};
+    const direction = strongest.direction || "forward";
+    const isBackward = direction === "backward";
+    const comparedSheet = strongest.compared_sheet_id ?? (isBackward ? strongest.target_sheet_id : strongest.source_sheet_id);
+    const rangeChoice = strongest.range_choice_sheet_id ?? (isBackward ? strongest.shape_source_sheet_id : strongest.shape_target_sheet_id);
+    const domainChoice = strongest.domain_choice_sheet_id ?? (isBackward ? strongest.overlap_source_sheet_id : strongest.overlap_target_sheet_id);
+    const comparedLabel = isBackward ? "Common target sheet" : "Common source sheet";
+    const rangeChoiceLabel = isBackward ? "Range predecessor" : "Range target";
+    const domainChoiceLabel = isBackward ? "Domain predecessor" : "Domain target";
+    const domainPercent = strongest.domain_overlap_percent ?? strongest.overlap_max_percent;
+    const domainPercentLabel = isBackward ? "target %" : "source %";
+    const comparedCount = item.compared_count ?? item.compared_sources ?? 0;
     return `
       <strong>${escapeHtml(intervalTimestepPrimary(item, "source"))} -> ${escapeHtml(intervalTimestepPrimary(item, "target"))}</strong>
       <div class="tooltip-grid" style="margin-top:8px;">
         <div>Time</div><div>${escapeHtml(formatIntervalFs(intervalTimeFs(item)))}</div>
-        <div>Max disagreement score</div><div>${escapeHtml(formatScore(item.max_disagreement_score))}</div>
+        <div>Max bidirectional score</div><div>${escapeHtml(formatScore(item.max_disagreement_score))}</div>
+        <div>Forward / backward max</div><div>${escapeHtml(formatScore(item.forward_max_disagreement_score))} / ${escapeHtml(formatScore(item.backward_max_disagreement_score))}</div>
         <div>Mean disagreement score</div><div>${escapeHtml(formatScore(item.mean_disagreement_score))}</div>
-        <div>Disagreements / compared</div><div>${escapeHtml(item.disagreement_count)} / ${escapeHtml(item.compared_sources)}</div>
+        <div>Disagreements / compared</div><div>${escapeHtml(item.disagreement_count)} / ${escapeHtml(comparedCount)}</div>
         <div>Disagreement fraction</div><div>${escapeHtml(formatScore(100 * Number(item.disagreement_fraction || 0)))}%</div>
-        <div>Strongest source sheet</div><div>S${escapeHtml(strongest.source_sheet_id ?? "-")}</div>
-        <div>Range target</div><div>S${escapeHtml(strongest.shape_target_sheet_id ?? "-")} (${escapeHtml(formatScore(strongest.shape_score))})</div>
-        <div>Domain target</div><div>S${escapeHtml(strongest.overlap_target_sheet_id ?? "-")} (${escapeHtml(formatScore(strongest.overlap_max_percent))}%)</div>
+        <div>Strongest direction</div><div>${escapeHtml(isBackward ? "Backward" : "Forward")}</div>
+        <div>${comparedLabel}</div><div>S${escapeHtml(comparedSheet ?? "-")}</div>
+        <div>${rangeChoiceLabel}</div><div>S${escapeHtml(rangeChoice ?? "-")} (${escapeHtml(formatScore(strongest.shape_score))})</div>
+        <div>${domainChoiceLabel}</div><div>S${escapeHtml(domainChoice ?? "-")} (${escapeHtml(formatScore(domainPercent))}% ${escapeHtml(domainPercentLabel)})</div>
         <div>Range / domain normalized loss</div><div>${escapeHtml(formatScore(strongest.shape_loss))} / ${escapeHtml(formatScore(strongest.overlap_loss))}</div>
       </div>`;
   }
@@ -4198,7 +4406,7 @@ d3.json("data.json").then(data => {
       yValue: item => Number(item.max_disagreement_score),
       sort: (a, b) => intervalTimeFs(a) - intervalTimeFs(b),
       xLabel: "time (fs)",
-      yLabel: "max disagreement score",
+      yLabel: "max bidirectional disagreement score",
       xTickFormat: value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits),
       yTickFormat: value => formatScore(value),
       drawLine: false,
@@ -4238,6 +4446,18 @@ d3.json("data.json").then(data => {
       start: Number.isFinite(start) ? start : null,
       end: Number.isFinite(end) ? end : null,
     };
+  }
+
+  function visibleRowsWithSelected(rows, visibleRows, selectedKeys, keyFn) {
+    const seen = new Set((visibleRows || []).map(keyFn));
+    const merged = [...(visibleRows || [])];
+    for (const row of rows || []) {
+      const key = keyFn(row);
+      if (!selectedKeys.has(key) || seen.has(key)) continue;
+      merged.push(row);
+      seen.add(key);
+    }
+    return merged;
   }
 
   function selectedIntervalKeySet(panel) {
@@ -4454,7 +4674,7 @@ d3.json("data.json").then(data => {
     }
 
     const thetaSelect = actions.append("label");
-    thetaSelect.append("span").text("theta ");
+    thetaSelect.append("span").text("Theta ");
     const theta = thetaSelect.append("select");
     const thetaOptions = analysisThresholdOptions(panel);
     thetaOptions.forEach(value => {
@@ -4549,7 +4769,8 @@ d3.json("data.json").then(data => {
 
     if (panel.analysis.tab === "tracks") {
       const rows = analysisTracks(panel);
-      const visibleRows = rows.slice(0, Math.min(panel.analysis.topFeatures, rows.length));
+      const topRows = rows.slice(0, Math.min(panel.analysis.topFeatures, rows.length));
+      const visibleRows = visibleRowsWithSelected(rows, topRows, selectedTrackKeySet(panel), trackKeyFromItem);
       const controls = content.append("div").attr("class", "analysis-actions");
       controls.append("span").attr("class", "analysis-hint").text(`Show/highlight top continuing features out of ${rows.length}`);
       const countInput = controls.append("input")
@@ -4564,7 +4785,7 @@ d3.json("data.json").then(data => {
         renderAll();
       });
       controls.append("button").attr("type", "button").text("Highlight")
-        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(visibleRows, `Top ${visibleRows.length} continuing features`), false));
+        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(topRows, `Top ${topRows.length} continuing features`), false));
 
       renderTrackScoreGraph(content, panel, visibleRows);
 
@@ -4603,7 +4824,7 @@ d3.json("data.json").then(data => {
         .text(`Sensitivity for ${modeLabel(panel.dataMode)} / ${metricLabel(panel.dataMode, panel.metricId)}`);
       const table = content.append("table").attr("class", "analysis-table");
       const header = table.append("thead").append("tr");
-      ["theta", "mean event", "max event", "top interval", "max life", "median life", ""].forEach(label => header.append("th").text(label));
+      ["Theta", "Mean event", "Max event", "Top interval", "Max life", "Median life", ""].forEach(label => header.append("th").text(label));
       const body = table.append("tbody");
       sensitivityRows.forEach(row => {
         const tr = body.append("tr");
@@ -4825,10 +5046,10 @@ d3.json("data.json").then(data => {
 
   function shapeWeightLabel(metricId) {
     const labels = {
-      shape_iou: "Range",
-      area_ratio: "Area",
-      bbox_iou: "BBox",
-      centroid_similarity: "Center"
+      shape_iou: "Sheet IoU",
+      area_ratio: "Sheet area ratio",
+      bbox_iou: "Sheet bbox overlap",
+      centroid_similarity: "Sheet centroid distance"
     };
     return labels[metricId] || metricId;
   }
@@ -4949,6 +5170,7 @@ d3.json("data.json").then(data => {
     if (!node) return "";
     const imageClass = thumbClass ? `${thumbClass} zoomable-image` : "";
     const classAttr = imageClass ? ` class="${imageClass}"` : "";
+    const includeMissingSlots = Boolean(thumbClass);
     const sheetLabel = nodeImageLabel(node, "Sheet image", linkedPair?.role || "");
     const fiberLabel = nodeImageLabel(node, "Fiber surface", linkedPair?.role || "");
     const sheetPair = linkedPair ? {
@@ -4966,13 +5188,19 @@ d3.json("data.json").then(data => {
       rightLabel: nodeImageLabel(linkedPair.right, "Fiber surface", "Target")
     } : null;
     const sheetImage = node.thumbnail
-      ? `<img${classAttr}${zoomDataAttributes(node.thumbnail, sheetLabel, sheetPair)} src="${escapeHtml(node.thumbnail)}" alt="${escapeHtml(sheetLabel)}">`
-      : "";
+      ? `<img${classAttr} data-media-kind="sheet"${zoomDataAttributes(node.thumbnail, sheetLabel, sheetPair)} src="${escapeHtml(node.thumbnail)}" alt="${escapeHtml(sheetLabel)}">`
+      : includeMissingSlots
+        ? `<div class="media-missing">No sheet image</div>`
+        : "";
     const fiberImage = node.fiber_surface_image
-      ? `<img${classAttr}${zoomDataAttributes(node.fiber_surface_image, fiberLabel, fiberPair)} src="${escapeHtml(node.fiber_surface_image)}" alt="${escapeHtml(fiberLabel)}">`
-      : "";
-    if (!sheetImage && !fiberImage) return "";
-    return `<div class="media-stack">${sheetImage}${fiberImage}</div>`;
+      ? `<img${classAttr} data-media-kind="fiber"${zoomDataAttributes(node.fiber_surface_image, fiberLabel, fiberPair)} src="${escapeHtml(node.fiber_surface_image)}" alt="${escapeHtml(fiberLabel)}">`
+      : includeMissingSlots
+        ? `<div class="media-missing">No fiber surface image</div>`
+        : "";
+    const sheetItem = sheetImage ? `<div class="media-item" data-media-kind="sheet"><div class="media-label">Sheet image</div>${sheetImage}</div>` : "";
+    const fiberItem = fiberImage ? `<div class="media-item" data-media-kind="fiber"><div class="media-label">Fiber surface</div>${fiberImage}</div>` : "";
+    if (!sheetItem && !fiberItem) return "";
+    return `<div class="media-stack">${sheetItem}${fiberItem}</div>`;
   }
 
   function nodeTooltip(node, panel) {
@@ -5234,7 +5462,8 @@ d3.json("data.json").then(data => {
 
   function linkFromKeyForPanel(key, panel) {
     if (!key || !panel) return null;
-    return gatherVisibleMatchEdges(panel, 0).find(link => linkKeyFromDatum(link) === key) || null;
+    const threshold = clamp(Number(panel.threshold) || 0, 0, 100);
+    return gatherVisibleMatchEdges(panel, threshold).find(link => linkKeyFromDatum(link) === key) || null;
   }
 
   function restoreFigureDetailsSelection(selection) {
@@ -5473,64 +5702,285 @@ d3.json("data.json").then(data => {
       .slice(0, limit);
   }
 
-  function computeCrossingOrder(columnNodesByTime, edgeList, fallbackComparator) {
+  function edgeOrderingWeight(edge) {
+    const width = Number(edge?.width);
+    if (Number.isFinite(width) && width > 0) return width;
+    const score = Number(edge?.score);
+    if (Number.isFinite(score) && score > 0) return score;
+    return 1;
+  }
+
+  function computeCrossingOrder(columnNodesByTime, edgeList, fallbackComparator, candidateComparators = []) {
     const timeKeys = [...columnNodesByTime.keys()].sort((a, b) => a - b);
-    const orderByKey = new Map();
     const nodeKey = (t, s) => `${t}:${s}`;
+    const baseColumns = new Map();
 
     for (const t of timeKeys) {
       const nodes = columnNodesByTime.get(t) || [];
-      nodes.sort(fallbackComparator);
-      nodes.forEach((node, index) => {
-        orderByKey.set(nodeKey(t, node.sheet_id), index);
-      });
+      baseColumns.set(t, [...nodes]);
     }
 
     const incomingByNode = new Map();
     const outgoingByNode = new Map();
-    for (const edge of edgeList) {
+    const crossingEdges = [];
+    for (const edge of edgeList || []) {
       const sourceKey = nodeKey(edge.source_timestep_index, edge.source_sheet_id);
       const targetKey = nodeKey(edge.target_timestep_index, edge.target_sheet_id);
+      const weight = edgeOrderingWeight(edge);
+      const sourceEntry = { key: sourceKey, weight };
+      const targetEntry = { key: targetKey, weight };
       if (!incomingByNode.has(targetKey)) incomingByNode.set(targetKey, []);
       if (!outgoingByNode.has(sourceKey)) outgoingByNode.set(sourceKey, []);
-      incomingByNode.get(targetKey).push(sourceKey);
-      outgoingByNode.get(sourceKey).push(targetKey);
+      incomingByNode.get(targetKey).push(sourceEntry);
+      outgoingByNode.get(sourceKey).push(targetEntry);
+      crossingEdges.push({
+        sourceKey,
+        targetKey,
+        weight,
+        groupKey: `${edge.source_timestep_index}->${edge.target_timestep_index}`
+      });
     }
 
-    const sweepSort = (nodes, neighborsByNode, timestep, direction) => {
+    const cloneColumns = columns => {
+      const clone = new Map();
+      for (const [timestep, nodes] of columns.entries()) {
+        clone.set(timestep, [...nodes]);
+      }
+      return clone;
+    };
+
+    const syncOrderByKey = state => {
+      state.orderByKey.clear();
+      for (const timestep of timeKeys) {
+        const nodes = state.columns.get(timestep) || [];
+        nodes.forEach((node, index) => {
+          state.orderByKey.set(nodeKey(timestep, node.sheet_id), index);
+        });
+      }
+    };
+
+    const makeState = comparator => {
+      const state = { columns: cloneColumns(baseColumns), orderByKey: new Map() };
+      for (const timestep of timeKeys) {
+        const nodes = state.columns.get(timestep) || [];
+        nodes.sort(comparator);
+        state.columns.set(timestep, nodes);
+      }
+      syncOrderByKey(state);
+      return state;
+    };
+
+    const crossingStats = orderByKey => {
+      const edgesByGap = new Map();
+      for (const edge of crossingEdges) {
+        const sourceOrder = orderByKey.get(edge.sourceKey);
+        const targetOrder = orderByKey.get(edge.targetKey);
+        if (!Number.isFinite(sourceOrder) || !Number.isFinite(targetOrder)) continue;
+        if (!edgesByGap.has(edge.groupKey)) edgesByGap.set(edge.groupKey, []);
+        edgesByGap.get(edge.groupKey).push({
+          sourceOrder,
+          targetOrder,
+          weight: Math.max(1e-6, Number(edge.weight) || 1)
+        });
+      }
+
+      let weighted = 0;
+      let count = 0;
+      for (const list of edgesByGap.values()) {
+        for (let i = 0; i < list.length; i += 1) {
+          for (let j = i + 1; j < list.length; j += 1) {
+            const sourceDelta = list[i].sourceOrder - list[j].sourceOrder;
+            const targetDelta = list[i].targetOrder - list[j].targetOrder;
+            if (sourceDelta === 0 || targetDelta === 0) continue;
+            if (sourceDelta * targetDelta < 0) {
+              weighted += list[i].weight * list[j].weight;
+              count += 1;
+            }
+          }
+        }
+      }
+      return { weighted, count };
+    };
+
+    const statsBetter = (candidate, current) => {
+      if (!current) return true;
+      const epsilon = 1e-9;
+      return (
+        candidate.weighted < current.weighted - epsilon ||
+        (Math.abs(candidate.weighted - current.weighted) <= epsilon && candidate.count < current.count)
+      );
+    };
+
+    let bestColumns = null;
+    let bestStats = null;
+    const considerState = state => {
+      const stats = crossingStats(state.orderByKey);
+      if (statsBetter(stats, bestStats)) {
+        bestStats = stats;
+        bestColumns = cloneColumns(state.columns);
+      }
+    };
+
+    const weightedBarycenter = (neighbors, orderByKey) => {
+      let weightedSum = 0;
+      let totalWeight = 0;
+      for (const neighbor of neighbors || []) {
+        const value = orderByKey.get(neighbor.key);
+        if (!Number.isFinite(value)) continue;
+        const weight = Math.max(1e-6, Number(neighbor.weight) || 1);
+        weightedSum += value * weight;
+        totalWeight += weight;
+      }
+      return totalWeight > 0 ? weightedSum / totalWeight : Number.POSITIVE_INFINITY;
+    };
+
+    const sweepSort = (state, neighborsByNode, timestep, tieComparator) => {
+      const nodes = state.columns.get(timestep) || [];
       const withScores = nodes.map(node => {
         const key = nodeKey(timestep, node.sheet_id);
         const neighbors = neighborsByNode.get(key) || [];
-        const values = neighbors
-          .map(neighborKey => orderByKey.get(neighborKey))
-          .filter(v => Number.isFinite(v));
         return {
           node,
-          barycenter: values.length ? d3.mean(values) : Number.POSITIVE_INFINITY
+          barycenter: weightedBarycenter(neighbors, state.orderByKey)
         };
       });
 
       withScores.sort((a, b) =>
         d3.ascending(a.barycenter, b.barycenter) ||
+        tieComparator(a.node, b.node) ||
         fallbackComparator(a.node, b.node)
       );
 
       withScores.forEach((entry, index) => {
-        orderByKey.set(nodeKey(timestep, entry.node.sheet_id), index);
+        state.orderByKey.set(nodeKey(timestep, entry.node.sheet_id), index);
       });
-      columnNodesByTime.set(timestep, withScores.map(entry => entry.node));
+      state.columns.set(timestep, withScores.map(entry => entry.node));
     };
 
-    for (let iteration = 0; iteration < 4; iteration += 1) {
-      for (let i = 1; i < timeKeys.length; i += 1) {
-        const t = timeKeys[i];
-        sweepSort(columnNodesByTime.get(t) || [], incomingByNode, t, "left");
+    const adjacentCrossingCost = (firstEntries, secondEntries, orderByKey) => {
+      let beforeWeighted = 0;
+      let afterWeighted = 0;
+      let beforeCount = 0;
+      let afterCount = 0;
+      for (const first of firstEntries || []) {
+        const firstOrder = orderByKey.get(first.key);
+        if (!Number.isFinite(firstOrder)) continue;
+        for (const second of secondEntries || []) {
+          const secondOrder = orderByKey.get(second.key);
+          if (!Number.isFinite(secondOrder) || first.key === second.key) continue;
+          const pairWeight = Math.max(1e-6, Number(first.weight) || 1) * Math.max(1e-6, Number(second.weight) || 1);
+          if (firstOrder > secondOrder) {
+            beforeWeighted += pairWeight;
+            beforeCount += 1;
+          } else if (firstOrder < secondOrder) {
+            afterWeighted += pairWeight;
+            afterCount += 1;
+          }
+        }
       }
-      for (let i = timeKeys.length - 2; i >= 0; i -= 1) {
-        const t = timeKeys[i];
-        sweepSort(columnNodesByTime.get(t) || [], outgoingByNode, t, "right");
+      return { beforeWeighted, afterWeighted, beforeCount, afterCount };
+    };
+
+    const swapImprovesCrossings = (firstKey, secondKey, orderByKey) => {
+      const incoming = adjacentCrossingCost(incomingByNode.get(firstKey), incomingByNode.get(secondKey), orderByKey);
+      const outgoing = adjacentCrossingCost(outgoingByNode.get(firstKey), outgoingByNode.get(secondKey), orderByKey);
+      const beforeWeighted = incoming.beforeWeighted + outgoing.beforeWeighted;
+      const afterWeighted = incoming.afterWeighted + outgoing.afterWeighted;
+      const beforeCount = incoming.beforeCount + outgoing.beforeCount;
+      const afterCount = incoming.afterCount + outgoing.afterCount;
+      const epsilon = 1e-9;
+      return (
+        afterWeighted < beforeWeighted - epsilon ||
+        (Math.abs(afterWeighted - beforeWeighted) <= epsilon && afterCount < beforeCount)
+      );
+    };
+
+    const transposeRefinement = state => {
+      let changed = false;
+      for (const timestep of timeKeys) {
+        const nodes = state.columns.get(timestep) || [];
+        let index = 0;
+        while (index < nodes.length - 1) {
+          const firstKey = nodeKey(timestep, nodes[index].sheet_id);
+          const secondKey = nodeKey(timestep, nodes[index + 1].sheet_id);
+          if (swapImprovesCrossings(firstKey, secondKey, state.orderByKey)) {
+            const tmp = nodes[index];
+            nodes[index] = nodes[index + 1];
+            nodes[index + 1] = tmp;
+            state.orderByKey.set(nodeKey(timestep, nodes[index].sheet_id), index);
+            state.orderByKey.set(nodeKey(timestep, nodes[index + 1].sheet_id), index + 1);
+            changed = true;
+            index = Math.max(0, index - 1);
+          } else {
+            index += 1;
+          }
+        }
+        state.columns.set(timestep, nodes);
+      }
+      return changed;
+    };
+
+    const rawComparators = [fallbackComparator, ...candidateComparators].filter(fn => typeof fn === "function");
+    const comparators = [];
+    rawComparators.forEach(fn => {
+      if (!comparators.includes(fn)) comparators.push(fn);
+    });
+    if (!comparators.length && typeof fallbackComparator === "function") comparators.push(fallbackComparator);
+    for (const comparator of comparators) {
+      const state = makeState(comparator);
+      considerState(state);
+      for (let iteration = 0; iteration < 8; iteration += 1) {
+        for (let i = 1; i < timeKeys.length; i += 1) {
+          const t = timeKeys[i];
+          sweepSort(state, incomingByNode, t, comparator);
+        }
+        for (let i = timeKeys.length - 2; i >= 0; i -= 1) {
+          const t = timeKeys[i];
+          sweepSort(state, outgoingByNode, t, comparator);
+        }
+        for (let pass = 0; pass < 6; pass += 1) {
+          if (!transposeRefinement(state)) break;
+        }
+        considerState(state);
       }
     }
+
+    if (!bestColumns) {
+      bestColumns = makeState(fallbackComparator).columns;
+    }
+    for (const timestep of timeKeys) {
+      const nodes = bestColumns.get(timestep) || [];
+      columnNodesByTime.set(timestep, [...nodes]);
+    }
+  }
+
+  function adjacentVisibleOrder(node) {
+    if (!node) return Number.POSITIVE_INFINITY;
+    return ((Number(node.y0) || 0) + (Number(node.y1) || 0)) / 2;
+  }
+
+  function linkSortTieBreak(a, b) {
+    return (
+      d3.descending(Number(a.score) || 0, Number(b.score) || 0) ||
+      d3.ascending(Number(a.target_rank) || 0, Number(b.target_rank) || 0) ||
+      d3.ascending(Number(a.target_sheet_id) || 0, Number(b.target_sheet_id) || 0) ||
+      d3.ascending(Number(a.source_rank) || 0, Number(b.source_rank) || 0) ||
+      d3.ascending(Number(a.source_sheet_id) || 0, Number(b.source_sheet_id) || 0)
+    );
+  }
+
+  function byTargetOrder(a, b) {
+    return (
+      d3.ascending(adjacentVisibleOrder(a.targetNode), adjacentVisibleOrder(b.targetNode)) ||
+      linkSortTieBreak(a, b)
+    );
+  }
+
+  function bySourceOrder(a, b) {
+    return (
+      d3.ascending(adjacentVisibleOrder(a.sourceNode), adjacentVisibleOrder(b.sourceNode)) ||
+      linkSortTieBreak(a, b)
+    );
   }
 
   function layoutForPanel(columns, panel, edgeList) {
@@ -5553,7 +6003,9 @@ d3.json("data.json").then(data => {
     let usedMaxColumnHeight = 0;
     let xCursor = xStart;
 
-    const fallbackComparator = nodeSortComparator(state.layoutControls.orderingMode === "vertices" ? "vertices" : "area");
+    const areaComparator = nodeSortComparator("area");
+    const vertexComparator = nodeSortComparator("vertices");
+    const fallbackComparator = state.layoutControls.orderingMode === "vertices" ? vertexComparator : areaComparator;
     const columnNodesByTime = new Map();
     for (const column of columns) {
       if (column.type !== "timestep") continue;
@@ -5570,7 +6022,7 @@ d3.json("data.json").then(data => {
     }
 
     if (state.layoutControls.orderingMode === "crossings") {
-      computeCrossingOrder(columnNodesByTime, edgeList, fallbackComparator);
+      computeCrossingOrder(columnNodesByTime, edgeList, areaComparator, [areaComparator, vertexComparator]);
     } else {
       const comparator = nodeSortComparator(state.layoutControls.orderingMode);
       for (const timestep of columnNodesByTime.keys()) {
@@ -5929,10 +6381,8 @@ d3.json("data.json").then(data => {
       if (!targetNodes.has(targetKey)) targetNodes.set(targetKey, link.targetNode);
     }
 
-    const byDescendingScore = (a, b) => b.score - a.score || a.target_rank - b.target_rank || a.target_sheet_id - b.target_sheet_id;
-
     for (const [key, list] of outgoing.entries()) {
-      list.sort(byDescendingScore);
+      list.sort(byTargetOrder);
       const node = sourceNodes.get(key);
       if (!node) continue;
       const total = list.reduce((sum, link) => sum + link.width, 0);
@@ -5945,7 +6395,7 @@ d3.json("data.json").then(data => {
     }
 
     for (const [key, list] of incoming.entries()) {
-      list.sort(byDescendingScore);
+      list.sort(bySourceOrder);
       const node = targetNodes.get(key);
       if (!node) continue;
       const total = list.reduce((sum, link) => sum + link.width, 0);
@@ -6055,7 +6505,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       ["Nodes", String(visibleNodes)],
       ["Pairs", pairCountByMode],
       ["Ranges", String(ranges.length)],
-      ["Sampling", `every ${selectedStride()} timestep${selectedStride() === 1 ? "" : "s"}`],
+      ["Sampling", `Every ${selectedStride()} timestep${selectedStride() === 1 ? "" : "s"}`],
       ["Max area", formatScore(areaMax)],
     ];
 
@@ -6198,7 +6648,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       },
       onCommit: value => {
         panel.threshold = clamp(Number(value) || 0, 0, 100);
-        scheduleThresholdSync();
+        scheduleRenderAll();
       }
     });
 
@@ -6212,9 +6662,10 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     const svg = canvas.append("svg").attr("class", "summary-chart");
 
     const columns = buildVisibleColumns();
-    const edgeList = gatherVisibleMatchEdges(panel, 0);
+    const activeThreshold = clamp(Number(panel.threshold) || 0, 0, 100);
+    const edgeList = gatherVisibleMatchEdges(panel, activeThreshold);
     const layout = layoutForPanel(columns, panel, edgeList);
-    const links = assignLinkOffsets(gatherVisiblePairs(panel, 0, layout.nodeByKey, edgeList));
+    const links = assignLinkOffsets(gatherVisiblePairs(panel, activeThreshold, layout.nodeByKey, edgeList));
     const timestepLabels = d3.groups(layout.visibleNodes || [], d => +d.timestep_index)
       .map(([timestepIndex, nodes]) => ({
         x: d3.mean(nodes, n => (n.x0 + n.x1) / 2),
@@ -6470,7 +6921,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         const option = document.createElement("option");
         option.value = String(stride);
         const suffix = stride === 2 ? "nd" : (stride === 3 ? "rd" : "th");
-        option.textContent = stride === 1 ? "every timestep" : `every ${stride}${suffix} timestep`;
+        option.textContent = stride === 1 ? "Every timestep" : `Every ${stride}${suffix} timestep`;
         timestepStrideNode.appendChild(option);
       });
       timestepStrideNode.value = String(selectedStride());
