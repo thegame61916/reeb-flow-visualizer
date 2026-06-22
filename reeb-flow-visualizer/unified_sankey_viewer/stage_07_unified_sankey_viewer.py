@@ -1840,8 +1840,8 @@ d3.json("data.json").then(data => {
       threshold: 0,
       domainFilterMetricId: "overlap_vertices",
       rangeSupportMetricId: "shape_iou",
-      useBestDomainSupport: false,
-      useBestRangeSupport: false,
+      domainSupportFilterMode: "all",
+      rangeSupportFilterMode: "all",
       panelHeight: PANEL_HEIGHT_DEFAULT
     }],
     nextPanelId: 2,
@@ -2647,14 +2647,27 @@ d3.json("data.json").then(data => {
     return value === true || value === "true" || value === 1 || value === "1";
   }
 
+  function normalizeSupportFilterMode(value, legacyBest = false) {
+    const mode = String(value || "");
+    if (["all", "outgoing", "incoming", "both"].includes(mode)) return mode;
+    if (legacyBest || mode === "best_domain_support" || mode === "one_to_one") return "both";
+    return "all";
+  }
+
   function ensurePanelSupportFilters(panel) {
     if (!panel) return;
     panel.domainFilterMetricId = normalizeDomainFilterMetricId(panel.domainFilterMetricId);
     panel.rangeSupportMetricId = normalizeRangeSupportMetricId(panel.rangeSupportMetricId);
-    panel.useBestDomainSupport = normalizeBoolean(panel.useBestDomainSupport)
-      || panel.domainFilterMode === "best_domain_support"
-      || panel.domainFilterMode === "one_to_one";
-    panel.useBestRangeSupport = normalizeBoolean(panel.useBestRangeSupport);
+    panel.domainSupportFilterMode = normalizeSupportFilterMode(
+      panel.domainSupportFilterMode,
+      normalizeBoolean(panel.useBestDomainSupport) ||
+        panel.domainFilterMode === "best_domain_support" ||
+        panel.domainFilterMode === "one_to_one"
+    );
+    panel.rangeSupportFilterMode = normalizeSupportFilterMode(
+      panel.rangeSupportFilterMode,
+      normalizeBoolean(panel.useBestRangeSupport)
+    );
   }
 
   function thresholdKey(value) {
@@ -2693,31 +2706,53 @@ d3.json("data.json").then(data => {
     return Number.isFinite(value) ? value : Number.NEGATIVE_INFINITY;
   }
 
-  function oneToOneSupportedEdges(edges, supportScoreFn) {
+  function rankedSupportedEdges(edges, supportScoreFn) {
     const supportedEdges = edges.filter(edge => supportScoreFn(edge) > Number.NEGATIVE_INFINITY);
+    return supportedEdges.slice().sort((a, b) => {
+      const supportDiff = supportScoreFn(b) - supportScoreFn(a);
+      if (Math.abs(supportDiff) > 1e-12) return supportDiff;
+      const rangeDiff = (Number(b.score) || 0) - (Number(a.score) || 0);
+      if (Math.abs(rangeDiff) > 1e-12) return rangeDiff;
+      const aSourceRank = Number.isFinite(Number(a.source_rank)) ? Number(a.source_rank) : Number.POSITIVE_INFINITY;
+      const bSourceRank = Number.isFinite(Number(b.source_rank)) ? Number(b.source_rank) : Number.POSITIVE_INFINITY;
+      const aTargetRank = Number.isFinite(Number(a.target_rank)) ? Number(a.target_rank) : Number.POSITIVE_INFINITY;
+      const bTargetRank = Number.isFinite(Number(b.target_rank)) ? Number(b.target_rank) : Number.POSITIVE_INFINITY;
+      const sourceRankDiff = aSourceRank - bSourceRank;
+      if (sourceRankDiff) return sourceRankDiff;
+      const targetRankDiff = aTargetRank - bTargetRank;
+      if (targetRankDiff) return targetRankDiff;
+      const sourceIdDiff = (Number(a.source_sheet_id) || 0) - (Number(b.source_sheet_id) || 0);
+      if (sourceIdDiff) return sourceIdDiff;
+      return (Number(a.target_sheet_id) || 0) - (Number(b.target_sheet_id) || 0);
+    });
+  }
+
+  function bestOutgoingSupportedEdges(edges, supportScoreFn) {
+    const bestBySource = new Map();
+    for (const edge of rankedSupportedEdges(edges, supportScoreFn)) {
+      const sourceKey = `${edge.source_timestep_index}:${edge.source_sheet_id}`;
+      if (!bestBySource.has(sourceKey)) bestBySource.set(sourceKey, edge);
+    }
+    return edges.filter(edge => bestBySource.get(`${edge.source_timestep_index}:${edge.source_sheet_id}`) === edge);
+  }
+
+  function bestIncomingSupportedEdges(edges, supportScoreFn) {
+    const bestByTarget = new Map();
+    for (const edge of rankedSupportedEdges(edges, supportScoreFn)) {
+      const targetKey = `${edge.target_timestep_index}:${edge.target_sheet_id}`;
+      if (!bestByTarget.has(targetKey)) bestByTarget.set(targetKey, edge);
+    }
+    return edges.filter(edge => bestByTarget.get(`${edge.target_timestep_index}:${edge.target_sheet_id}`) === edge);
+  }
+
+  function bestBothSupportedEdges(edges, supportScoreFn) {
+    const supportedEdges = rankedSupportedEdges(edges, supportScoreFn);
     const groups = d3.group(supportedEdges, edge => `${edge.source_timestep_index}:${edge.target_timestep_index}`);
     const allowed = new Set();
     for (const groupEdges of groups.values()) {
       const usedSources = new Set();
       const usedTargets = new Set();
-      const ranked = groupEdges.slice().sort((a, b) => {
-        const supportDiff = supportScoreFn(b) - supportScoreFn(a);
-        if (Math.abs(supportDiff) > 1e-12) return supportDiff;
-        const rangeDiff = (Number(b.score) || 0) - (Number(a.score) || 0);
-        if (Math.abs(rangeDiff) > 1e-12) return rangeDiff;
-        const aSourceRank = Number.isFinite(Number(a.source_rank)) ? Number(a.source_rank) : Number.POSITIVE_INFINITY;
-        const bSourceRank = Number.isFinite(Number(b.source_rank)) ? Number(b.source_rank) : Number.POSITIVE_INFINITY;
-        const aTargetRank = Number.isFinite(Number(a.target_rank)) ? Number(a.target_rank) : Number.POSITIVE_INFINITY;
-        const bTargetRank = Number.isFinite(Number(b.target_rank)) ? Number(b.target_rank) : Number.POSITIVE_INFINITY;
-        const sourceRankDiff = aSourceRank - bSourceRank;
-        if (sourceRankDiff) return sourceRankDiff;
-        const targetRankDiff = aTargetRank - bTargetRank;
-        if (targetRankDiff) return targetRankDiff;
-        const sourceIdDiff = (Number(a.source_sheet_id) || 0) - (Number(b.source_sheet_id) || 0);
-        if (sourceIdDiff) return sourceIdDiff;
-        return (Number(a.target_sheet_id) || 0) - (Number(b.target_sheet_id) || 0);
-      });
-      for (const edge of ranked) {
+      for (const edge of groupEdges) {
         const sourceKey = `${edge.source_timestep_index}:${edge.source_sheet_id}`;
         const targetKey = `${edge.target_timestep_index}:${edge.target_sheet_id}`;
         if (usedSources.has(sourceKey) || usedTargets.has(targetKey)) continue;
@@ -2729,13 +2764,20 @@ d3.json("data.json").then(data => {
     return edges.filter(edge => allowed.has(linkKeyFromDatum(edge)));
   }
 
-  function applySupportOneToOneFilter(edges, panel) {
+  function filterSupportedEdges(edges, supportScoreFn, mode) {
+    if (mode === "outgoing") return bestOutgoingSupportedEdges(edges, supportScoreFn);
+    if (mode === "incoming") return bestIncomingSupportedEdges(edges, supportScoreFn);
+    if (mode === "both") return bestBothSupportedEdges(edges, supportScoreFn);
+    return edges;
+  }
+
+  function applySupportFilter(edges, panel) {
     ensurePanelSupportFilters(panel);
-    if (panel?.dataMode === "shape" && panel.useBestDomainSupport) {
-      return oneToOneSupportedEdges(edges, edge => domainFilterScoreForLink(edge, panel));
+    if (panel?.dataMode === "shape") {
+      return filterSupportedEdges(edges, edge => domainFilterScoreForLink(edge, panel), panel.domainSupportFilterMode);
     }
-    if (panel?.dataMode === "overlap" && panel.useBestRangeSupport) {
-      return oneToOneSupportedEdges(edges, edge => rangeSupportScoreForLink(edge, panel));
+    if (panel?.dataMode === "overlap") {
+      return filterSupportedEdges(edges, edge => rangeSupportScoreForLink(edge, panel), panel.rangeSupportFilterMode);
     }
     return edges;
   }
@@ -5479,8 +5521,8 @@ d3.json("data.json").then(data => {
       threshold: panel.threshold,
       domainFilterMetricId: panel.domainFilterMetricId,
       rangeSupportMetricId: panel.rangeSupportMetricId,
-      useBestDomainSupport: Boolean(panel.useBestDomainSupport),
-      useBestRangeSupport: Boolean(panel.useBestRangeSupport),
+      domainSupportFilterMode: panel.domainSupportFilterMode,
+      rangeSupportFilterMode: panel.rangeSupportFilterMode,
       shapeWeights: panel.shapeWeights || null,
       analysis: panel.analysis || null,
       panelHeight: panel.panelHeight
@@ -5542,10 +5584,16 @@ d3.json("data.json").then(data => {
       threshold: clamp(Number(raw?.threshold) || 0, 0, 100),
       domainFilterMetricId,
       rangeSupportMetricId,
-      useBestDomainSupport: normalizeBoolean(raw?.useBestDomainSupport)
-        || raw?.domainFilterMode === "best_domain_support"
-        || raw?.domainFilterMode === "one_to_one",
-      useBestRangeSupport: normalizeBoolean(raw?.useBestRangeSupport),
+      domainSupportFilterMode: normalizeSupportFilterMode(
+        raw?.domainSupportFilterMode,
+        normalizeBoolean(raw?.useBestDomainSupport) ||
+          raw?.domainFilterMode === "best_domain_support" ||
+          raw?.domainFilterMode === "one_to_one"
+      ),
+      rangeSupportFilterMode: normalizeSupportFilterMode(
+        raw?.rangeSupportFilterMode,
+        normalizeBoolean(raw?.useBestRangeSupport)
+      ),
       shapeWeights: raw?.shapeWeights ? cloneJson(raw.shapeWeights) : cloneDefaultShapeWeights(),
       analysis: raw?.analysis ? cloneJson(raw.analysis) : null,
       panelHeight: clampPanelHeight(raw?.panelHeight ?? PANEL_HEIGHT_DEFAULT)
@@ -5741,7 +5789,7 @@ d3.json("data.json").then(data => {
       }
     }
 
-    let filteredEdges = applySupportOneToOneFilter(edges, panel);
+    let filteredEdges = applySupportFilter(edges, panel);
 
     if (state.layoutControls.strongestOutgoingOnly) {
       const bestBySource = new Map();
@@ -6788,18 +6836,24 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         .attr("class", "control-label")
         .text("Domain support");
 
-      const bestDomainLabel = controls.append("label")
-        .attr("class", "inline")
-        .attr("title", "Keep one-to-one range links with the strongest domain support");
-      bestDomainLabel.append("input")
-        .attr("type", "checkbox")
-        .property("checked", Boolean(panel.useBestDomainSupport))
-        .on("change", event => {
-          panel.useBestDomainSupport = Boolean(event.target.checked);
-          clearAnalysisSelectionsOnly(panel);
-          scheduleRenderAll();
-        });
-      bestDomainLabel.append("span").text("Best domain-supported links");
+      const domainSupportModeSelect = controls.append("select")
+        .attr("title", "Range-link domain support filter");
+      [
+        ["all", "All links"],
+        ["outgoing", "Best supported outgoing links"],
+        ["incoming", "Best supported incoming links"],
+        ["both", "Best supported incoming and outgoing links"],
+      ].forEach(([value, label]) => {
+        domainSupportModeSelect.append("option")
+          .attr("value", value)
+          .property("selected", value === panel.domainSupportFilterMode)
+          .text(label);
+      });
+      domainSupportModeSelect.on("change", event => {
+        panel.domainSupportFilterMode = normalizeSupportFilterMode(event.target.value);
+        clearAnalysisSelectionsOnly(panel);
+        scheduleRenderAll();
+      });
 
       const domainMetricSelect = controls.append("select")
         .attr("title", "Domain support metric for best-link selection");
@@ -6822,18 +6876,24 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         .attr("class", "control-label")
         .text("Range support");
 
-      const bestRangeLabel = controls.append("label")
-        .attr("class", "inline")
-        .attr("title", "Keep one-to-one domain links with the strongest range support");
-      bestRangeLabel.append("input")
-        .attr("type", "checkbox")
-        .property("checked", Boolean(panel.useBestRangeSupport))
-        .on("change", event => {
-          panel.useBestRangeSupport = Boolean(event.target.checked);
-          clearAnalysisSelectionsOnly(panel);
-          scheduleRenderAll();
-        });
-      bestRangeLabel.append("span").text("Best range-supported links");
+      const rangeSupportModeSelect = controls.append("select")
+        .attr("title", "Domain-link range support filter");
+      [
+        ["all", "All links"],
+        ["outgoing", "Best supported outgoing links"],
+        ["incoming", "Best supported incoming links"],
+        ["both", "Best supported incoming and outgoing links"],
+      ].forEach(([value, label]) => {
+        rangeSupportModeSelect.append("option")
+          .attr("value", value)
+          .property("selected", value === panel.rangeSupportFilterMode)
+          .text(label);
+      });
+      rangeSupportModeSelect.on("change", event => {
+        panel.rangeSupportFilterMode = normalizeSupportFilterMode(event.target.value);
+        clearAnalysisSelectionsOnly(panel);
+        scheduleRenderAll();
+      });
 
       const rangeMetricSelect = controls.append("select")
         .attr("title", "Range support metric for best-link selection");
@@ -7187,8 +7247,8 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       threshold: 0,
       domainFilterMetricId: normalizeDomainFilterMetricId(activePanel?.domainFilterMetricId),
       rangeSupportMetricId: normalizeRangeSupportMetricId(activePanel?.rangeSupportMetricId),
-      useBestDomainSupport: Boolean(activePanel?.useBestDomainSupport),
-      useBestRangeSupport: Boolean(activePanel?.useBestRangeSupport),
+      domainSupportFilterMode: normalizeSupportFilterMode(activePanel?.domainSupportFilterMode),
+      rangeSupportFilterMode: normalizeSupportFilterMode(activePanel?.rangeSupportFilterMode),
       shapeWeights: cloneDefaultShapeWeights(),
       analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], selectedTrackKeys: [], selectedDisagreementKeys: [], selectedDomainStabilityKeys: [], trackChooserGroupKey: "", highlight: null } : null,
       panelHeight: clampPanelHeight(activePanel?.panelHeight ?? PANEL_HEIGHT_DEFAULT)
