@@ -3,7 +3,7 @@ from pathlib import Path
 
 # ================= USER SETTINGS =================
 
-BASE_DIR = Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/stilbene")
+BASE_DIR = Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/MVK_s1")
 
 DATASET_CONFIGS = {
     "stilbene": {

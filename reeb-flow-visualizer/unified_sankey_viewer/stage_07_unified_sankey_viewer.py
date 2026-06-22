@@ -1338,6 +1338,10 @@ h2 {
   gap: 10px;
   flex-wrap: wrap;
 }
+.panel-controls .control-label {
+  color: #5b6673;
+  font-size: 12px;
+}
 .panel-controls select,
 .panel-controls input[type="number"] {
   height: 30px;
@@ -1829,7 +1833,17 @@ d3.json("data.json").then(data => {
     ranges: (data.meta.default_ranges && data.meta.default_ranges.length ? data.meta.default_ranges : [{start: 0, end: 20}]).map(r => ({...r})),
     selectedRangeIndex: 0,
     timestepStride: defaultTimestepStride,
-    panels: [{ id: 1, dataMode: "shape", metricId: "shape_iou", threshold: 0, panelHeight: PANEL_HEIGHT_DEFAULT }],
+    panels: [{
+      id: 1,
+      dataMode: "shape",
+      metricId: "shape_iou",
+      threshold: 0,
+      domainFilterMetricId: "overlap_vertices",
+      rangeSupportMetricId: "shape_iou",
+      useBestDomainSupport: false,
+      useBestRangeSupport: false,
+      panelHeight: PANEL_HEIGHT_DEFAULT
+    }],
     nextPanelId: 2,
     rangeDrag: null,
     viewportDrag: null,
@@ -1925,6 +1939,12 @@ d3.json("data.json").then(data => {
   const vertexMetricDefault = overlapMetricIds.includes("overlap_max_percent")
     ? "overlap_max_percent"
     : (overlapMetricIds[0] || "overlap_max_percent");
+  const domainFilterDefaultMetric = overlapMetricIds.includes("overlap_vertices")
+    ? "overlap_vertices"
+    : vertexMetricDefault;
+  const rangeSupportDefaultMetric = shapeMetricIds.includes("shape_iou")
+    ? "shape_iou"
+    : (shapeMetricIds[0] || "shape_iou");
   const areaMax = data.meta.global_area_max || 1;
   const vertexMax = data.meta.global_vertex_max || 1;
   const centroidColorBounds = Array.isArray(data.meta.centroid_color_bounds) && data.meta.centroid_color_bounds.length === 4
@@ -2611,6 +2631,31 @@ d3.json("data.json").then(data => {
     return (metricsForMode(modeId).find(metric => metric.id === metricId) || { label: metricId }).label;
   }
 
+  function normalizeDomainFilterMetricId(metricId) {
+    const id = String(metricId || "");
+    if (overlapMetricIds.includes(id)) return id;
+    return domainFilterDefaultMetric;
+  }
+
+  function normalizeRangeSupportMetricId(metricId) {
+    const id = String(metricId || "");
+    if (shapeMetricIds.includes(id)) return id;
+    return rangeSupportDefaultMetric;
+  }
+
+  function normalizeBoolean(value) {
+    return value === true || value === "true" || value === 1 || value === "1";
+  }
+
+  function ensurePanelSupportFilters(panel) {
+    if (!panel) return;
+    panel.domainFilterMetricId = normalizeDomainFilterMetricId(panel.domainFilterMetricId);
+    panel.rangeSupportMetricId = normalizeRangeSupportMetricId(panel.rangeSupportMetricId);
+    panel.useBestDomainSupport = normalizeBoolean(panel.useBestDomainSupport)
+      || panel.domainFilterMode === "best_domain_support"
+      || panel.domainFilterMode === "one_to_one";
+    panel.useBestRangeSupport = normalizeBoolean(panel.useBestRangeSupport);
+  }
 
   function thresholdKey(value) {
     const numeric = Number(value);
@@ -2628,6 +2673,71 @@ d3.json("data.json").then(data => {
     if (String(metricId).includes("percent")) return clamp(raw / 100, 0, 1);
     const maxValue = Math.max(1e-12, Number(metricMaxima?.[metricId]) || 0);
     return maxValue > 0 ? clamp(raw / maxValue, 0, 1) : raw;
+  }
+
+  function domainFilterScoreForLink(link, panel) {
+    const domainMatch = overlapMatchLookup.get(linkKeyFromDatum(link));
+    if (!domainMatch) return Number.NEGATIVE_INFINITY;
+    const value = Number(domainMatch?.metrics?.[panel.domainFilterMetricId] ?? 0);
+    return Number.isFinite(value) ? value : Number.NEGATIVE_INFINITY;
+  }
+
+  function rangeSupportScoreForLink(link, panel) {
+    const rangeMatch = shapeMatchLookup.get(linkKeyFromDatum(link));
+    if (!rangeMatch) return Number.NEGATIVE_INFINITY;
+    const metrics = rangeMatch?.metrics || {};
+    if (panel.rangeSupportMetricId === "combined") {
+      return combinedShapeScore(metrics, panel.shapeWeights || cloneDefaultShapeWeights());
+    }
+    const value = Number(metrics[panel.rangeSupportMetricId] ?? 0);
+    return Number.isFinite(value) ? value : Number.NEGATIVE_INFINITY;
+  }
+
+  function oneToOneSupportedEdges(edges, supportScoreFn) {
+    const supportedEdges = edges.filter(edge => supportScoreFn(edge) > Number.NEGATIVE_INFINITY);
+    const groups = d3.group(supportedEdges, edge => `${edge.source_timestep_index}:${edge.target_timestep_index}`);
+    const allowed = new Set();
+    for (const groupEdges of groups.values()) {
+      const usedSources = new Set();
+      const usedTargets = new Set();
+      const ranked = groupEdges.slice().sort((a, b) => {
+        const supportDiff = supportScoreFn(b) - supportScoreFn(a);
+        if (Math.abs(supportDiff) > 1e-12) return supportDiff;
+        const rangeDiff = (Number(b.score) || 0) - (Number(a.score) || 0);
+        if (Math.abs(rangeDiff) > 1e-12) return rangeDiff;
+        const aSourceRank = Number.isFinite(Number(a.source_rank)) ? Number(a.source_rank) : Number.POSITIVE_INFINITY;
+        const bSourceRank = Number.isFinite(Number(b.source_rank)) ? Number(b.source_rank) : Number.POSITIVE_INFINITY;
+        const aTargetRank = Number.isFinite(Number(a.target_rank)) ? Number(a.target_rank) : Number.POSITIVE_INFINITY;
+        const bTargetRank = Number.isFinite(Number(b.target_rank)) ? Number(b.target_rank) : Number.POSITIVE_INFINITY;
+        const sourceRankDiff = aSourceRank - bSourceRank;
+        if (sourceRankDiff) return sourceRankDiff;
+        const targetRankDiff = aTargetRank - bTargetRank;
+        if (targetRankDiff) return targetRankDiff;
+        const sourceIdDiff = (Number(a.source_sheet_id) || 0) - (Number(b.source_sheet_id) || 0);
+        if (sourceIdDiff) return sourceIdDiff;
+        return (Number(a.target_sheet_id) || 0) - (Number(b.target_sheet_id) || 0);
+      });
+      for (const edge of ranked) {
+        const sourceKey = `${edge.source_timestep_index}:${edge.source_sheet_id}`;
+        const targetKey = `${edge.target_timestep_index}:${edge.target_sheet_id}`;
+        if (usedSources.has(sourceKey) || usedTargets.has(targetKey)) continue;
+        usedSources.add(sourceKey);
+        usedTargets.add(targetKey);
+        allowed.add(linkKeyFromDatum(edge));
+      }
+    }
+    return edges.filter(edge => allowed.has(linkKeyFromDatum(edge)));
+  }
+
+  function applySupportOneToOneFilter(edges, panel) {
+    ensurePanelSupportFilters(panel);
+    if (panel?.dataMode === "shape" && panel.useBestDomainSupport) {
+      return oneToOneSupportedEdges(edges, edge => domainFilterScoreForLink(edge, panel));
+    }
+    if (panel?.dataMode === "overlap" && panel.useBestRangeSupport) {
+      return oneToOneSupportedEdges(edges, edge => rangeSupportScoreForLink(edge, panel));
+    }
+    return edges;
   }
 
   function vertexThetaStats(metricId = vertexMetricDefault) {
@@ -4971,6 +5081,7 @@ d3.json("data.json").then(data => {
 
   function ensurePanelMetric(panel) {
     ensurePanelShapeWeights(panel);
+    ensurePanelSupportFilters(panel);
     panel.panelHeight = clampPanelHeight(panel.panelHeight);
     const metrics = metricsForMode(panel.dataMode);
     if (!metrics.length) {
@@ -5366,6 +5477,10 @@ d3.json("data.json").then(data => {
       dataMode: panel.dataMode,
       metricId: panel.metricId,
       threshold: panel.threshold,
+      domainFilterMetricId: panel.domainFilterMetricId,
+      rangeSupportMetricId: panel.rangeSupportMetricId,
+      useBestDomainSupport: Boolean(panel.useBestDomainSupport),
+      useBestRangeSupport: Boolean(panel.useBestRangeSupport),
       shapeWeights: panel.shapeWeights || null,
       analysis: panel.analysis || null,
       panelHeight: panel.panelHeight
@@ -5418,11 +5533,19 @@ d3.json("data.json").then(data => {
   }
 
   function normalizePresetPanel(raw, fallbackId) {
+    const domainFilterMetricId = normalizeDomainFilterMetricId(raw?.domainFilterMetricId);
+    const rangeSupportMetricId = normalizeRangeSupportMetricId(raw?.rangeSupportMetricId);
     const panel = {
       id: Number(raw?.id) || fallbackId,
       dataMode: String(raw?.dataMode || "shape"),
       metricId: String(raw?.metricId || "shape_iou"),
       threshold: clamp(Number(raw?.threshold) || 0, 0, 100),
+      domainFilterMetricId,
+      rangeSupportMetricId,
+      useBestDomainSupport: normalizeBoolean(raw?.useBestDomainSupport)
+        || raw?.domainFilterMode === "best_domain_support"
+        || raw?.domainFilterMode === "one_to_one",
+      useBestRangeSupport: normalizeBoolean(raw?.useBestRangeSupport),
       shapeWeights: raw?.shapeWeights ? cloneJson(raw.shapeWeights) : cloneDefaultShapeWeights(),
       analysis: raw?.analysis ? cloneJson(raw.analysis) : null,
       panelHeight: clampPanelHeight(raw?.panelHeight ?? PANEL_HEIGHT_DEFAULT)
@@ -5590,11 +5713,16 @@ d3.json("data.json").then(data => {
     for (const pair of pairs) {
       if (!visible.has(pair.source_timestep_index) || !visible.has(pair.target_timestep_index)) continue;
       for (const match of pair.matches) {
+        const edgeBase = {
+          ...match,
+          source_timestep_index: pair.source_timestep_index,
+          target_timestep_index: pair.target_timestep_index,
+        };
         const score = metricValue(match, panel, panel.metricId);
         const normalized = metricMax > 0 ? score / metricMax : 0;
         if (normalized < threshold) continue;
         edges.push({
-          ...match,
+          ...edgeBase,
           source_timestep_index: pair.source_timestep_index,
           source_label: pair.source_label,
           source_stem: pair.source_stem || "",
@@ -5613,9 +5741,11 @@ d3.json("data.json").then(data => {
       }
     }
 
+    let filteredEdges = applySupportOneToOneFilter(edges, panel);
+
     if (state.layoutControls.strongestOutgoingOnly) {
       const bestBySource = new Map();
-      for (const edge of edges) {
+      for (const edge of filteredEdges) {
         const sourceKey = `${edge.source_timestep_index}:${edge.source_sheet_id}`;
         const current = bestBySource.get(sourceKey);
         if (!current) {
@@ -5644,12 +5774,12 @@ d3.json("data.json").then(data => {
           }
         }
       }
-      return edges.filter(edge => {
+      return filteredEdges.filter(edge => {
         const sourceKey = `${edge.source_timestep_index}:${edge.source_sheet_id}`;
         return bestBySource.get(sourceKey) === edge;
       });
     }
-    return edges;
+    return filteredEdges;
   }
 
   function gatherVisiblePairs(panel, thresholdPercent, nodeByKey, edgeList = null) {
@@ -6652,6 +6782,74 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       }
     });
 
+    if (panel.dataMode === "shape" && overlapMetricIds.length) {
+      ensurePanelSupportFilters(panel);
+      controls.append("span")
+        .attr("class", "control-label")
+        .text("Domain support");
+
+      const bestDomainLabel = controls.append("label")
+        .attr("class", "inline")
+        .attr("title", "Keep one-to-one range links with the strongest domain support");
+      bestDomainLabel.append("input")
+        .attr("type", "checkbox")
+        .property("checked", Boolean(panel.useBestDomainSupport))
+        .on("change", event => {
+          panel.useBestDomainSupport = Boolean(event.target.checked);
+          clearAnalysisSelectionsOnly(panel);
+          scheduleRenderAll();
+        });
+      bestDomainLabel.append("span").text("Best domain-supported links");
+
+      const domainMetricSelect = controls.append("select")
+        .attr("title", "Domain support metric for best-link selection");
+      metricsForMode("overlap").forEach(metric => {
+        domainMetricSelect.append("option")
+          .attr("value", metric.id)
+          .property("selected", metric.id === panel.domainFilterMetricId)
+          .text(metric.label);
+      });
+      domainMetricSelect.on("change", event => {
+        panel.domainFilterMetricId = normalizeDomainFilterMetricId(event.target.value);
+        clearAnalysisSelectionsOnly(panel);
+        scheduleRenderAll();
+      });
+    }
+
+    if (panel.dataMode === "overlap" && shapeMetricIds.length) {
+      ensurePanelSupportFilters(panel);
+      controls.append("span")
+        .attr("class", "control-label")
+        .text("Range support");
+
+      const bestRangeLabel = controls.append("label")
+        .attr("class", "inline")
+        .attr("title", "Keep one-to-one domain links with the strongest range support");
+      bestRangeLabel.append("input")
+        .attr("type", "checkbox")
+        .property("checked", Boolean(panel.useBestRangeSupport))
+        .on("change", event => {
+          panel.useBestRangeSupport = Boolean(event.target.checked);
+          clearAnalysisSelectionsOnly(panel);
+          scheduleRenderAll();
+        });
+      bestRangeLabel.append("span").text("Best range-supported links");
+
+      const rangeMetricSelect = controls.append("select")
+        .attr("title", "Range support metric for best-link selection");
+      metricsForMode("shape").forEach(metric => {
+        rangeMetricSelect.append("option")
+          .attr("value", metric.id)
+          .property("selected", metric.id === panel.rangeSupportMetricId)
+          .text(metric.label);
+      });
+      rangeMetricSelect.on("change", event => {
+        panel.rangeSupportMetricId = normalizeRangeSupportMetricId(event.target.value);
+        clearAnalysisSelectionsOnly(panel);
+        scheduleRenderAll();
+      });
+    }
+
 
 
     renderAnalysisPanel(container, panel);
@@ -6987,6 +7185,10 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       dataMode: "shape",
       metricId: "shape_iou",
       threshold: 0,
+      domainFilterMetricId: normalizeDomainFilterMetricId(activePanel?.domainFilterMetricId),
+      rangeSupportMetricId: normalizeRangeSupportMetricId(activePanel?.rangeSupportMetricId),
+      useBestDomainSupport: Boolean(activePanel?.useBestDomainSupport),
+      useBestRangeSupport: Boolean(activePanel?.useBestRangeSupport),
       shapeWeights: cloneDefaultShapeWeights(),
       analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], selectedTrackKeys: [], selectedDisagreementKeys: [], selectedDomainStabilityKeys: [], trackChooserGroupKey: "", highlight: null } : null,
       panelHeight: clampPanelHeight(activePanel?.panelHeight ?? PANEL_HEIGHT_DEFAULT)
