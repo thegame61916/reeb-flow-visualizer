@@ -26,6 +26,7 @@ DEFAULT_DATASET_ROOT = Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hp
 DEFAULT_DATASETS = ("torus", "MVK_s1", "MVK_s2")
 TEXT_FILE_SUFFIXES = {".html", ".css", ".js", ".json", ".md", ".txt"}
 LOCAL_PATH_MARKERS = ("/home/mohit", "/Desktop/postdoc", "timeVaryingReebSpace")
+PUBLIC_CSS_VERSION = "pages-selector-v3"
 
 
 @dataclass(frozen=True)
@@ -354,6 +355,12 @@ def inject_dataset_selector(dataset_dir: Path, manifest: list[dict[str, Any]], c
     selector = public_dataset_selector_markup(manifest, current_id)
     script = public_dataset_selector_script(manifest, current_id)
 
+    html = re.sub(
+        r'href="style\.css(?:\?v=[^"]*)?"',
+        f'href="style.css?v={PUBLIC_CSS_VERSION}"',
+        html,
+        count=1,
+    )
     html = html.replace("<body>", '<body class="public-page">', 1)
     html = html.replace("<header>", '<header class="public-header">', 1)
     html = re.sub(
@@ -370,23 +377,13 @@ def inject_dataset_selector(dataset_dir: Path, manifest: list[dict[str, Any]], c
 
 /* Public GitHub Pages dataset selector. */
 body.public-page header.public-header {
-  height: 72px;
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto minmax(340px, 1fr);
-  align-items: center;
-  gap: 12px;
-  padding: 12px 18px;
-}
-body.public-page main {
-  height: calc(100vh - 72px);
-}
-body.public-page .title-block {
-  grid-column: 1;
-  min-width: 0;
+  position: relative;
 }
 body.public-page .dataset-switcher {
-  grid-column: 2;
-  justify-self: center;
+  left: 50%;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
 }
 body.public-page .dataset-switcher label {
   display: inline-flex;
@@ -399,10 +396,6 @@ body.public-page .dataset-switcher label {
 body.public-page .dataset-switcher select {
   height: 30px;
   min-width: 110px;
-}
-body.public-page .header-actions {
-  grid-column: 3;
-  justify-self: end;
 }
 """
     style_path.write_text(style_path.read_text(encoding="utf-8") + public_css, encoding="utf-8")
