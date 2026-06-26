@@ -3,7 +3,7 @@ from pathlib import Path
 
 # ================= USER SETTINGS =================
 
-BASE_DIR = Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/MVK_s1")
+BASE_DIR = Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hpc/datasets/torus")
 
 DATASET_CONFIGS = {
     "stilbene": {
@@ -115,6 +115,13 @@ RANGE_SCORE_DEFAULT_WEIGHTS = {
     f"range_{metric}": weight
     for metric, weight in SHAPE_SCORE_DEFAULT_WEIGHTS.items()
 }
+
+# Viewer styling defaults used by analysis plots and support-filtered Sankey links.
+ANALYSIS_PLOT_DEFAULT_COLOR = "#6b7280"
+ANALYSIS_PLOT_SELECTED_COLOR = "#ef4444"
+ANALYSIS_PLOT_SELECTED_STROKE_COLOR = "#991b1b"
+ANALYSIS_PLOT_DEEMPHASIS_TRANSPARENCY = 0
+UNSUPPORTED_LINK_DEFAULT_TRANSPARENCY = 100
 
 
 # Analysis thresholds used by the tracking diagnostics stage. The preferred
@@ -248,15 +255,6 @@ CENTROID_COLOR_CORNERS = {
     "bottom_right": "#dc2626",
     "top_left": "#16a34a",
     "top_right": "#f59e0b",
-}
-
-# Axis centroid node coloring in the unified viewer. The origin color is a
-# neutral low-saturation color at (0, 0). Distance from the origin controls
-# saturation, and angle controls the red-to-blue interpolation.
-CENTROID_AXIS_DIAGONAL_COLORS = {
-    "origin": "#808080",
-    "x_axis": "#0000ff",
-    "y_axis": "#ff0000",
 }
 
 

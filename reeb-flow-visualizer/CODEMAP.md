@@ -203,6 +203,12 @@ The unified viewer supports:
 - link darkness control
 - sheet image hover/click details
 
+The backend still computes and stores some diagnostics that are intentionally
+not exposed in the current viewer UI: Sheet geometry IoU, best-supported
+range/domain intervals, and domain/range complementarity. The JS runtime keeps the
+corresponding data paths so these can be re-enabled without rerunning earlier
+pipeline stages.
+
 ## Generated Parent Directory
 
 `BASE_DIR/sankey/` still contains pipeline data products such as:

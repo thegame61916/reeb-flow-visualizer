@@ -19,6 +19,8 @@ matching rather than raw vertex overlap alone.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import ctypes.util
 import json
 import math
 import os
@@ -77,6 +79,8 @@ DEFAULT_LIBRARY_PATH = os.pathsep.join(
 DEFAULT_WORKERS = max(1, (os.cpu_count() or 1) - RESERVE_CORES)
 
 GRID_SIZE = 256
+GEOMETRY_IOU_CACHE_VERSION = 2
+GEOMETRY_IOU_MIN_NORMALIZED_EXTENT = 1e-6
 STORAGE_ROOT = BASE_DIR / "compareSheetShapesCache"
 CACHE_DIR = STORAGE_ROOT / "cache"
 RESULTS_DIR = STORAGE_ROOT / "results"
@@ -531,6 +535,337 @@ def points_to_mask(
     return mask.reshape((grid_size, grid_size)).astype(np.uint8)
 
 
+def polygons_to_triangles(
+    polygons: list[list[tuple[float, float]]],
+) -> np.ndarray:
+    triangles: list[list[tuple[float, float]]] = []
+    for polygon in polygons:
+        if len(polygon) < 3:
+            continue
+        anchor = polygon[0]
+        for index in range(1, len(polygon) - 1):
+            triangle = [anchor, polygon[index], polygon[index + 1]]
+            if abs(signed_polygon_area(triangle)) > 0.0:
+                triangles.append(triangle)
+    if not triangles:
+        return np.empty((0, 3, 2), dtype=np.float64)
+    return np.asarray(triangles, dtype=np.float64)
+
+
+def signed_polygon_area(points: Iterable[tuple[float, float]] | np.ndarray) -> float:
+    array = np.asarray(list(points) if not isinstance(points, np.ndarray) else points, dtype=np.float64)
+    if len(array) < 3:
+        return 0.0
+    x = array[:, 0]
+    y = array[:, 1]
+    return 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+
+
+def triangle_areas(triangles: np.ndarray) -> np.ndarray:
+    if triangles.size == 0:
+        return np.empty(0, dtype=np.float64)
+    first = triangles[:, 1] - triangles[:, 0]
+    second = triangles[:, 2] - triangles[:, 0]
+    return 0.5 * np.abs(first[:, 0] * second[:, 1] - first[:, 1] * second[:, 0])
+
+
+def triangle_bboxes(triangles: np.ndarray) -> np.ndarray:
+    if triangles.size == 0:
+        return np.empty((0, 4), dtype=np.float64)
+    return np.column_stack(
+        (
+            triangles[:, :, 0].min(axis=1),
+            triangles[:, :, 1].min(axis=1),
+            triangles[:, :, 0].max(axis=1),
+            triangles[:, :, 1].max(axis=1),
+        )
+    )
+
+
+def cross_2d(a: np.ndarray, b: np.ndarray) -> float:
+    return float(a[0] * b[1] - a[1] * b[0])
+
+
+def clip_convex_polygon(
+    subject: list[np.ndarray],
+    clip_triangle: np.ndarray,
+    epsilon: float,
+) -> list[np.ndarray]:
+    clip = np.asarray(clip_triangle, dtype=np.float64)
+    if signed_polygon_area(clip) < 0.0:
+        clip = clip[::-1]
+
+    output = subject
+    for edge_index in range(3):
+        edge_start = clip[edge_index]
+        edge_end = clip[(edge_index + 1) % 3]
+        edge = edge_end - edge_start
+        input_points = output
+        output = []
+        if not input_points:
+            break
+
+        previous = input_points[-1]
+        previous_inside = cross_2d(edge, previous - edge_start) >= -epsilon
+        for current in input_points:
+            current_inside = cross_2d(edge, current - edge_start) >= -epsilon
+            if current_inside != previous_inside:
+                segment = current - previous
+                denominator = cross_2d(segment, edge)
+                if abs(denominator) > epsilon:
+                    fraction = cross_2d(edge_start - previous, edge) / denominator
+                    output.append(previous + fraction * segment)
+            if current_inside:
+                output.append(current)
+            previous = current
+            previous_inside = current_inside
+    return output
+
+
+def triangle_intersection_area(
+    source: np.ndarray,
+    target: np.ndarray,
+    epsilon: float,
+) -> float:
+    clipped = clip_convex_polygon(
+        [np.asarray(point, dtype=np.float64) for point in source],
+        target,
+        epsilon,
+    )
+    return abs(signed_polygon_area(np.asarray(clipped))) if len(clipped) >= 3 else 0.0
+
+
+class TriangleSpatialIndex:
+    def __init__(self, triangles: np.ndarray) -> None:
+        self.triangles = triangles
+        self.bboxes = triangle_bboxes(triangles)
+        self.area = float(triangle_areas(triangles).sum())
+        self.cells: dict[tuple[int, int], list[int]] = {}
+        if len(triangles) == 0:
+            self.bounds = (0.0, 0.0, 0.0, 0.0)
+            self.grid_size = 1
+            self.cell_width = 1.0
+            self.cell_height = 1.0
+            return
+
+        self.bounds = (
+            float(self.bboxes[:, 0].min()),
+            float(self.bboxes[:, 1].min()),
+            float(self.bboxes[:, 2].max()),
+            float(self.bboxes[:, 3].max()),
+        )
+        self.grid_size = max(8, min(128, int(math.sqrt(len(triangles))) or 1))
+        width = self.bounds[2] - self.bounds[0]
+        height = self.bounds[3] - self.bounds[1]
+        self.cell_width = width / self.grid_size if width > 0.0 else 1.0
+        self.cell_height = height / self.grid_size if height > 0.0 else 1.0
+
+        for triangle_index, bbox in enumerate(self.bboxes):
+            for cell in self.cells_for_bbox(bbox):
+                self.cells.setdefault(cell, []).append(triangle_index)
+
+    def axis_cell(self, value: float, minimum: float, cell_size: float) -> int:
+        return max(0, min(self.grid_size - 1, int((value - minimum) / cell_size)))
+
+    def cells_for_bbox(self, bbox: Iterable[float]) -> Iterator[tuple[int, int]]:
+        x0, y0, x1, y1 = (float(value) for value in bbox)
+        ix0 = self.axis_cell(x0, self.bounds[0], self.cell_width)
+        iy0 = self.axis_cell(y0, self.bounds[1], self.cell_height)
+        ix1 = self.axis_cell(x1, self.bounds[0], self.cell_width)
+        iy1 = self.axis_cell(y1, self.bounds[1], self.cell_height)
+        for ix in range(ix0, ix1 + 1):
+            for iy in range(iy0, iy1 + 1):
+                yield ix, iy
+
+    def candidates(self, bbox: np.ndarray) -> set[int]:
+        candidates: set[int] = set()
+        for cell in self.cells_for_bbox(bbox):
+            candidates.update(self.cells.get(cell, ()))
+        return candidates
+
+
+@dataclass(frozen=True)
+class GeosSheetGeometry:
+    geometry: int
+    area: float
+
+
+class GeosGeometryEngine:
+    GEOMETRY_COLLECTION = 7
+
+    def __init__(self) -> None:
+        library_name = ctypes.util.find_library("geos_c")
+        if not library_name:
+            raise RuntimeError("libgeos_c was not found")
+        self.lib = ctypes.CDLL(library_name)
+        self.pointer = ctypes.c_void_p
+        self._configure()
+        self.context = self.lib.GEOS_init_r()
+        if not self.context:
+            raise RuntimeError("GEOS_init_r failed")
+        self.owned_geometries: list[int] = []
+
+    def _configure(self) -> None:
+        pointer = self.pointer
+        signatures = (
+            ("GEOS_init_r", [], pointer),
+            ("GEOSCoordSeq_create_r", [pointer, ctypes.c_uint, ctypes.c_uint], pointer),
+            ("GEOSCoordSeq_setX_r", [pointer, pointer, ctypes.c_uint, ctypes.c_double], ctypes.c_int),
+            ("GEOSCoordSeq_setY_r", [pointer, pointer, ctypes.c_uint, ctypes.c_double], ctypes.c_int),
+            ("GEOSGeom_createLinearRing_r", [pointer, pointer], pointer),
+            ("GEOSGeom_createPolygon_r", [pointer, pointer, ctypes.POINTER(pointer), ctypes.c_uint], pointer),
+            ("GEOSGeom_createCollection_r", [pointer, ctypes.c_int, ctypes.POINTER(pointer), ctypes.c_uint], pointer),
+            ("GEOSUnaryUnion_r", [pointer, pointer], pointer),
+            ("GEOSIntersection_r", [pointer, pointer, pointer], pointer),
+            ("GEOSArea_r", [pointer, pointer, ctypes.POINTER(ctypes.c_double)], ctypes.c_int),
+            ("GEOSGeom_destroy_r", [pointer, pointer], None),
+            ("GEOS_finish_r", [pointer], None),
+        )
+        for name, argument_types, result_type in signatures:
+            function = getattr(self.lib, name)
+            function.argtypes = argument_types
+            function.restype = result_type
+
+    def triangle_polygon(self, triangle: np.ndarray) -> int:
+        coordinate_sequence = self.lib.GEOSCoordSeq_create_r(self.context, 4, 2)
+        if not coordinate_sequence:
+            raise RuntimeError("GEOSCoordSeq_create_r failed")
+        points = (triangle[0], triangle[1], triangle[2], triangle[0])
+        for index, point in enumerate(points):
+            if not self.lib.GEOSCoordSeq_setX_r(
+                self.context,
+                coordinate_sequence,
+                index,
+                float(point[0]),
+            ):
+                raise RuntimeError("GEOSCoordSeq_setX_r failed")
+            if not self.lib.GEOSCoordSeq_setY_r(
+                self.context,
+                coordinate_sequence,
+                index,
+                float(point[1]),
+            ):
+                raise RuntimeError("GEOSCoordSeq_setY_r failed")
+        ring = self.lib.GEOSGeom_createLinearRing_r(self.context, coordinate_sequence)
+        if not ring:
+            raise RuntimeError("GEOSGeom_createLinearRing_r failed")
+        polygon = self.lib.GEOSGeom_createPolygon_r(self.context, ring, None, 0)
+        if not polygon:
+            self.lib.GEOSGeom_destroy_r(self.context, ring)
+            raise RuntimeError("GEOSGeom_createPolygon_r failed")
+        return int(polygon)
+
+    def area(self, geometry: int) -> float:
+        result = ctypes.c_double()
+        if not self.lib.GEOSArea_r(
+            self.context,
+            self.pointer(geometry),
+            ctypes.byref(result),
+        ):
+            raise RuntimeError("GEOSArea_r failed")
+        return float(result.value)
+
+    def build_sheet(self, triangles: np.ndarray) -> GeosSheetGeometry | None:
+        if triangles.size == 0:
+            return None
+        polygons = [self.triangle_polygon(triangle) for triangle in triangles]
+        polygon_array = (self.pointer * len(polygons))(
+            *(self.pointer(polygon) for polygon in polygons)
+        )
+        collection = self.lib.GEOSGeom_createCollection_r(
+            self.context,
+            self.GEOMETRY_COLLECTION,
+            polygon_array,
+            len(polygons),
+        )
+        if not collection:
+            for polygon in polygons:
+                self.lib.GEOSGeom_destroy_r(self.context, self.pointer(polygon))
+            raise RuntimeError("GEOSGeom_createCollection_r failed")
+        union = self.lib.GEOSUnaryUnion_r(self.context, collection)
+        self.lib.GEOSGeom_destroy_r(self.context, collection)
+        if not union:
+            raise RuntimeError("GEOSUnaryUnion_r failed")
+        union_value = int(union)
+        self.owned_geometries.append(union_value)
+        return GeosSheetGeometry(union_value, self.area(union_value))
+
+    def iou(
+        self,
+        source: GeosSheetGeometry | None,
+        target: GeosSheetGeometry | None,
+    ) -> float:
+        if source is None or target is None or source.area <= 0.0 or target.area <= 0.0:
+            return 0.0
+        intersection = self.lib.GEOSIntersection_r(
+            self.context,
+            self.pointer(source.geometry),
+            self.pointer(target.geometry),
+        )
+        if not intersection:
+            raise RuntimeError("GEOSIntersection_r failed")
+        try:
+            intersection_area = min(self.area(int(intersection)), source.area, target.area)
+        finally:
+            self.lib.GEOSGeom_destroy_r(self.context, intersection)
+        union_area = source.area + target.area - intersection_area
+        return intersection_area / union_area if union_area > 0.0 else 0.0
+
+    def close(self) -> None:
+        context = getattr(self, "context", None)
+        if not context:
+            return
+        for geometry in reversed(self.owned_geometries):
+            self.lib.GEOSGeom_destroy_r(context, self.pointer(geometry))
+        self.owned_geometries.clear()
+        self.lib.GEOS_finish_r(context)
+        self.context = None
+
+
+def geometry_iou(
+    source_triangles: np.ndarray,
+    target_index: TriangleSpatialIndex,
+) -> float:
+    target_triangles = target_index.triangles
+    if source_triangles.size == 0 or target_triangles.size == 0:
+        return 0.0
+
+    source_areas = triangle_areas(source_triangles)
+    source_area = float(source_areas.sum())
+    target_area = target_index.area
+    if source_area <= 0.0 or target_area <= 0.0:
+        return 0.0
+
+    source_bboxes = triangle_bboxes(source_triangles)
+    scale = max(
+        target_index.bounds[2] - target_index.bounds[0],
+        target_index.bounds[3] - target_index.bounds[1],
+        1.0,
+    )
+    epsilon = scale * 1e-12
+    intersection = 0.0
+
+    for source, source_bbox in zip(source_triangles, source_bboxes, strict=True):
+        for target_index_value in target_index.candidates(source_bbox):
+            target_bbox = target_index.bboxes[target_index_value]
+            if (
+                source_bbox[2] < target_bbox[0] - epsilon
+                or target_bbox[2] < source_bbox[0] - epsilon
+                or source_bbox[3] < target_bbox[1] - epsilon
+                or target_bbox[3] < source_bbox[1] - epsilon
+            ):
+                continue
+            intersection += triangle_intersection_area(
+                source,
+                target_triangles[target_index_value],
+                epsilon,
+            )
+
+    intersection = min(intersection, source_area, target_area)
+    union = source_area + target_area - intersection
+    return intersection / union if union > 0.0 else 0.0
+
+
 def collect_global_bounds(
     timesteps: list[TimestepInput],
     library_path: str,
@@ -578,6 +913,7 @@ def save_timestep_cache(
     timestep: TimestepInput,
     descriptors: TimestepDescriptors,
     masks: dict[int, np.ndarray],
+    triangles: dict[int, np.ndarray],
 ) -> Path:
     cache_json = TIMESTEP_CACHE_DIR / f"{timestep.stem}.json"
     cache_npz = TIMESTEP_CACHE_DIR / f"{timestep.stem}.npz"
@@ -589,6 +925,7 @@ def save_timestep_cache(
         "global_bounds": list(descriptors.global_bounds),
         "grid_size": descriptors.grid_size,
         "top_n_sheets": TOP_N_SHEETS,
+        "geometry_iou_cache_version": GEOMETRY_IOU_CACHE_VERSION,
         "sheets": [
             {
                 "sheet_id": sheet.sheet_id,
@@ -611,6 +948,7 @@ def save_timestep_cache(
         num_vertices=np.array([sheet.num_vertices for sheet in descriptors.sheets], dtype=np.int32),
         vertices=np.array([np.array(sheet.vertices, dtype=np.int32) for sheet in descriptors.sheets], dtype=object),
         masks=np.array([masks[sheet.sheet_id] for sheet in descriptors.sheets], dtype=np.uint8),
+        triangles=np.array([triangles[sheet.sheet_id] for sheet in descriptors.sheets], dtype=object),
     )
     return cache_json
 
@@ -651,6 +989,17 @@ def load_timestep_cache(stem: str) -> tuple[TimestepDescriptors, dict[int, np.nd
     return descriptors, mask_map
 
 
+def load_cached_sheet_triangles(stem: str) -> dict[int, np.ndarray]:
+    cache_npz = TIMESTEP_CACHE_DIR / f"{stem}.npz"
+    npz = np.load(cache_npz, allow_pickle=True)
+    sheet_ids = [int(value) for value in npz["sheet_ids"].tolist()]
+    triangles = npz["triangles"]
+    return {
+        sheet_id: np.asarray(triangles[index], dtype=np.float64)
+        for index, sheet_id in enumerate(sheet_ids)
+    }
+
+
 def bounds_are_close(a: Iterable[float], b: Iterable[float]) -> bool:
     a_values = list(a)
     b_values = list(b)
@@ -678,6 +1027,7 @@ def timestep_cache_is_valid(
     if not (
         data.get("grid_size") == GRID_SIZE
         and data.get("top_n_sheets") == TOP_N_SHEETS
+        and data.get("geometry_iou_cache_version") == GEOMETRY_IOU_CACHE_VERSION
         and data.get("stem") == stem
         and data.get("timestep_index") == expected_index
     ):
@@ -698,6 +1048,7 @@ def save_pair_cache(result: dict) -> None:
     payload = dict(result)
     payload["grid_size"] = GRID_SIZE
     payload["top_n_sheets"] = TOP_N_SHEETS
+    payload["geometry_iou_cache_version"] = GEOMETRY_IOU_CACHE_VERSION
     payload["global_bounds"] = list(payload.get("global_bounds", []))
     write_text_atomic(path, json.dumps(payload, indent=2))
 
@@ -710,7 +1061,11 @@ def load_pair_cache(source_stem: str, target_stem: str) -> dict | None:
         data = json.loads(path.read_text())
     except Exception:
         return None
-    if data.get("grid_size") != GRID_SIZE or data.get("top_n_sheets") != TOP_N_SHEETS:
+    if (
+        data.get("grid_size") != GRID_SIZE
+        or data.get("top_n_sheets") != TOP_N_SHEETS
+        or data.get("geometry_iou_cache_version") != GEOMETRY_IOU_CACHE_VERSION
+    ):
         return None
     if data.get("source_stem") != source_stem or data.get("target_stem") != target_stem:
         return None
@@ -724,8 +1079,12 @@ def cache_timestep_worker(
     global_bounds: tuple[float, float, float, float],
     library_path: str,
 ) -> TimestepDescriptors:
-    timestep, descriptors, masks = build_masks_for_timestep(timestep, global_bounds, library_path)
-    save_timestep_cache(timestep, descriptors, masks)
+    timestep, descriptors, masks, triangles = build_masks_for_timestep(
+        timestep,
+        global_bounds,
+        library_path,
+    )
+    save_timestep_cache(timestep, descriptors, masks, triangles)
     return descriptors
 
 
@@ -747,7 +1106,12 @@ def build_masks_for_timestep(
     timestep: TimestepInput,
     global_bounds: tuple[float, float, float, float],
     library_path: str,
-) -> tuple[TimestepInput, TimestepDescriptors, dict[int, np.ndarray]]:
+) -> tuple[
+    TimestepInput,
+    TimestepDescriptors,
+    dict[int, np.ndarray],
+    dict[int, np.ndarray],
+]:
     vtp_path = export_geometry_if_needed(timestep, library_path)
     sheet_polygons = read_sheet_vtp(vtp_path)
     areas = sheet_areas(sheet_polygons)
@@ -768,6 +1132,7 @@ def build_masks_for_timestep(
 
     descriptors: list[SheetDescriptor] = []
     masks: dict[int, np.ndarray] = {}
+    triangles: dict[int, np.ndarray] = {}
     for rank, sheet_id in enumerate(top_sheet_ids, start=1):
         polygons = points_by_sheet.get(sheet_id, [])
         verts = tuple(rsi.sheet_regular_vertices.get(sheet_id, ()))
@@ -786,6 +1151,7 @@ def build_masks_for_timestep(
             )
         )
         masks[sheet_id] = points_to_mask(polygons, global_bounds, GRID_SIZE)
+        triangles[sheet_id] = polygons_to_triangles(polygons)
 
     timestep_desc = TimestepDescriptors(
         timestep_index=timestep.index,
@@ -795,7 +1161,7 @@ def build_masks_for_timestep(
         grid_size=GRID_SIZE,
         sheets=tuple(descriptors),
     )
-    return timestep, timestep_desc, masks
+    return timestep, timestep_desc, masks, triangles
 
 
 def build_cache(timesteps: list[TimestepInput], workers: int, library_path: str, recompute_bounds: bool = False) -> tuple[tuple[float, float, float, float], list[TimestepDescriptors]]:
@@ -833,6 +1199,7 @@ def build_cache(timesteps: list[TimestepInput], workers: int, library_path: str,
         "num_timesteps": len(results),
         "grid_size": GRID_SIZE,
         "top_n_sheets": TOP_N_SHEETS,
+        "geometry_iou_cache_version": GEOMETRY_IOU_CACHE_VERSION,
         "global_bounds": list(bounds),
         "timesteps": [item.stem for item in results],
     }
@@ -858,6 +1225,23 @@ def bbox_iou(a: tuple[float, float, float, float], b: tuple[float, float, float,
     return inter / union if union > 0.0 else 0.0
 
 
+def geometry_footprint_is_resolved(
+    sheet: SheetDescriptor,
+    global_bounds: tuple[float, float, float, float],
+) -> bool:
+    xmin, ymin, xmax, ymax = global_bounds
+    global_width = max(0.0, xmax - xmin)
+    global_height = max(0.0, ymax - ymin)
+    sheet_width = max(0.0, sheet.bbox[2] - sheet.bbox[0])
+    sheet_height = max(0.0, sheet.bbox[3] - sheet.bbox[1])
+    if global_width <= 0.0 or global_height <= 0.0:
+        return False
+    return (
+        sheet_width / global_width > GEOMETRY_IOU_MIN_NORMALIZED_EXTENT
+        and sheet_height / global_height > GEOMETRY_IOU_MIN_NORMALIZED_EXTENT
+    )
+
+
 def centroid_similarity(
     a: tuple[float, float],
     b: tuple[float, float],
@@ -879,14 +1263,21 @@ def mask_iou(a: np.ndarray, b: np.ndarray) -> float:
     return float(inter / union) if union else 0.0
 
 
-def shape_score(source: SheetDescriptor, target: SheetDescriptor, source_mask: np.ndarray, target_mask: np.ndarray, global_bounds: tuple[float, float, float, float]) -> dict[str, float]:
-    geom = mask_iou(source_mask, target_mask)
+def shape_score(
+    source: SheetDescriptor,
+    target: SheetDescriptor,
+    source_mask: np.ndarray,
+    target_mask: np.ndarray,
+    exact_overlap: float,
+    global_bounds: tuple[float, float, float, float],
+) -> dict[str, float]:
+    mask_overlap = mask_iou(source_mask, target_mask)
     area_ratio = min(source.area, target.area) / max(source.area, target.area) if max(source.area, target.area) > 0 else 0.0
     bb_iou = bbox_iou(source.bbox, target.bbox)
     centroid = centroid_similarity(source.centroid, target.centroid, global_bounds)
 
     final = (
-        SHAPE_SCORE_DEFAULT_WEIGHTS["shape_iou"] * geom
+        SHAPE_SCORE_DEFAULT_WEIGHTS["shape_iou"] * mask_overlap
         + SHAPE_SCORE_DEFAULT_WEIGHTS["area_ratio"] * area_ratio
         + SHAPE_SCORE_DEFAULT_WEIGHTS["bbox_iou"] * bb_iou
         + SHAPE_SCORE_DEFAULT_WEIGHTS["centroid_similarity"] * centroid
@@ -894,7 +1285,8 @@ def shape_score(source: SheetDescriptor, target: SheetDescriptor, source_mask: n
 
     return {
         "final_score": final,
-        "shape_iou": geom,
+        "shape_iou": mask_overlap,
+        "geometry_iou": exact_overlap,
         "area_ratio": area_ratio,
         "bbox_iou": bb_iou,
         "centroid_similarity": centroid,
@@ -912,28 +1304,101 @@ def compare_pair(
 ) -> dict:
     source_desc, source_masks = load_cached_timestep(source_stem)
     target_desc, target_masks = load_cached_timestep(target_stem)
+    source_triangles = load_cached_sheet_triangles(source_stem)
+    target_triangles = load_cached_sheet_triangles(target_stem)
+    geos_engine: GeosGeometryEngine | None = None
+    source_geometries: dict[int, GeosSheetGeometry | None] = {}
+    target_geometries: dict[int, GeosSheetGeometry | None] = {}
+    target_triangle_indexes: dict[int, TriangleSpatialIndex] = {}
+    try:
+        geos_engine = GeosGeometryEngine()
+        source_geometries = {
+            sheet_id: geos_engine.build_sheet(triangles)
+            for sheet_id, triangles in source_triangles.items()
+        }
+        target_geometries = {
+            sheet_id: geos_engine.build_sheet(triangles)
+            for sheet_id, triangles in target_triangles.items()
+        }
+    except Exception as exc:
+        if geos_engine is not None:
+            geos_engine.close()
+        geos_engine = None
+        print(
+            f"[geometry IoU fallback] {source_stem} -> {target_stem}: {exc}",
+            flush=True,
+        )
+        target_triangle_indexes = {
+            sheet_id: TriangleSpatialIndex(triangles)
+            for sheet_id, triangles in target_triangles.items()
+        }
 
     pair_scores = []
-    for source_sheet in source_desc.sheets:
-        source_mask = source_masks[source_sheet.sheet_id]
-        for target_sheet in target_desc.sheets:
-            target_mask = target_masks[target_sheet.sheet_id]
-            metrics = shape_score(source_sheet, target_sheet, source_mask, target_mask, global_bounds)
-            if metrics["final_score"] <= 0.0:
-                continue
-            pair_scores.append(
-                {
-                    "source_sheet_id": source_sheet.sheet_id,
-                    "target_sheet_id": target_sheet.sheet_id,
-                    "source_rank": source_sheet.rank,
-                    "target_rank": target_sheet.rank,
-                    "source_area": source_sheet.area,
-                    "target_area": target_sheet.area,
-                    "source_num_vertices": source_sheet.num_vertices,
-                    "target_num_vertices": target_sheet.num_vertices,
-                    **metrics,
-                }
-            )
+    geos_pair_fallback_reported = False
+    try:
+        for source_sheet in source_desc.sheets:
+            source_mask = source_masks[source_sheet.sheet_id]
+            for target_sheet in target_desc.sheets:
+                target_mask = target_masks[target_sheet.sheet_id]
+                if (
+                    not geometry_footprint_is_resolved(source_sheet, global_bounds)
+                    or not geometry_footprint_is_resolved(target_sheet, global_bounds)
+                    or bbox_iou(source_sheet.bbox, target_sheet.bbox) <= 0.0
+                ):
+                    exact_overlap = 0.0
+                elif geos_engine is not None:
+                    try:
+                        exact_overlap = geos_engine.iou(
+                            source_geometries[source_sheet.sheet_id],
+                            target_geometries[target_sheet.sheet_id],
+                        )
+                    except Exception as exc:
+                        if target_sheet.sheet_id not in target_triangle_indexes:
+                            target_triangle_indexes[target_sheet.sheet_id] = TriangleSpatialIndex(
+                                target_triangles[target_sheet.sheet_id]
+                            )
+                        exact_overlap = geometry_iou(
+                            source_triangles[source_sheet.sheet_id],
+                            target_triangle_indexes[target_sheet.sheet_id],
+                        )
+                        if not geos_pair_fallback_reported:
+                            print(
+                                f"[geometry IoU pair fallback] {source_stem} -> "
+                                f"{target_stem}: {exc}",
+                                flush=True,
+                            )
+                            geos_pair_fallback_reported = True
+                else:
+                    exact_overlap = geometry_iou(
+                        source_triangles[source_sheet.sheet_id],
+                        target_triangle_indexes[target_sheet.sheet_id],
+                    )
+                metrics = shape_score(
+                    source_sheet,
+                    target_sheet,
+                    source_mask,
+                    target_mask,
+                    exact_overlap,
+                    global_bounds,
+                )
+                if metrics["final_score"] <= 0.0 and metrics["geometry_iou"] <= 0.0:
+                    continue
+                pair_scores.append(
+                    {
+                        "source_sheet_id": source_sheet.sheet_id,
+                        "target_sheet_id": target_sheet.sheet_id,
+                        "source_rank": source_sheet.rank,
+                        "target_rank": target_sheet.rank,
+                        "source_area": source_sheet.area,
+                        "target_area": target_sheet.area,
+                        "source_num_vertices": source_sheet.num_vertices,
+                        "target_num_vertices": target_sheet.num_vertices,
+                        **metrics,
+                    }
+                )
+    finally:
+        if geos_engine is not None:
+            geos_engine.close()
 
     pair_scores.sort(key=lambda item: item["final_score"], reverse=True)
 
@@ -960,6 +1425,7 @@ def manifest_matches_timesteps(timesteps: list[TimestepInput]) -> bool:
     if not (
         manifest.get("grid_size") == GRID_SIZE
         and manifest.get("top_n_sheets") == TOP_N_SHEETS
+        and manifest.get("geometry_iou_cache_version") == GEOMETRY_IOU_CACHE_VERSION
         and manifest.get("timesteps") == [timestep.stem for timestep in timesteps]
     ):
         return False
@@ -1126,12 +1592,29 @@ def clear_cache() -> None:
         shutil.rmtree(RESULTS_DIR)
 
 
+def clear_derived_cache_preserving_vtp() -> None:
+    if CACHE_DIR.exists():
+        for path in CACHE_DIR.iterdir():
+            if path.resolve() == VTP_CACHE_DIR.resolve():
+                continue
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+    if RESULTS_DIR.exists():
+        shutil.rmtree(RESULTS_DIR)
+
+
 def main(argv: list[str] | None = None) -> int:
     global TOP_N_SHEETS
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="Parallel workers to use.")
-    parser.add_argument("--rebuild-cache", action="store_true", help="Rebuild all caches from scratch.")
+    parser.add_argument(
+        "--rebuild-cache",
+        action="store_true",
+        help="Rebuild derived descriptors and matches while preserving cached sheet VTP geometry.",
+    )
     parser.add_argument("--clear-cache", action="store_true", help="Delete cache and results before running.")
     parser.add_argument("--library-path", help="Extra LD_LIBRARY_PATH entries for fv99.")
     parser.add_argument("--top", type=int, default=TOP_N_SHEETS, help="Top N sheets per timestep.")
@@ -1150,8 +1633,7 @@ def main(argv: list[str] | None = None) -> int:
 
     library_path = make_library_path(args.library_path)
     if args.rebuild_cache:
-        if CACHE_DIR.exists():
-            shutil.rmtree(CACHE_DIR)
+        clear_derived_cache_preserving_vtp()
         ensure_dirs()
 
     timesteps = filter_exportable_timesteps(timesteps, library_path, args.workers)

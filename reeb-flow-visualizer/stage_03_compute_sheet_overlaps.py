@@ -34,6 +34,7 @@ def configured_strides(max_stride=None):
 RANGE_METRIC_FIELDS = (
     "range_combined_score",
     "range_shape_iou",
+    "range_geometry_iou",
     "range_area_ratio",
     "range_bbox_iou",
     "range_centroid_similarity",
@@ -283,6 +284,7 @@ def load_shape_match_index(warning_lines):
             metrics = {
                 "range_combined_score": safe_float(match.get("final_score")),
                 "range_shape_iou": safe_float(match.get("shape_iou")),
+                "range_geometry_iou": safe_float(match.get("geometry_iou")),
                 "range_area_ratio": safe_float(match.get("area_ratio")),
                 "range_bbox_iou": safe_float(match.get("bbox_iou")),
                 "range_centroid_similarity": safe_float(match.get("centroid_similarity")),

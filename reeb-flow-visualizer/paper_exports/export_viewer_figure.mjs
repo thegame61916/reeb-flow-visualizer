@@ -63,7 +63,6 @@ function usage() {
   npm exec --yes --package=playwright -- node paper_exports/${self} \\
     --viewer /path/to/unified_sankey_viewer \\
     --preset /path/to/preset.figure_preset.json \\
-    --out /path/to/paper_figures \\
     --target active-canvas \\
     --scale 3
 
@@ -78,6 +77,9 @@ Options:
   --scale N         deviceScaleFactor, default 2.
   --wait-ms N       Extra wait after restoring preset, default 350.
   --headed          Show browser while exporting.
+
+If --viewer is provided and --out is omitted, PNGs are written to:
+  /path/to/dataset/sankey/paper_exports/images
 
 Install dependency once with: npm install --no-save playwright
 `;
@@ -95,9 +97,15 @@ function readPreset(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
-function ensureOutputPath(outPath, preset, target) {
-  if (!outPath) throw new Error("Missing --out path");
-  const resolved = path.resolve(outPath);
+function defaultImageOutputDir(viewerPath) {
+  if (!viewerPath) return "";
+  return path.resolve(viewerPath, "..", "paper_exports", "images");
+}
+
+function ensureOutputPath(outPath, preset, target, viewerPath = "") {
+  const requested = outPath || defaultImageOutputDir(viewerPath);
+  if (!requested) throw new Error("Missing --out path. Provide --out when using --url without --viewer.");
+  const resolved = path.resolve(requested);
   const ext = path.extname(resolved).toLowerCase();
   if (ext === ".png") {
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
@@ -195,7 +203,7 @@ async function main() {
   const target = args.target || preset?.recommended_target || "active-panel";
   const selector = args.selector || targetSelectors[target];
   if (!selector && target !== "full") throw new Error(`Unknown target: ${target}`);
-  const outputPath = ensureOutputPath(args.out, preset, target);
+  const outputPath = ensureOutputPath(args.out, preset, target, args.viewer);
 
   const chromium = await loadChromium();
   let server = null;

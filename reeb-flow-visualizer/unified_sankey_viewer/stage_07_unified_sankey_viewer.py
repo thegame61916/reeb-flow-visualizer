@@ -13,8 +13,11 @@ import argparse
 from pathlib import Path
 
 from common import (
+    ANALYSIS_PLOT_DEFAULT_COLOR,
+    ANALYSIS_PLOT_DEEMPHASIS_TRANSPARENCY,
+    ANALYSIS_PLOT_SELECTED_COLOR,
+    ANALYSIS_PLOT_SELECTED_STROKE_COLOR,
     BASE_DIR,
-    CENTROID_AXIS_DIAGONAL_COLORS,
     CENTROID_COLOR_CORNERS,
     FIBER_SURFACE_IMAGE_DIR,
     OUTPUT_DIR,
@@ -31,6 +34,7 @@ from common import (
     TRACKING_ANALYSIS_TOP_INTERVALS,
     TRACKING_ANALYSIS_VIEWER_FILE,
     TRACKING_DATA_FILE,
+    UNSUPPORTED_LINK_DEFAULT_TRANSPARENCY,
     tracking_analysis_event_score_formula_text,
     VIEWER_DEFAULT_TOP_SHEETS,
 )
@@ -45,6 +49,9 @@ TIMESTEP_CACHE_DIR = STORAGE_ROOT / "cache" / "timesteps"
 MATCHES_FILE = STORAGE_ROOT / "results" / "sheet_shape_matches.json"
 
 UNIFIED_VIEWER_DIR = OUTPUT_DIR / "unified_sankey_viewer"
+PAPER_EXPORT_DIR = OUTPUT_DIR / "paper_exports"
+FIGURE_PRESET_DIR = PAPER_EXPORT_DIR / "presets"
+FIGURE_IMAGE_DIR = PAPER_EXPORT_DIR / "images"
 
 SHAPE_METRICS = [
     {"id": "shape_iou", "label": "Sheet IoU", "field": "shape_iou"},
@@ -629,12 +636,16 @@ def prepare_data(viewer_dir: Path) -> dict:
             "tracking_analysis_top_disagreements": TRACKING_ANALYSIS_TOP_DISAGREEMENTS,
             "tracking_analysis_split_merge_weight": TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT,
             "tracking_analysis_event_score_terms": list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS),
+            "analysis_plot_default_color": ANALYSIS_PLOT_DEFAULT_COLOR,
+            "analysis_plot_selected_color": ANALYSIS_PLOT_SELECTED_COLOR,
+            "analysis_plot_selected_stroke_color": ANALYSIS_PLOT_SELECTED_STROKE_COLOR,
+            "analysis_plot_deemphasis_transparency": ANALYSIS_PLOT_DEEMPHASIS_TRANSPARENCY,
+            "unsupported_link_default_transparency": UNSUPPORTED_LINK_DEFAULT_TRANSPARENCY,
             "tracking_analysis_event_score_formula": tracking_analysis_event_score_formula_text(),
             "global_area_max": max_area,
             "global_vertex_max": max_vertices,
             "centroid_color_bounds": list(centroid_color_bounds),
             "centroid_color_corners": CENTROID_COLOR_CORNERS,
-            "centroid_axis_diagonal_colors": CENTROID_AXIS_DIAGONAL_COLORS,
             "default_ranges": DEFAULT_RANGES,
             "viewer_default_top_sheets": max(1, safe_int(VIEWER_DEFAULT_TOP_SHEETS, 10)),
             "node_height_fixed": 18,
@@ -737,6 +748,9 @@ def configure_dataset_paths(base_dir: Path) -> None:
     global SHEET_IMAGE_DIR
     global FIBER_SURFACE_IMAGE_DIR
     global OVERLAP_FILE
+    global PAPER_EXPORT_DIR
+    global FIGURE_PRESET_DIR
+    global FIGURE_IMAGE_DIR
 
     BASE_DIR = base_dir
     OUTPUT_DIR = BASE_DIR / "sankey"
@@ -749,6 +763,9 @@ def configure_dataset_paths(base_dir: Path) -> None:
     SHEET_IMAGE_DIR = BASE_DIR / "sheetRendering"
     FIBER_SURFACE_IMAGE_DIR = BASE_DIR / "sheetFiberSurfaceImages"
     OVERLAP_FILE = OUTPUT_DIR / "sheet_overlaps.json"
+    PAPER_EXPORT_DIR = OUTPUT_DIR / "paper_exports"
+    FIGURE_PRESET_DIR = PAPER_EXPORT_DIR / "presets"
+    FIGURE_IMAGE_DIR = PAPER_EXPORT_DIR / "images"
 
 
 def dataset_arg_path(value: str) -> Path:
@@ -756,6 +773,11 @@ def dataset_arg_path(value: str) -> Path:
     if not path.is_absolute():
         path = Path.cwd() / path
     return path.resolve()
+
+
+def ensure_paper_export_dirs() -> None:
+    FIGURE_PRESET_DIR.mkdir(parents=True, exist_ok=True)
+    FIGURE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 
@@ -768,7 +790,6 @@ def apply_current_tracking_analysis_meta(data: dict) -> dict:
     for removed_key in ("hybrid_score_default_weights", "hybrid_vertex_metric_default"):
         meta.pop(removed_key, None)
     meta["centroid_color_corners"] = CENTROID_COLOR_CORNERS
-    meta["centroid_axis_diagonal_colors"] = CENTROID_AXIS_DIAGONAL_COLORS
     meta["viewer_default_top_sheets"] = max(1, safe_int(VIEWER_DEFAULT_TOP_SHEETS, 10))
     meta["tracking_analysis_thresholds"] = list(TRACKING_ANALYSIS_THRESHOLDS)
     available_stride_keys = set()
@@ -790,6 +811,15 @@ def apply_current_tracking_analysis_meta(data: dict) -> dict:
     meta["tracking_analysis_split_merge_weight"] = TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT
     meta["tracking_analysis_event_score_terms"] = list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS)
     meta["tracking_analysis_event_score_formula"] = tracking_analysis_event_score_formula_text()
+    meta["analysis_plot_default_color"] = ANALYSIS_PLOT_DEFAULT_COLOR
+    meta["analysis_plot_selected_color"] = ANALYSIS_PLOT_SELECTED_COLOR
+    meta["analysis_plot_selected_stroke_color"] = ANALYSIS_PLOT_SELECTED_STROKE_COLOR
+    meta["analysis_plot_deemphasis_transparency"] = ANALYSIS_PLOT_DEEMPHASIS_TRANSPARENCY
+    meta["unsupported_link_default_transparency"] = UNSUPPORTED_LINK_DEFAULT_TRANSPARENCY
+    meta["paper_export_dirs"] = {
+        "presets": str(FIGURE_PRESET_DIR),
+        "images": str(FIGURE_IMAGE_DIR),
+    }
     return data
 
 
@@ -815,6 +845,7 @@ def build_unified_sankey_data_stage() -> None:
     if not MATCHES_FILE.exists():
         raise FileNotFoundError(f"Expected match results at {MATCHES_FILE}")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_paper_export_dirs()
     data = apply_current_tracking_analysis_meta(prepare_data(UNIFIED_VIEWER_DIR))
     data_path = write_tracking_data_json(data)
     print(f"Wrote tracking data: {data_path}")
@@ -889,12 +920,11 @@ def write_index_html() -> Path:
             <option value="solid" selected>Solid</option>
             <option value="area">Sheet area</option>
             <option value="vertices">Domain vertex count</option>
-            <option value="centroid_position">Centroid corners</option>
-            <option value="centroid_axis_diagonal">Centroid red/blue axes</option>
+            <option value="centroid_position">Sheet centroid</option>
           </select>
         </label>
         <div id="centroidColorLegend" class="centroid-color-legend" hidden>
-          <div class="centroid-color-title">2D centroid color</div>
+          <div class="centroid-color-title">2D Centroid color</div>
           <div id="centroidYMax" class="centroid-axis-label"></div>
           <div class="centroid-color-row">
             <div id="centroidXMin" class="centroid-axis-label"></div>
@@ -915,6 +945,10 @@ def write_index_html() -> Path:
         <label class="inline">
           <input id="strongestOutgoingOnly" type="checkbox">
           Keep strongest outgoing link per node
+        </label>
+        <label class="inline">
+          <input id="hideSheetLabels" type="checkbox">
+          Hide sheet labels
         </label>
       </section>
     </aside>
@@ -1351,7 +1385,7 @@ h2 {
 }
 .shape-weight-controls {
   display: grid;
-  grid-template-columns: repeat(5, minmax(72px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
   gap: 6px;
   width: 100%;
   flex-basis: 100%;
@@ -1539,6 +1573,19 @@ svg.summary-chart {
   justify-content: space-between;
   margin-bottom: 7px;
 }
+.analysis-actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.analysis-actions input[type="color"] {
+  width: 34px;
+  height: 26px;
+  padding: 1px;
+}
+.analysis-actions input[type="range"] {
+  width: 110px;
+}
 .analysis-title {
   font-weight: 700;
   color: #233040;
@@ -1565,10 +1612,9 @@ svg.summary-chart {
   color: #fff;
 }
 .analysis-graph {
-  border: 1px solid #d9e2ec;
   border-radius: 5px;
   background: #fff;
-  padding: 6px 8px 4px;
+  padding: 8px 10px 4px;
   margin: 7px 0 8px;
 }
 .analysis-graph svg {
@@ -1581,9 +1627,13 @@ svg.summary-chart {
 .analysis-graph.dragging svg {
   cursor: grabbing;
 }
-.analysis-graph-axis path,
+.analysis-graph-axis path {
+  stroke: #334155;
+  stroke-width: 1.35px;
+  shape-rendering: crispEdges;
+}
 .analysis-graph-axis line {
-  stroke: #cbd5e1;
+  stroke: none;
 }
 .analysis-graph-axis text {
   fill: #536273;
@@ -1593,9 +1643,6 @@ svg.summary-chart {
   fill: #536273;
   font-size: 11px;
   font-weight: 600;
-}
-.analysis-graph-grid line {
-  stroke: #edf2f7;
 }
 .analysis-graph-line {
   fill: none;
@@ -1806,6 +1853,19 @@ def write_viewer_js() -> Path:
 
 d3.json("data.json").then(data => {
   const PANEL_HEIGHT_DEFAULT = 560;
+  const ANALYSIS_PLOT_DEFAULT_COLOR = String(data?.meta?.analysis_plot_default_color || "#6b7280");
+  const ANALYSIS_PLOT_SELECTED_COLOR = String(data?.meta?.analysis_plot_selected_color || "#ef4444");
+  const ANALYSIS_PLOT_SELECTED_STROKE_COLOR = String(data?.meta?.analysis_plot_selected_stroke_color || "#991b1b");
+  const ANALYSIS_PLOT_DEEMPHASIS_TRANSPARENCY = clamp(
+    Number(data?.meta?.analysis_plot_deemphasis_transparency) || 0,
+    0,
+    100
+  );
+  const UNSUPPORTED_LINK_DEFAULT_TRANSPARENCY = clamp(
+    Number(data?.meta?.unsupported_link_default_transparency) || 0,
+    0,
+    100
+  );
   const DEFAULT_TOP_SHEETS = Math.max(
     1,
     Math.floor(Number(data?.meta?.viewer_default_top_sheets) || 10)
@@ -1842,6 +1902,7 @@ d3.json("data.json").then(data => {
       rangeSupportMetricId: "shape_iou",
       domainSupportFilterMode: "all",
       rangeSupportFilterMode: "all",
+      unsupportedLinkTransparency: UNSUPPORTED_LINK_DEFAULT_TRANSPARENCY,
       panelHeight: PANEL_HEIGHT_DEFAULT
     }],
     nextPanelId: 2,
@@ -1860,7 +1921,8 @@ d3.json("data.json").then(data => {
       nodeColorMode: "solid",
       linkDarkness: 55,
       hideIsolated: false,
-      strongestOutgoingOnly: false
+      strongestOutgoingOnly: false,
+      hideSheetLabels: false
     }
   };
 
@@ -1955,11 +2017,6 @@ d3.json("data.json").then(data => {
     bottom_right: data.meta.centroid_color_corners?.bottom_right || "#dc2626",
     top_left: data.meta.centroid_color_corners?.top_left || "#16a34a",
     top_right: data.meta.centroid_color_corners?.top_right || "#f59e0b"
-  };
-  const centroidAxisDiagonalColors = {
-    origin: data.meta.centroid_axis_diagonal_colors?.origin || "#808080",
-    x_axis: data.meta.centroid_axis_diagonal_colors?.x_axis || "#0000ff",
-    y_axis: data.meta.centroid_axis_diagonal_colors?.y_axis || "#ff0000"
   };
   const linkMin = data.meta.link_thickness_min || 1.4;
   const linkMax = data.meta.link_thickness_max || 16;
@@ -2338,29 +2395,6 @@ d3.json("data.json").then(data => {
     return lerpRgb(bottom, top, y);
   }
 
-  function centroidAxisDiagonalRgbFromUnit(tx, ty) {
-    const nx = clamp((Number(tx) || 0) * 2 - 1, -1, 1);
-    const ny = clamp((Number(ty) || 0) * 2 - 1, -1, 1);
-    const ax = Math.abs(nx);
-    const ay = Math.abs(ny);
-    const radius = clamp(Math.hypot(nx, ny), 0, 1);
-    if (!(radius > 0)) return parseHexColor(centroidAxisDiagonalColors.origin);
-
-    const angleT = clamp(Math.atan2(ay, ax) / (Math.PI / 2), 0, 1);
-    const target = lerpRgb(
-      parseHexColor(centroidAxisDiagonalColors.x_axis),
-      parseHexColor(centroidAxisDiagonalColors.y_axis),
-      angleT
-    );
-    return lerpRgb(parseHexColor(centroidAxisDiagonalColors.origin), target, radius);
-  }
-
-  function centroidAxisDiagonalColorFromCentroid(centroid) {
-    const position = centroidPositionFromCentroid(centroid);
-    if (!position) return "#6f9ed4";
-    return rgbToHex(centroidAxisDiagonalRgbFromUnit(position[0], position[1]));
-  }
-
   function centroidPositionFromCentroid(centroid) {
     if (!Array.isArray(centroid) || centroid.length < 2) return null;
     const [xmin, ymin, xmax, ymax] = centroidColorBounds;
@@ -2394,9 +2428,7 @@ d3.json("data.json").then(data => {
       const ty = height > 1 ? 1 - py / (height - 1) : 0;
       for (let px = 0; px < width; px += 1) {
         const tx = width > 1 ? px / (width - 1) : 0;
-        const rgb = state.layoutControls.nodeColorMode === "centroid_axis_diagonal"
-          ? centroidAxisDiagonalRgbFromUnit(tx, ty)
-          : centroidRgbFromUnit(tx, ty);
+        const rgb = centroidRgbFromUnit(tx, ty);
         const offset = (py * width + px) * 4;
         image.data[offset] = Math.round(rgb[0]);
         image.data[offset + 1] = Math.round(rgb[1]);
@@ -2407,9 +2439,7 @@ d3.json("data.json").then(data => {
     context.putImageData(image, 0, 0);
     const title = document.querySelector(".centroid-color-title");
     if (title) {
-      title.textContent = state.layoutControls.nodeColorMode === "centroid_axis_diagonal"
-        ? "2D red/blue axis color"
-        : "2D centroid color";
+      title.textContent = "2D centroid color";
     }
     const [xmin, ymin, xmax, ymax] = centroidColorBounds;
     const labels = {
@@ -2427,13 +2457,19 @@ d3.json("data.json").then(data => {
   function updateCentroidColorLegendVisibility() {
     const legend = document.getElementById("centroidColorLegend");
     if (!legend) return;
-    legend.hidden = !["centroid_position", "centroid_axis_diagonal"].includes(state.layoutControls.nodeColorMode);
+    legend.hidden = state.layoutControls.nodeColorMode !== "centroid_position";
   }
 
-  function sanitizeShapeWeights(_weights) {
+  function sanitizeShapeWeights(weights) {
+    const source = weights && typeof weights === "object" ? weights : shapeScoreDefaultWeightsRaw;
     const next = {};
     for (const metricId of shapeScoreComponentIds) {
-      next[metricId] = metricId === "shape_iou" ? 1 : 0;
+      const fallback = Number(shapeScoreDefaultWeightsRaw?.[metricId]);
+      const raw = Number(source?.[metricId]);
+      const value = Number.isFinite(raw)
+        ? raw
+        : (Number.isFinite(fallback) ? fallback : (metricId === "shape_iou" ? 1 : 0));
+      next[metricId] = Math.max(0, value);
     }
     return next;
   }
@@ -2444,10 +2480,23 @@ d3.json("data.json").then(data => {
 
   function ensurePanelShapeWeights(panel) {
     if (!panel || panel.dataMode !== "shape") return;
-    panel.shapeWeights = cloneDefaultShapeWeights();
+    panel.shapeWeights = sanitizeShapeWeights(panel.shapeWeights);
+  }
+
+  function singleActiveShapeWeightId(weights) {
+    let activeMetricId = "";
+    for (const metricId of shapeScoreComponentIds) {
+      const weight = Math.max(0, Number(weights?.[metricId]) || 0);
+      if (weight <= 0) continue;
+      if (activeMetricId) return "";
+      activeMetricId = metricId;
+    }
+    return activeMetricId;
   }
 
   function combinedShapeScore(metrics, weights) {
+    const singleMetricId = singleActiveShapeWeightId(weights);
+    if (singleMetricId) return Math.max(0, Number(metrics?.[singleMetricId]) || 0);
     let weightedSum = 0;
     let weightSum = 0;
     for (const metricId of shapeScoreComponentIds) {
@@ -2470,6 +2519,8 @@ d3.json("data.json").then(data => {
   function metricMaxForPanel(panel, metricId = null) {
     const id = metricId || panel?.metricId || "";
     if (panel?.dataMode === "shape" && id === "combined") {
+      const singleMetricId = singleActiveShapeWeightId(panel.shapeWeights || cloneDefaultShapeWeights());
+      if (singleMetricId) return metricMaxima[singleMetricId] || 1;
       const pairs = pairsForMode("shape");
       let maxValue = 0;
       for (const pair of pairs) {
@@ -2647,6 +2698,11 @@ d3.json("data.json").then(data => {
     return value === true || value === "true" || value === 1 || value === "1";
   }
 
+  function normalizeHexColor(value, fallback = ANALYSIS_PLOT_DEFAULT_COLOR) {
+    const text = String(value || "").trim();
+    return /^#[0-9a-fA-F]{6}$/.test(text) ? text : fallback;
+  }
+
   function normalizeSupportFilterMode(value, legacyBest = false) {
     const mode = String(value || "");
     if (["all", "outgoing", "incoming", "both"].includes(mode)) return mode;
@@ -2667,6 +2723,11 @@ d3.json("data.json").then(data => {
     panel.rangeSupportFilterMode = normalizeSupportFilterMode(
       panel.rangeSupportFilterMode,
       normalizeBoolean(panel.useBestRangeSupport)
+    );
+    panel.unsupportedLinkTransparency = clamp(
+      Number(panel.unsupportedLinkTransparency ?? UNSUPPORTED_LINK_DEFAULT_TRANSPARENCY),
+      0,
+      100
     );
   }
 
@@ -2789,6 +2850,26 @@ d3.json("data.json").then(data => {
     return false;
   }
 
+  function appendUnsupportedLinkTransparencyControl(controls, panel) {
+    ensurePanelSupportFilters(panel);
+    const label = controls.append("label")
+      .attr("title", "Transparency for links rejected by the active support filter");
+    label.append("span").text("Unsupported link transparency ");
+    const slider = label.append("input")
+      .attr("type", "range")
+      .attr("min", 0)
+      .attr("max", 100)
+      .attr("step", 1)
+      .property("value", panel.unsupportedLinkTransparency);
+    const valueLabel = label.append("span")
+      .text(`${panel.unsupportedLinkTransparency}%`);
+    slider.on("change", event => {
+      panel.unsupportedLinkTransparency = clamp(Number(event.target.value) || 0, 0, 100);
+      valueLabel.text(`${panel.unsupportedLinkTransparency}%`);
+      scheduleRenderAll();
+    });
+  }
+
   function vertexThetaStats(metricId = vertexMetricDefault) {
     const id = overlapMetricIds.includes(metricId) ? metricId : vertexMetricDefault;
     const cacheId = `${selectedStride()}:${id}`;
@@ -2843,11 +2924,13 @@ d3.json("data.json").then(data => {
       panel.analysis = {
         tab: "intervals",
         theta: defaultAnalysisTheta(panel),
-        topIntervals: Math.min(5, Math.max(1, Number(analysisData?.top_intervals) || 5)),
+        topIntervals: 0,
         topBestSupportedIntervals: Math.min(5, Math.max(1, Number(analysisData?.top_intervals) || 5)),
         topFeatures: Math.min(5, Math.max(1, Number(analysisData?.top_features) || 5)),
         topDomainStability: Math.min(12, Math.max(1, Number(analysisData?.top_intervals) || 12)),
         topDisagreements: Math.min(12, Math.max(1, Number(analysisData?.top_disagreements ?? data.meta?.tracking_analysis_top_disagreements) || 12)),
+        plotColor: ANALYSIS_PLOT_DEFAULT_COLOR,
+        deEmphasisTransparency: ANALYSIS_PLOT_DEEMPHASIS_TRANSPARENCY,
         intervalGraphHeight: INTERVAL_GRAPH_HEIGHT_DEFAULT,
         intervalGraphZoomScale: 1,
         intervalGraphFocus: null,
@@ -2876,11 +2959,17 @@ d3.json("data.json").then(data => {
     if (!thetaOptions.some(value => Math.abs(value - Number(panel.analysis.theta)) < 1e-6)) {
       panel.analysis.theta = defaultAnalysisTheta(panel);
     }
-    panel.analysis.topIntervals = Math.max(1, Math.floor(Number(panel.analysis.topIntervals) || 1));
+    panel.analysis.topIntervals = Math.max(0, Math.floor(Number(panel.analysis.topIntervals) || 0));
     panel.analysis.topBestSupportedIntervals = Math.max(1, Math.floor(Number(panel.analysis.topBestSupportedIntervals) || panel.analysis.topIntervals || 1));
     panel.analysis.topFeatures = Math.max(1, Math.floor(Number(panel.analysis.topFeatures) || 1));
     panel.analysis.topDomainStability = Math.max(1, Math.floor(Number(panel.analysis.topDomainStability) || 1));
     panel.analysis.topDisagreements = Math.max(1, Math.floor(Number(panel.analysis.topDisagreements) || 1));
+    panel.analysis.plotColor = normalizeHexColor(panel.analysis.plotColor);
+    panel.analysis.deEmphasisTransparency = clamp(
+      Number(panel.analysis.deEmphasisTransparency ?? ANALYSIS_PLOT_DEEMPHASIS_TRANSPARENCY),
+      0,
+      100
+    );
     panel.analysis.intervalGraphHeight = clampIntervalGraphHeight(panel.analysis.intervalGraphHeight);
     panel.analysis.intervalGraphZoomScale = Number.isFinite(Number(panel.analysis.intervalGraphZoomScale))
       ? Number(panel.analysis.intervalGraphZoomScale)
@@ -2928,7 +3017,15 @@ d3.json("data.json").then(data => {
   function analysisMetricKey(panel) {
     const mode = panel?.dataMode || "shape";
     const metric = panel?.metricId || "combined";
-    if (mode === "shape" && metric === "combined") return `${mode}:${metric}:shape_iou`;
+    if (mode === "shape" && metric === "combined") {
+      const weights = sanitizeShapeWeights(panel?.shapeWeights);
+      const singleMetricId = singleActiveShapeWeightId(weights);
+      if (singleMetricId) return `${mode}:${singleMetricId}`;
+      const weightKey = shapeScoreComponentIds
+        .map(metricId => `${metricId}=${formatWeight(weights[metricId])}`)
+        .join(",");
+      return `${mode}:${metric}:${weightKey}`;
+    }
     return `${mode}:${metric}`;
   }
 
@@ -2980,7 +3077,7 @@ d3.json("data.json").then(data => {
 
   function panelAnalysisScore(match, panel) {
     if (panel?.dataMode === "shape" && panel?.metricId === "combined") {
-      return analysisCombinedScore(match);
+      return analysisCombinedScore(match, panel);
     }
     const raw = Number(metricValue(match, panel, panel?.metricId));
     if (!Number.isFinite(raw)) return 0;
@@ -3050,9 +3147,9 @@ d3.json("data.json").then(data => {
     return groups;
   }
 
-  function analysisCombinedScore(match) {
+  function analysisCombinedScore(match, panel = null) {
     const metrics = match?.metrics || match || {};
-    return combinedShapeScore(metrics, cloneDefaultShapeWeights());
+    return combinedShapeScore(metrics, panel?.shapeWeights || cloneDefaultShapeWeights());
   }
 
   function bestAnalysisMatch(matches) {
@@ -3933,10 +4030,10 @@ d3.json("data.json").then(data => {
     const chooser = container.append("div").attr("class", "track-feature-chooser");
     const header = chooser.append("div").attr("class", "track-feature-chooser-header");
     const title = header.append("div");
-    title.append("strong").text(`${items.length} overlapping continuing features`);
+    title.append("strong").text(`${items.length} Overlapping continuing features`);
     title.append("span")
       .style("display", "block")
-      .text(`Length ${formatTrackGroupRange(items, entry => entry.length, value => String(Math.round(value)))} | mean ${formatTrackGroupRange(items, entry => entry.mean_continuation_score)}`);
+      .text(`Length ${formatTrackGroupRange(items, entry => entry.length, value => String(Math.round(value)))} | Mean ${formatTrackGroupRange(items, entry => entry.mean_continuation_score)}`);
     header.append("button")
       .attr("type", "button")
       .text("Close")
@@ -4056,13 +4153,12 @@ d3.json("data.json").then(data => {
       .attr("height", innerHeight);
     const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
-    const grid = g.append("g").attr("class", "analysis-graph-grid");
     const xAxis = g.append("g")
       .attr("class", "analysis-graph-axis")
       .attr("transform", `translate(0,${innerHeight})`);
     const yAxis = g.append("g").attr("class", "analysis-graph-axis");
     const marks = g.append("g").attr("clip-path", `url(#${clipId})`);
-    const linePath = options.drawLine ? marks.append("path").attr("class", "analysis-graph-line") : null;
+    const lineLayer = options.drawLine ? marks.append("g").attr("class", "analysis-graph-lines") : null;
     const dotLayer = marks.append("g");
     const labelLayer = marks.append("g");
     const hitLayer = marks.append("g");
@@ -4103,6 +4199,12 @@ d3.json("data.json").then(data => {
 
     function draw(next = null) {
       const activeKeys = options.selectedKeySet(panel);
+      const plotColor = normalizeHexColor(panel.analysis.plotColor);
+      const deEmphasisOpacity = 1 - clamp(
+        Number(panel.analysis.deEmphasisTransparency) || 0,
+        0,
+        100
+      ) / 100;
       const stateForDraw = viewState(next);
       const visibleLeft = stateForDraw.focus.x - innerWidth / (2 * stateForDraw.zoomScale);
       const visibleRight = stateForDraw.focus.x + innerWidth / (2 * stateForDraw.zoomScale);
@@ -4115,14 +4217,36 @@ d3.json("data.json").then(data => {
         .domain([yBase.invert(visibleBottom), yBase.invert(visibleTop)])
         .range([innerHeight, 0]);
 
-      grid.call(d3.axisLeft(yAxisScale).ticks(4).tickSize(-innerWidth).tickFormat(""));
-      xAxis.call(d3.axisBottom(xAxisScale).ticks(Math.min(8, valid.length)).tickFormat(options.xTickFormat || (value => Number(value).toFixed(2))));
-      yAxis.call(d3.axisLeft(yAxisScale).ticks(4).tickFormat(options.yTickFormat || undefined));
+      xAxis.call(d3.axisBottom(xAxisScale)
+        .ticks(Math.min(8, valid.length))
+        .tickSizeInner(0)
+        .tickSizeOuter(0)
+        .tickPadding(6)
+        .tickFormat(options.xTickFormat || (value => Number(value).toFixed(2))));
+      yAxis.call(d3.axisLeft(yAxisScale)
+        .ticks(4)
+        .tickSizeInner(0)
+        .tickSizeOuter(0)
+        .tickPadding(6)
+        .tickFormat(options.yTickFormat || undefined));
 
-      if (linePath) {
-        linePath.attr("d", d3.line()
-          .x(d => screenXFromWorld(xBase(xValue(d)), stateForDraw))
-          .y(d => screenYFromWorld(yBase(yValue(d)), stateForDraw))(valid));
+      if (lineLayer) {
+        lineLayer.selectAll("path.analysis-graph-line")
+          .data(d3.pairs(valid), pair => `${keyFn(pair[0])}->${keyFn(pair[1])}`)
+          .join("path")
+          .attr("class", pair => {
+            const active = activeKeys.has(keyFn(pair[0])) && activeKeys.has(keyFn(pair[1]));
+            return `analysis-graph-line${active ? " active" : ""}`;
+          })
+          .attr("d", pair => d3.line()
+            .x(d => screenXFromWorld(xBase(xValue(d)), stateForDraw))
+            .y(d => screenYFromWorld(yBase(yValue(d)), stateForDraw))(pair))
+          .style("stroke", plotColor)
+          .style("opacity", pair => (
+            activeKeys.has(keyFn(pair[0])) && activeKeys.has(keyFn(pair[1]))
+              ? 1
+              : deEmphasisOpacity
+          ));
       }
 
       dotLayer.selectAll("circle.analysis-graph-dot")
@@ -4131,7 +4255,10 @@ d3.json("data.json").then(data => {
         .attr("class", d => `analysis-graph-dot${plotIsActive(d, activeKeys) ? " active" : ""}${Array.isArray(d?.items) && Number(d?.count) > 1 ? " grouped" : ""}`)
         .attr("cx", d => screenXFromWorld(xBase(plotXValue(d)), stateForDraw))
         .attr("cy", d => screenYFromWorld(yBase(plotYValue(d)), stateForDraw))
-        .attr("r", d => dotRadius(d, plotIsActive(d, activeKeys)));
+        .attr("r", d => dotRadius(d, plotIsActive(d, activeKeys)))
+        .style("fill", d => plotIsActive(d, activeKeys) ? ANALYSIS_PLOT_SELECTED_COLOR : plotColor)
+        .style("stroke", d => plotIsActive(d, activeKeys) ? ANALYSIS_PLOT_SELECTED_STROKE_COLOR : "#ffffff")
+        .style("opacity", d => plotIsActive(d, activeKeys) ? 1 : deEmphasisOpacity);
 
       labelLayer.selectAll("text.analysis-graph-dot-count")
         .data(plotRows.filter(d => Array.isArray(d?.items) && Number(d?.count) > 1), plotKeyFn)
@@ -4140,6 +4267,7 @@ d3.json("data.json").then(data => {
         .attr("x", d => screenXFromWorld(xBase(plotXValue(d)), stateForDraw))
         .attr("y", d => screenYFromWorld(yBase(plotYValue(d)), stateForDraw) + 3.5)
         .attr("text-anchor", "middle")
+        .style("opacity", d => plotIsActive(d, activeKeys) ? 1 : deEmphasisOpacity)
         .text(d => formatTrackGroupCount(d.count));
 
       hitLayer.selectAll("circle.analysis-graph-hit")
@@ -4234,8 +4362,8 @@ d3.json("data.json").then(data => {
       xValue: intervalTimeFs,
       yValue: item => Number(item.event_score),
       sort: (a, b) => intervalTimeFs(a) - intervalTimeFs(b),
-      xLabel: "time (fs)",
-      yLabel: options.yLabel || "event score",
+      xLabel: "Time (fs)",
+      yLabel: options.yLabel || "Event score",
       xTickFormat: value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits),
       drawLine: true,
       tooltip: options.tooltip || intervalGraphTooltip,
@@ -4264,8 +4392,8 @@ d3.json("data.json").then(data => {
       sort: (a, b) => Number(a.length) - Number(b.length) || Number(b.mean_continuation_score) - Number(a.mean_continuation_score),
       xDomain: valid => [0, (d3.max(valid, item => Number(item.length)) || 1) + 0.5],
       yDomain: valid => [0, Math.max(1, d3.max(valid, item => Number(item.mean_continuation_score)) || 1) * 1.05],
-      xLabel: "feature length",
-      yLabel: "mean score",
+      xLabel: "Feature length",
+      yLabel: "Mean score",
       xTickFormat: value => String(Math.round(Number(value))),
       yTickFormat: value => formatScore(value),
       drawLine: false,
@@ -4527,8 +4655,8 @@ d3.json("data.json").then(data => {
       xValue: intervalTimeFs,
       yValue: item => Number(item.domain_change_score),
       sort: (a, b) => intervalTimeFs(a) - intervalTimeFs(b),
-      xLabel: "time (fs)",
-      yLabel: "domain change score",
+      xLabel: "Time (fs)",
+      yLabel: "Domain change score",
       xTickFormat: value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits),
       yTickFormat: value => formatScore(value),
       drawLine: true,
@@ -4637,8 +4765,8 @@ d3.json("data.json").then(data => {
       xValue: intervalTimeFs,
       yValue: item => Number(item.max_disagreement_score),
       sort: (a, b) => intervalTimeFs(a) - intervalTimeFs(b),
-      xLabel: "time (fs)",
-      yLabel: "max bidirectional disagreement score",
+      xLabel: "Time (fs)",
+      yLabel: "Max bidirectional disagreement score",
       xTickFormat: value => Number(value).toFixed(TIMESTEP_LABEL_OPTIONS.digits),
       yTickFormat: value => formatScore(value),
       drawLine: false,
@@ -4807,7 +4935,7 @@ d3.json("data.json").then(data => {
     if (!hasActiveSupportFilter(panel)) return null;
     const nodeKey = nodeKeyFromDatum(node);
     const activeThreshold = clamp(Number(panel.threshold) || 0, 0, 100);
-    const edges = gatherVisibleMatchEdges(panel, activeThreshold);
+    const edges = gatherVisibleMatchEdges(panel, activeThreshold, { includeUnsupported: false });
     const outgoing = new Map();
     const incoming = new Map();
     const edgeByLinkKey = new Map();
@@ -4956,6 +5084,26 @@ d3.json("data.json").then(data => {
     };
   }
 
+  function selectTopIntervalRows(panel, rows) {
+    ensurePanelAnalysis(panel);
+    const selectedRows = (rows || []).filter(Boolean);
+    panel.analysis.selectedIntervalKeys = selectedRows.map(intervalKeyFromItem).filter(Boolean);
+    panel.analysis.selectedTrackKeys = [];
+    panel.analysis.trackChooserGroupKey = "";
+    panel.analysis.selectedDisagreementKeys = [];
+    panel.analysis.selectedDomainStabilityKeys = [];
+    panel.analysis.highlight = aggregateSelectedIntervalHighlight(panel);
+    expandRangesForHighlight(panel.analysis.highlight);
+
+    const firstRow = selectedRows[0];
+    if (firstRow) {
+      queueAnalysisFocusPulse(panel, intervalHighlightPayload(firstRow, panel));
+    } else if (state.analysisFocusPulse?.panelId === panel.id) {
+      state.analysisFocusPulse = null;
+    }
+    renderAll();
+  }
+
   function expandRangesForHighlight(highlight) {
     if (!highlight || !Number.isFinite(Number(highlight.start)) || !Number.isFinite(Number(highlight.end))) return;
     const pad = 1;
@@ -5015,9 +5163,17 @@ d3.json("data.json").then(data => {
     panel.analysis.trackChooserGroupKey = "";
     panel.analysis.selectedDisagreementKeys = [];
     panel.analysis.selectedDomainStabilityKeys = [];
+    panel.analysis.topIntervals = 0;
     state.analysisFocusPulse = null;
     panel.analysis.highlight = null;
     renderAll();
+  }
+
+  function appendClearHighlightButton(controls, panel) {
+    controls.append("button")
+      .attr("type", "button")
+      .text("Clear highlight")
+      .on("click", () => clearAnalysisHighlight(panel));
   }
 
   function highlightedNodeSet(panel) {
@@ -5036,7 +5192,7 @@ d3.json("data.json").then(data => {
     const actions = toolbar.append("div").attr("class", "analysis-actions");
 
     if (!hasEmbeddedAnalysisData) {
-      box.append("div").attr("class", "analysis-hint").text("Runtime interval, best supported intervals, continuing-feature, sensitivity, and domain/range complementarity analysis is available.");
+      box.append("div").attr("class", "analysis-hint").text("Runtime interval, continuing-feature, and sensitivity analysis is available.");
     }
 
     const thetaSelect = actions.append("label");
@@ -5060,25 +5216,44 @@ d3.json("data.json").then(data => {
       renderAll();
     });
 
-    actions.append("button")
-      .attr("type", "button")
-      .text("Clear highlight")
-      .on("click", () => clearAnalysisHighlight(panel));
+    const plotColorLabel = actions.append("label");
+    plotColorLabel.append("span").text("Plot color ");
+    plotColorLabel.append("input")
+      .attr("type", "color")
+      .attr("title", "Analysis plot color")
+      .property("value", panel.analysis.plotColor)
+      .on("input", event => {
+        panel.analysis.plotColor = normalizeHexColor(event.target.value);
+        scheduleRenderAll();
+      });
+
+    const plotTransparencyLabel = actions.append("label");
+    plotTransparencyLabel.append("span").text("Plot transparency ");
+    const plotTransparency = plotTransparencyLabel.append("input")
+      .attr("type", "range")
+      .attr("min", 0)
+      .attr("max", 100)
+      .attr("step", 1)
+      .attr("title", "Transparency for unselected analysis points and edges")
+      .property("value", panel.analysis.deEmphasisTransparency);
+    const plotTransparencyValue = plotTransparencyLabel.append("span")
+      .text(`${panel.analysis.deEmphasisTransparency}%`);
+    plotTransparency.on("change", event => {
+      panel.analysis.deEmphasisTransparency = clamp(Number(event.target.value) || 0, 0, 100);
+      plotTransparencyValue.text(`${panel.analysis.deEmphasisTransparency}%`);
+      scheduleRenderAll();
+    });
 
     const tabs = panel.dataMode === "overlap"
       ? [
           ["intervals", "Interesting domain intervals"],
-          ["best-supported-intervals", "Best supported domain intervals"],
           ["tracks", "Domain continuing features"],
           ["sensitivity", "Domain sensitivity"],
-          ["disagreement", "Domain/range complementarity"],
         ]
       : [
           ["intervals", "Interesting range intervals"],
-          ["best-supported-intervals", "Best supported range intervals"],
           ["tracks", "Range continuing features"],
           ["sensitivity", "Range sensitivity"],
-          ["disagreement", "Domain/range complementarity"],
         ];
     if (!tabs.some(([id]) => id === panel.analysis.tab)) {
       clearAnalysisSelectionsOnly(panel);
@@ -5123,18 +5298,19 @@ d3.json("data.json").then(data => {
       controls.append("span").attr("class", "analysis-hint").text(`Show/highlight top ${intervalKind} out of ${rows.length}`);
       const countInput = controls.append("input")
         .attr("type", "number")
-        .attr("min", 1)
+        .attr("min", 0)
         .attr("max", Math.max(1, rows.length))
-        .property("value", Math.min(panel.analysis.topIntervals, Math.max(1, rows.length)));
+        .property("value", Math.min(panel.analysis.topIntervals, rows.length));
       countInput.on("change", event => {
-        const maxCount = Math.max(1, rows.length);
-        panel.analysis.topIntervals = clamp(Math.floor(Number(event.target.value) || 1), 1, maxCount);
-        renderAll();
+        const maxCount = Math.max(0, rows.length);
+        panel.analysis.topIntervals = clamp(Math.floor(Number(event.target.value) || 0), 0, maxCount);
+        selectTopIntervalRows(panel, rows.slice(0, Math.min(panel.analysis.topIntervals, rows.length)));
       });
       controls.append("button").attr("type", "button").text("Highlight")
-        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(visibleRows.map(item => intervalHighlightPayload(item, panel)), `Top ${visibleRows.length} ${intervalKind}`), false));
+        .on("click", () => selectTopIntervalRows(panel, visibleRows));
+      appendClearHighlightButton(controls, panel);
 
-      renderIntervalScoreGraph(content, panel, visibleRows);
+      renderIntervalScoreGraph(content, panel, rows);
 
       if (!rows.length) content.append("div").attr("class", "analysis-hint").text(`No ${intervalKind} analysis for this theta.`);
       return;
@@ -5161,15 +5337,16 @@ d3.json("data.json").then(data => {
       countInput.on("change", event => {
         const maxCount = Math.max(1, rows.length);
         panel.analysis.topBestSupportedIntervals = clamp(Math.floor(Number(event.target.value) || 1), 1, maxCount);
-        renderAll();
+        selectTopIntervalRows(panel, rows.slice(0, Math.min(panel.analysis.topBestSupportedIntervals, rows.length)));
       });
       controls.append("button").attr("type", "button").text("Highlight")
-        .on("click", () => setAnalysisHighlight(panel, combinedHighlight(visibleRows.map(item => intervalHighlightPayload(item, panel)), `Top ${visibleRows.length} ${intervalKind}`), false));
+        .on("click", () => selectTopIntervalRows(panel, visibleRows));
+      appendClearHighlightButton(controls, panel);
 
       content.append("div")
         .attr("class", "analysis-hint")
         .text(`Filtered by ${supportFilterDescription(panel)}.`);
-      renderIntervalScoreGraph(content, panel, visibleRows, {
+      renderIntervalScoreGraph(content, panel, rows, {
         id: "best-supported-intervals",
         yLabel: "Best supported event score",
         stateKey: panel => `${analysisCacheKey("best-supported-interval-graph", panel)}:${supportFilterAnalysisKey(panel)}`,
@@ -5198,6 +5375,7 @@ d3.json("data.json").then(data => {
       });
       controls.append("button").attr("type", "button").text("Highlight")
         .on("click", () => setAnalysisHighlight(panel, combinedHighlight(topRows, `Top ${topRows.length} continuing features`), false));
+      appendClearHighlightButton(controls, panel);
 
       renderTrackScoreGraph(content, panel, visibleRows);
 
@@ -5222,6 +5400,7 @@ d3.json("data.json").then(data => {
       });
       controls.append("button").attr("type", "button").text("Highlight")
         .on("click", () => setAnalysisHighlight(panel, combinedHighlight(visibleRows.map(domainStabilityHighlightPayload), `Top ${visibleRows.length} domain-change intervals`), false));
+      appendClearHighlightButton(controls, panel);
 
       renderDomainStabilityGraph(content, panel, visibleRows);
 
@@ -5288,6 +5467,7 @@ d3.json("data.json").then(data => {
           combinedHighlight(visibleRows.map(disagreementHighlightPayload), `Top ${visibleRows.length} domain/range complementarity pairs`),
           false
         ));
+      appendClearHighlightButton(controls, panel);
 
       content.append("div")
         .attr("class", "analysis-subtitle")
@@ -5419,11 +5599,8 @@ d3.json("data.json").then(data => {
     if (mode === "solid") {
       return "#6f9ed4";
     }
-    if (mode === "centroid_position") {
+    if (mode === "centroid_position" || mode === "centroid_axis_diagonal") {
       return node.centroid_color || centroidColorFromCentroid(node.centroid);
-    }
-    if (mode === "centroid_axis_diagonal") {
-      return centroidAxisDiagonalColorFromCentroid(node.centroid);
     }
     const value = nodeMetricValue(node, mode);
     const maxValue = nodeMetricMax(mode);
@@ -5437,14 +5614,25 @@ d3.json("data.json").then(data => {
     return d3.interpolateRgb("#8fbfff", "#123ea8")(mappedRatio);
   }
 
-  function linkFillColor(opacity, hover) {
+  function linkFillColor(opacity, hover, visibility = 1) {
     const darkness = clamp(state.layoutControls.linkDarkness, 0, 100) / 100;
     const shade = Math.round(140 - darkness * 110);
     const blue = Math.round(168 - darkness * 124);
-    const alpha = hover
+    const alphaBase = hover
       ? clamp(0.20 + opacity * 0.90, 0, 0.98)
       : clamp(0.14 + opacity * 0.80, 0, 0.92);
+    const alpha = clamp(alphaBase * clamp(Number(visibility) || 0, 0, 1), 0, 0.98);
     return `rgba(${shade}, ${shade}, ${blue}, ${alpha})`;
+  }
+
+  function supportLinkVisibility(link, panel) {
+    if (!link?.supportFilteredOut) return 1;
+    const transparency = clamp(
+      Number(panel?.unsupportedLinkTransparency ?? UNSUPPORTED_LINK_DEFAULT_TRANSPARENCY),
+      0,
+      100
+    );
+    return 1 - transparency / 100;
   }
 
   function scoreOpacity(value, maxScore) {
@@ -5471,6 +5659,31 @@ d3.json("data.json").then(data => {
     const n = Number(value);
     if (!Number.isFinite(n)) return "0";
     return (Math.round(n * 1000) / 1000).toString();
+  }
+
+  function renderShapeWeightControls(controls, panel) {
+    if (panel.dataMode !== "shape" || panel.metricId !== "combined") return;
+    ensurePanelShapeWeights(panel);
+    const group = controls.append("div")
+      .attr("class", "shape-weight-controls")
+      .attr("title", "Weights used by the Combined range-overlap metric");
+    for (const metricId of shapeScoreComponentIds) {
+      const item = group.append("label").attr("class", "shape-weight-item");
+      item.append("span").text(shapeWeightLabel(metricId));
+      item.append("input")
+        .attr("type", "number")
+        .attr("min", 0)
+        .attr("step", 0.05)
+        .property("value", formatWeight(panel.shapeWeights?.[metricId]))
+        .on("change", event => {
+          const next = sanitizeShapeWeights(panel.shapeWeights);
+          next[metricId] = Math.max(0, Number(event.target.value) || 0);
+          panel.shapeWeights = next;
+          event.target.value = formatWeight(next[metricId]);
+          clearAnalysisSelectionsOnly(panel);
+          scheduleRenderAll();
+        });
+    }
   }
 
   function rangeLabel(range) {
@@ -5783,6 +5996,7 @@ d3.json("data.json").then(data => {
       rangeSupportMetricId: panel.rangeSupportMetricId,
       domainSupportFilterMode: panel.domainSupportFilterMode,
       rangeSupportFilterMode: panel.rangeSupportFilterMode,
+      unsupportedLinkTransparency: panel.unsupportedLinkTransparency,
       shapeWeights: panel.shapeWeights || null,
       analysis: panel.analysis || null,
       panelHeight: panel.panelHeight
@@ -5854,6 +6068,11 @@ d3.json("data.json").then(data => {
         raw?.rangeSupportFilterMode,
         normalizeBoolean(raw?.useBestRangeSupport)
       ),
+      unsupportedLinkTransparency: clamp(
+        Number(raw?.unsupportedLinkTransparency ?? UNSUPPORTED_LINK_DEFAULT_TRANSPARENCY),
+        0,
+        100
+      ),
       shapeWeights: raw?.shapeWeights ? cloneJson(raw.shapeWeights) : cloneDefaultShapeWeights(),
       analysis: raw?.analysis ? cloneJson(raw.analysis) : null,
       panelHeight: clampPanelHeight(raw?.panelHeight ?? PANEL_HEIGHT_DEFAULT)
@@ -5872,6 +6091,7 @@ d3.json("data.json").then(data => {
     const darknessValueNode = document.getElementById("linkDarknessValue");
     const hideIsolatedNode = document.getElementById("hideIsolated");
     const strongestOutgoingNode = document.getElementById("strongestOutgoingOnly");
+    const hideSheetLabelsNode = document.getElementById("hideSheetLabels");
     if (orderingNode) orderingNode.value = state.layoutControls.orderingMode;
     if (topSheetsNode) topSheetsNode.value = String(normalizeTopSheets(state.layoutControls.topSheets));
     if (timestepStrideNode) timestepStrideNode.value = String(selectedStride());
@@ -5880,6 +6100,7 @@ d3.json("data.json").then(data => {
     if (darknessValueNode) darknessValueNode.textContent = `${clamp(state.layoutControls.linkDarkness, 0, 100)}%`;
     if (hideIsolatedNode) hideIsolatedNode.checked = Boolean(state.layoutControls.hideIsolated);
     if (strongestOutgoingNode) strongestOutgoingNode.checked = Boolean(state.layoutControls.strongestOutgoingOnly);
+    if (hideSheetLabelsNode) hideSheetLabelsNode.checked = hideSheetLabels();
     drawCentroidColorLegend();
     updateCentroidColorLegendVisibility();
     refreshLinkDarkness();
@@ -5930,6 +6151,9 @@ d3.json("data.json").then(data => {
         ...state.layoutControls,
         ...cloneJson(presetState.layoutControls),
         nodeSizeMode: "vertices",
+        nodeColorMode: presetState.layoutControls.nodeColorMode === "centroid_axis_diagonal"
+          ? "centroid_position"
+          : String(presetState.layoutControls.nodeColorMode || state.layoutControls.nodeColorMode),
         topSheets: normalizeTopSheets(presetState.layoutControls.topSheets)
       };
     }
@@ -6010,7 +6234,44 @@ d3.json("data.json").then(data => {
     return columns;
   }
 
-  function gatherVisibleMatchEdges(panel, thresholdPercent) {
+  function strongestOutgoingEdges(edges) {
+    const bestBySource = new Map();
+    for (const edge of edges) {
+      const sourceKey = `${edge.source_timestep_index}:${edge.source_sheet_id}`;
+      const current = bestBySource.get(sourceKey);
+      if (!current) {
+        bestBySource.set(sourceKey, edge);
+        continue;
+      }
+      const edgeScore = Number(edge.score) || 0;
+      const currentScore = Number(current.score) || 0;
+      if (edgeScore > currentScore + 1e-12) {
+        bestBySource.set(sourceKey, edge);
+        continue;
+      }
+      if (Math.abs(edgeScore - currentScore) <= 1e-12) {
+        const edgeRank = Number.isFinite(+edge.target_rank) ? +edge.target_rank : Number.POSITIVE_INFINITY;
+        const currentRank = Number.isFinite(+current.target_rank) ? +current.target_rank : Number.POSITIVE_INFINITY;
+        if (edgeRank < currentRank) {
+          bestBySource.set(sourceKey, edge);
+          continue;
+        }
+        if (edgeRank === currentRank) {
+          const edgeSheet = Number.isFinite(+edge.target_sheet_id) ? +edge.target_sheet_id : Number.POSITIVE_INFINITY;
+          const currentSheet = Number.isFinite(+current.target_sheet_id) ? +current.target_sheet_id : Number.POSITIVE_INFINITY;
+          if (edgeSheet < currentSheet) {
+            bestBySource.set(sourceKey, edge);
+          }
+        }
+      }
+    }
+    return edges.filter(edge => {
+      const sourceKey = `${edge.source_timestep_index}:${edge.source_sheet_id}`;
+      return bestBySource.get(sourceKey) === edge;
+    });
+  }
+
+  function gatherVisibleMatchEdges(panel, thresholdPercent, options = {}) {
     const edges = [];
     const pairs = pairsForMode(panel.dataMode, panel);
     const ranges = normalizedRanges();
@@ -6049,45 +6310,32 @@ d3.json("data.json").then(data => {
       }
     }
 
-    let filteredEdges = applySupportFilter(edges, panel);
+    let supportedEdges = applySupportFilter(edges, panel);
 
     if (state.layoutControls.strongestOutgoingOnly) {
-      const bestBySource = new Map();
-      for (const edge of filteredEdges) {
-        const sourceKey = `${edge.source_timestep_index}:${edge.source_sheet_id}`;
-        const current = bestBySource.get(sourceKey);
-        if (!current) {
-          bestBySource.set(sourceKey, edge);
-          continue;
-        }
-        const edgeScore = Number(edge.score) || 0;
-        const currentScore = Number(current.score) || 0;
-        if (edgeScore > currentScore + 1e-12) {
-          bestBySource.set(sourceKey, edge);
-          continue;
-        }
-        if (Math.abs(edgeScore - currentScore) <= 1e-12) {
-          const edgeRank = Number.isFinite(+edge.target_rank) ? +edge.target_rank : Number.POSITIVE_INFINITY;
-          const currentRank = Number.isFinite(+current.target_rank) ? +current.target_rank : Number.POSITIVE_INFINITY;
-          if (edgeRank < currentRank) {
-            bestBySource.set(sourceKey, edge);
-            continue;
-          }
-          if (edgeRank === currentRank) {
-            const edgeSheet = Number.isFinite(+edge.target_sheet_id) ? +edge.target_sheet_id : Number.POSITIVE_INFINITY;
-            const currentSheet = Number.isFinite(+current.target_sheet_id) ? +current.target_sheet_id : Number.POSITIVE_INFINITY;
-            if (edgeSheet < currentSheet) {
-              bestBySource.set(sourceKey, edge);
-            }
-          }
-        }
-      }
-      return filteredEdges.filter(edge => {
-        const sourceKey = `${edge.source_timestep_index}:${edge.source_sheet_id}`;
-        return bestBySource.get(sourceKey) === edge;
-      });
+      supportedEdges = strongestOutgoingEdges(supportedEdges);
+      return supportedEdges.map(edge => ({ ...edge, supportFilteredOut: false }));
     }
-    return filteredEdges;
+
+    const includeUnsupported = options.includeUnsupported !== false;
+    const unsupportedTransparency = clamp(
+      Number(panel?.unsupportedLinkTransparency ?? UNSUPPORTED_LINK_DEFAULT_TRANSPARENCY),
+      0,
+      100
+    );
+    if (
+      !hasActiveSupportFilter(panel)
+      || !includeUnsupported
+      || unsupportedTransparency >= 100
+    ) {
+      return supportedEdges.map(edge => ({ ...edge, supportFilteredOut: false }));
+    }
+
+    const supportedKeys = new Set(supportedEdges.map(linkKeyFromDatum));
+    return edges.map(edge => ({
+      ...edge,
+      supportFilteredOut: !supportedKeys.has(linkKeyFromDatum(edge))
+    }));
   }
 
   function gatherVisiblePairs(panel, thresholdPercent, nodeByKey, edgeList = null) {
@@ -7059,6 +7307,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       clearAnalysisSelectionsOnly(panel);
       renderAll();
     });
+    renderShapeWeightControls(controls, panel);
 
     const thresholdRange = controls.append("input")
       .attr("type", "range")
@@ -7128,6 +7377,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         clearAnalysisSelectionsOnly(panel);
         scheduleRenderAll();
       });
+      appendUnsupportedLinkTransparencyControl(controls, panel);
     }
 
     if (panel.dataMode === "overlap" && shapeMetricIds.length) {
@@ -7168,6 +7418,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         clearAnalysisSelectionsOnly(panel);
         scheduleRenderAll();
       });
+      appendUnsupportedLinkTransparencyControl(controls, panel);
     }
 
 
@@ -7259,20 +7510,21 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       .join("path")
       .attr("class", "link global-link")
       .classed("analysis-highlight", d => activeLinkHighlights.has(linkKeyFromDatum(d)))
+      .classed("support-filtered-out", d => Boolean(d.supportFilteredOut))
       .classed("domain-support-strong", d => domainSupportClass(d, panel) === "domain-support-strong")
       .classed("domain-support-weak", d => domainSupportClass(d, panel) === "domain-support-weak")
       .classed("domain-support-missing", d => domainSupportClass(d, panel) === "domain-support-missing")
       .attr("d", ribbonPath)
-      .attr("fill", d => linkFillColor(d.opacity, false))
+      .attr("fill", d => linkFillColor(d.opacity, false, supportLinkVisibility(d, panel)))
       .on("mouseenter", function(event, d) {
         d3.select(this).classed("hover", true);
-        d3.select(this).attr("fill", linkFillColor(d.opacity, true));
+        d3.select(this).attr("fill", linkFillColor(d.opacity, true, supportLinkVisibility(d, panel)));
         updateTooltip(linkTooltip(d, panel), event.clientX, event.clientY);
       })
       .on("mousemove", (event, d) => updateTooltip(linkTooltip(d, panel), event.clientX, event.clientY))
       .on("mouseleave", function(event, d) {
         d3.select(this).classed("hover", false);
-        d3.select(this).attr("fill", linkFillColor(d.opacity, false));
+        d3.select(this).attr("fill", linkFillColor(d.opacity, false, supportLinkVisibility(d, panel)));
         hideTooltip();
       })
       .on("click", (event, d) => {
@@ -7314,11 +7566,13 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       .attr("height", d => Math.max(2, d.height))
       .attr("fill", d => nodeColorFill(d));
 
-    node.append("text")
-      .attr("x", d => d.x1 + 5)
-      .attr("y", d => d.y0 + Math.max(2, d.height) / 2)
-      .attr("dominant-baseline", "middle")
-      .text(d => `S${d.sheet_id} R${d.rank}`);
+    if (!hideSheetLabels()) {
+      node.append("text")
+        .attr("x", d => d.x1 + 5)
+        .attr("y", d => d.y0 + Math.max(2, d.height) / 2)
+        .attr("dominant-baseline", "middle")
+        .text(d => `S${d.sheet_id} R${d.rank}`);
+    }
 
     drawQueuedAnalysisFocusPulse(panel, layout, root, layoutBounds);
 
@@ -7389,6 +7643,10 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     });
   }
 
+  function hideSheetLabels() {
+    return Boolean(state.layoutControls.hideSheetLabels) || state.layoutControls.showSheetLabels === false;
+  }
+
   function bindLayoutControls() {
     const orderingNode = document.getElementById("orderingMode");
     const nodeSizeNode = document.getElementById("nodeSizeMode");
@@ -7399,6 +7657,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
     const darknessValueNode = document.getElementById("linkDarknessValue");
     const hideIsolatedNode = document.getElementById("hideIsolated");
     const strongestOutgoingNode = document.getElementById("strongestOutgoingOnly");
+    const hideSheetLabelsNode = document.getElementById("hideSheetLabels");
 
     if (orderingNode) {
       orderingNode.value = state.layoutControls.orderingMode;
@@ -7496,6 +7755,15 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
         scheduleRenderAll();
       });
     }
+
+    if (hideSheetLabelsNode) {
+      hideSheetLabelsNode.checked = hideSheetLabels();
+      hideSheetLabelsNode.addEventListener("change", event => {
+        state.layoutControls.hideSheetLabels = Boolean(event.target.checked);
+        delete state.layoutControls.showSheetLabels;
+        scheduleRenderAll();
+      });
+    }
   }
 
   function addPanel() {
@@ -7509,6 +7777,11 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       rangeSupportMetricId: normalizeRangeSupportMetricId(activePanel?.rangeSupportMetricId),
       domainSupportFilterMode: normalizeSupportFilterMode(activePanel?.domainSupportFilterMode),
       rangeSupportFilterMode: normalizeSupportFilterMode(activePanel?.rangeSupportFilterMode),
+      unsupportedLinkTransparency: clamp(
+        Number(activePanel?.unsupportedLinkTransparency ?? UNSUPPORTED_LINK_DEFAULT_TRANSPARENCY),
+        0,
+        100
+      ),
       shapeWeights: cloneDefaultShapeWeights(),
       analysis: activePanel?.analysis ? { ...activePanel.analysis, selectedIntervalKeys: [], selectedTrackKeys: [], selectedDisagreementKeys: [], selectedDomainStabilityKeys: [], trackChooserGroupKey: "", highlight: null } : null,
       panelHeight: clampPanelHeight(activePanel?.panelHeight ?? PANEL_HEIGHT_DEFAULT)
@@ -7589,6 +7862,8 @@ def build_unified_sankey_viewer_stage(*, rebuild_data: bool = False) -> None:
     if rebuild_data or not TRACKING_DATA_FILE.exists():
         build_unified_sankey_data_stage()
 
+    ensure_paper_export_dirs()
+
     if UNIFIED_VIEWER_DIR.exists():
         shutil.rmtree(UNIFIED_VIEWER_DIR)
     UNIFIED_VIEWER_DIR.mkdir(parents=True, exist_ok=True)
@@ -7606,6 +7881,9 @@ def build_unified_sankey_viewer_stage(*, rebuild_data: bool = False) -> None:
     print(f"Wrote unified sankey viewer: {UNIFIED_VIEWER_DIR}")
     for artifact in (data_path, index_path, js_path, css_path, common_js_path):
       print(f"  {artifact.name}")
+    print("Paper export folders:")
+    print(f"  presets: {FIGURE_PRESET_DIR}")
+    print(f"  images:  {FIGURE_IMAGE_DIR}")
     print("\nOpen with:")
     print(f"  cd {UNIFIED_VIEWER_DIR}")
     print("  python3 -m http.server 8000")

@@ -33,6 +33,7 @@ from common import (
 SHAPE_METRICS = (
     "combined",
     "shape_iou",
+    "geometry_iou",
     "area_ratio",
     "bbox_iou",
     "centroid_similarity",
@@ -164,6 +165,7 @@ def get_shape_metrics(match: dict) -> dict[str, float]:
     return {
         "combined": safe_float(metrics.get("combined", metrics.get("final_score"))),
         "shape_iou": safe_float(metrics.get("shape_iou")),
+        "geometry_iou": safe_float(metrics.get("geometry_iou")),
         "area_ratio": safe_float(metrics.get("area_ratio")),
         "bbox_iou": safe_float(metrics.get("bbox_iou")),
         "centroid_similarity": safe_float(metrics.get("centroid_similarity")),
