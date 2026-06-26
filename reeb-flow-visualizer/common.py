@@ -11,33 +11,45 @@ DATASET_CONFIGS = {
         "f_isovalue": 0.05,
         "g_isovalue": 0.05,
         "fiber_surface_mode": "fixed",
+        "timestep_label_to_fs_divisor": 41.341374575751,
     },
     "mvk": {
         "state_file": "sampleFSImage_MVK.pvsm",
         "f_isovalue": 0.07,
         "g_isovalue": 0.07,
         "fiber_surface_mode": "fixed",
+        "timestep_label_to_fs_divisor": 41.341374575751,
     },
     "torus": {
         "state_file": "sampleFSImage_torus.pvsm",
         "f_isovalue": 0.0,
         "g_isovalue": -10.0,
         "fiber_surface_mode": "adaptive_f_range_change",
+        "timestep_label_to_fs_divisor": 1.0,
     },
 }
 
-last_dir = BASE_DIR.name.lower()
 
-if "stilbene" in last_dir:
-    dataset_key = "stilbene"
-elif "mvk" in last_dir:
-    dataset_key = "mvk"
-elif "torus" in last_dir:
-    dataset_key = "torus"
-else:
-    raise ValueError(f"Unknown dataset type from BASE_DIR last directory: {BASE_DIR.name}")
+def dataset_key_for_base_dir(base_dir: Path) -> str:
+    last_dir = base_dir.name.lower()
+    if "stilbene" in last_dir:
+        return "stilbene"
+    if "mvk" in last_dir:
+        return "mvk"
+    if "torus" in last_dir:
+        return "torus"
+    raise ValueError(f"Unknown dataset type from BASE_DIR last directory: {base_dir.name}")
 
-config = DATASET_CONFIGS[dataset_key]
+
+def dataset_config_for_base_dir(base_dir: Path) -> dict:
+    return DATASET_CONFIGS[dataset_key_for_base_dir(base_dir)]
+
+
+dataset_key = dataset_key_for_base_dir(BASE_DIR)
+config = dataset_config_for_base_dir(BASE_DIR)
+TIMESTEP_LABEL_TO_FS_DIVISOR = float(config.get("timestep_label_to_fs_divisor", 41.341374575751))
+TIMESTEP_TIME_UNIT = "fs"
+TIMESTEP_TIME_DIGITS = 2
 
 # Fiber-surface extraction for top Reeb sheets. For each timestep, the stage
 # writes surfaces for +f, -f, +g, and -g at these absolute isovalues.

@@ -532,11 +532,13 @@ window.ReebViewerCommon.formatTimestepPrimary = function(index, label) {
 window.ReebViewerCommon.appendTimestepLabel = function(textSelection, data, opts) {
   const indexAccessor = typeof opts?.indexAccessor === 'function' ? opts.indexAccessor : d => d.index;
   const labelAccessor = typeof opts?.labelAccessor === 'function' ? opts.labelAccessor : d => d.label;
+  const unit = opts?.unit || 'fs';
+  const digits = Number.isFinite(+opts?.digits) ? +opts.digits : 2;
   const index = indexAccessor(data);
   const label = labelAccessor(data);
   const primary = window.ReebViewerCommon.formatTimestepPrimary(index, label);
   const fsRaw = window.ReebViewerCommon.formatFsFromLabel(label, opts);
-  const fsText = fsRaw ? `${Number(fsRaw).toFixed(2)} fs` : '';
+  const fsText = fsRaw ? `${Number(fsRaw).toFixed(digits)} ${unit}` : '';
 
   textSelection.append("tspan")
     .attr("dy", "-0.55em")

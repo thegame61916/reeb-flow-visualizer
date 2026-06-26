@@ -34,9 +34,13 @@ from common import (
     TRACKING_ANALYSIS_TOP_INTERVALS,
     TRACKING_ANALYSIS_VIEWER_FILE,
     TRACKING_DATA_FILE,
+    TIMESTEP_LABEL_TO_FS_DIVISOR,
+    TIMESTEP_TIME_DIGITS,
+    TIMESTEP_TIME_UNIT,
     UNSUPPORTED_LINK_DEFAULT_TRANSPARENCY,
     tracking_analysis_event_score_formula_text,
     VIEWER_DEFAULT_TOP_SHEETS,
+    dataset_config_for_base_dir,
 )
 from unified_sankey_viewer.viewer_common import (
     shared_viewer_css,
@@ -636,6 +640,9 @@ def prepare_data(viewer_dir: Path) -> dict:
             "tracking_analysis_top_disagreements": TRACKING_ANALYSIS_TOP_DISAGREEMENTS,
             "tracking_analysis_split_merge_weight": TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT,
             "tracking_analysis_event_score_terms": list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS),
+            "timestep_label_to_fs_divisor": TIMESTEP_LABEL_TO_FS_DIVISOR,
+            "timestep_time_unit": TIMESTEP_TIME_UNIT,
+            "timestep_time_digits": TIMESTEP_TIME_DIGITS,
             "analysis_plot_default_color": ANALYSIS_PLOT_DEFAULT_COLOR,
             "analysis_plot_selected_color": ANALYSIS_PLOT_SELECTED_COLOR,
             "analysis_plot_selected_stroke_color": ANALYSIS_PLOT_SELECTED_STROKE_COLOR,
@@ -751,8 +758,15 @@ def configure_dataset_paths(base_dir: Path) -> None:
     global PAPER_EXPORT_DIR
     global FIGURE_PRESET_DIR
     global FIGURE_IMAGE_DIR
+    global TIMESTEP_LABEL_TO_FS_DIVISOR
+    global TIMESTEP_TIME_UNIT
+    global TIMESTEP_TIME_DIGITS
 
     BASE_DIR = base_dir
+    dataset_config = dataset_config_for_base_dir(BASE_DIR)
+    TIMESTEP_LABEL_TO_FS_DIVISOR = float(dataset_config.get("timestep_label_to_fs_divisor", 41.341374575751))
+    TIMESTEP_TIME_UNIT = str(dataset_config.get("timestep_time_unit", "fs"))
+    TIMESTEP_TIME_DIGITS = int(dataset_config.get("timestep_time_digits", 2))
     OUTPUT_DIR = BASE_DIR / "sankey"
     STORAGE_ROOT = BASE_DIR / "compareSheetShapesCache"
     TIMESTEP_CACHE_DIR = STORAGE_ROOT / "cache" / "timesteps"
@@ -811,6 +825,9 @@ def apply_current_tracking_analysis_meta(data: dict) -> dict:
     meta["tracking_analysis_split_merge_weight"] = TRACKING_ANALYSIS_SPLIT_MERGE_WEIGHT
     meta["tracking_analysis_event_score_terms"] = list(TRACKING_ANALYSIS_EVENT_SCORE_TERMS)
     meta["tracking_analysis_event_score_formula"] = tracking_analysis_event_score_formula_text()
+    meta["timestep_label_to_fs_divisor"] = TIMESTEP_LABEL_TO_FS_DIVISOR
+    meta["timestep_time_unit"] = TIMESTEP_TIME_UNIT
+    meta["timestep_time_digits"] = TIMESTEP_TIME_DIGITS
     meta["analysis_plot_default_color"] = ANALYSIS_PLOT_DEFAULT_COLOR
     meta["analysis_plot_selected_color"] = ANALYSIS_PLOT_SELECTED_COLOR
     meta["analysis_plot_selected_stroke_color"] = ANALYSIS_PLOT_SELECTED_STROKE_COLOR
@@ -2058,7 +2075,13 @@ d3.json("data.json").then(data => {
   const INTERVAL_GRAPH_HEIGHT_MAX = 680;
   const IMAGE_ZOOM_MIN = 0.03;
   const IMAGE_ZOOM_MAX = 20;
-  const TIMESTEP_LABEL_OPTIONS = { divisor: 41.341374575751, digits: 2 };
+  const timestepTimeDivisor = Number(data.meta?.timestep_label_to_fs_divisor);
+  const timestepTimeDigits = Number(data.meta?.timestep_time_digits);
+  const TIMESTEP_LABEL_OPTIONS = {
+    divisor: Number.isFinite(timestepTimeDivisor) && timestepTimeDivisor > 0 ? timestepTimeDivisor : 41.341374575751,
+    digits: Number.isFinite(timestepTimeDigits) ? timestepTimeDigits : 2,
+    unit: data.meta?.timestep_time_unit || "fs",
+  };
   const AGREEMENT_SERIES_COLORS = ["#1f6feb", "#dc2626", "#16a34a", "#f59e0b", "#7c3aed", "#0891b2", "#db2777", "#4b5563"];
   const ANALYSIS_DOT_RADIUS = 5.6;
   const ANALYSIS_DOT_SELECTED_RADIUS = 7.0;
@@ -3723,6 +3746,8 @@ d3.json("data.json").then(data => {
         top_event_pair_label: topEvent.pair_label || "",
         top_event_source_timestep_index: Number(topEvent.source_timestep_index),
         top_event_target_timestep_index: Number(topEvent.target_timestep_index),
+        top_event_source_label: topEvent.source_label || "",
+        top_event_target_label: topEvent.target_label || "",
         track_count: tracks.length,
         max_lifetime: lengths.length ? Math.max(...lengths) : 0,
         median_lifetime: quantileNumber(lengths, 0.5),
@@ -3731,6 +3756,18 @@ d3.json("data.json").then(data => {
     });
     analysisRuntimeCache.set(cacheKey, rows);
     return rows;
+  }
+
+  function sensitivityTopIntervalTimeLabel(row) {
+    const sourceIndex = Number(row?.top_event_source_timestep_index);
+    const targetIndex = Number(row?.top_event_target_timestep_index);
+    if (!Number.isFinite(sourceIndex) || !Number.isFinite(targetIndex)) return "-";
+    return formatIntervalFsRange({
+      source_timestep_index: sourceIndex,
+      target_timestep_index: targetIndex,
+      source_label: row?.top_event_source_label || timestepLookup.labelAt(sourceIndex, String(sourceIndex)),
+      target_label: row?.top_event_target_label || timestepLookup.labelAt(targetIndex, String(targetIndex)),
+    }) || "-";
   }
 
   function intervalKeyFromItem(item) {
@@ -3863,16 +3900,28 @@ d3.json("data.json").then(data => {
     return window.ReebViewerCommon.formatTimestepPrimary(index, intervalTimestepLabel(item, role));
   }
 
-  function intervalTimeFs(item) {
-    const fsRaw = window.ReebViewerCommon.formatFsFromLabel(intervalTimestepLabel(item, "source"), TIMESTEP_LABEL_OPTIONS);
+  function intervalRoleTimeFs(item, role = "source") {
+    const index = Number(role === "target" ? item?.target_timestep_index : item?.source_timestep_index);
+    const fsRaw = window.ReebViewerCommon.formatFsFromLabel(intervalTimestepLabel(item, role), TIMESTEP_LABEL_OPTIONS);
     const fs = Number(fsRaw);
     if (Number.isFinite(fs)) return fs;
-    return Number(item?.source_timestep_index) || 0;
+    return Number.isFinite(index) ? index : 0;
+  }
+
+  function intervalTimeFs(item) {
+    return intervalRoleTimeFs(item, "source");
   }
 
   function formatIntervalFs(value) {
     const numeric = Number(value);
-    return Number.isFinite(numeric) ? `${numeric.toFixed(TIMESTEP_LABEL_OPTIONS.digits)} fs` : "";
+    return Number.isFinite(numeric) ? `${numeric.toFixed(TIMESTEP_LABEL_OPTIONS.digits)} ${TIMESTEP_LABEL_OPTIONS.unit}` : "";
+  }
+
+  function formatIntervalFsRange(item) {
+    const sourceTime = formatIntervalFs(intervalRoleTimeFs(item, "source"));
+    const targetTime = formatIntervalFs(intervalRoleTimeFs(item, "target"));
+    if (!sourceTime && !targetTime) return "";
+    return `${sourceTime || "-"} -> ${targetTime || "-"}`;
   }
 
   function intervalGraphTooltip(item, panel) {
@@ -5446,14 +5495,14 @@ d3.json("data.json").then(data => {
         .text(`Sensitivity for ${modeLabel(panel.dataMode)} / ${metricLabel(panel.dataMode, panel.metricId)}`);
       const table = content.append("table").attr("class", "analysis-table");
       const header = table.append("thead").append("tr");
-      ["Theta", "Mean event", "Max event", "Top interval", "Max life", "Median life", ""].forEach(label => header.append("th").text(label));
+      ["Theta", "Mean event", "Max event", "Top interval time", "Max life", "Median life", ""].forEach(label => header.append("th").text(label));
       const body = table.append("tbody");
       sensitivityRows.forEach(row => {
         const tr = body.append("tr");
         tr.append("td").text(formatScore(row.threshold));
         tr.append("td").text(formatScore(row.mean_event_score));
         tr.append("td").text(formatScore(row.max_event_score));
-        tr.append("td").text(row.top_event_pair_label || "-");
+        tr.append("td").text(sensitivityTopIntervalTimeLabel(row));
         tr.append("td").text(row.max_lifetime ?? 0);
         tr.append("td").text(formatScore(row.median_lifetime));
         tr.append("td").append("button").attr("type", "button").text("Use")
