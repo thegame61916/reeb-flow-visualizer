@@ -355,9 +355,10 @@ def inject_dataset_selector(dataset_dir: Path, manifest: list[dict[str, Any]], c
     script = public_dataset_selector_script(manifest, current_id)
 
     html = html.replace("<body>", '<body class="public-page">', 1)
+    html = html.replace("<header>", '<header class="public-header">', 1)
     html = re.sub(
-        r"<header>\s*<div class=\"title-block\">.*?</div>",
-        f"<header class=\"public-header\">\n      {selector}",
+        r"(<div class=\"title-block\">.*?</div>)",
+        f"\\1\n      {selector}",
         html,
         count=1,
         flags=re.S,
@@ -369,15 +370,19 @@ def inject_dataset_selector(dataset_dir: Path, manifest: list[dict[str, Any]], c
 
 /* Public GitHub Pages dataset selector. */
 body.public-page header.public-header {
-  height: 44px;
+  height: 72px;
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(340px, 1fr);
   align-items: center;
   gap: 12px;
-  padding: 6px 12px;
+  padding: 12px 18px;
 }
 body.public-page main {
-  height: calc(100vh - 44px);
+  height: calc(100vh - 72px);
+}
+body.public-page .title-block {
+  grid-column: 1;
+  min-width: 0;
 }
 body.public-page .dataset-switcher {
   grid-column: 2;
@@ -398,11 +403,6 @@ body.public-page .dataset-switcher select {
 body.public-page .header-actions {
   grid-column: 3;
   justify-self: end;
-  gap: 6px;
-}
-body.public-page .header-actions button {
-  padding: 5px 8px;
-  font-size: 12px;
 }
 """
     style_path.write_text(style_path.read_text(encoding="utf-8") + public_css, encoding="utf-8")
