@@ -26,7 +26,7 @@ DEFAULT_DATASET_ROOT = Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hp
 DEFAULT_DATASETS = ("torus", "MVK_s1", "MVK_s2")
 TEXT_FILE_SUFFIXES = {".html", ".css", ".js", ".json", ".md", ".txt"}
 LOCAL_PATH_MARKERS = ("/home/mohit", "/Desktop/postdoc", "timeVaryingReebSpace")
-PUBLIC_CSS_VERSION = "pages-selector-v3"
+PUBLIC_CSS_VERSION = "pages-adaptive-v1"
 
 
 @dataclass(frozen=True)

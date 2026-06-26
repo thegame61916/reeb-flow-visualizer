@@ -1783,7 +1783,128 @@ svg.summary-chart {
 .track-feature-chooser .analysis-row {
   width: 100%;
 }
+@media (max-width: 1500px) {
+  main {
+    grid-template-columns: 260px minmax(0, 1fr) 300px;
+  }
+  aside {
+    padding: 10px;
+  }
+  #details h2 {
+    padding: 10px 12px 7px;
+  }
+  #detailsContent {
+    padding: 10px 12px;
+  }
+  #panelList {
+    padding: 10px;
+  }
+  .panel {
+    padding: 8px 8px 10px;
+  }
+  .panel-header {
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .panel-controls {
+    gap: 7px;
+  }
+  .panel-controls input[type="range"] {
+    width: 120px;
+  }
+  .range-control-body {
+    gap: 4px;
+  }
+  .range-control-body input[type="number"] {
+    width: 62px;
+  }
+  .analysis-actions input[type="range"] {
+    width: 96px;
+  }
+  .shape-weight-controls {
+    grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+  }
+}
+@media (max-width: 1400px) {
+  header {
+    padding: 10px 12px;
+  }
+  .title-block p {
+    display: none;
+  }
+  .header-actions {
+    gap: 6px;
+  }
+  .header-actions button {
+    padding: 5px 8px;
+  }
+  main {
+    grid-template-columns: 240px minmax(0, 1fr) 270px;
+  }
+  .panel-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+  .panel-title {
+    justify-content: space-between;
+  }
+  .panel-controls {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: end;
+    width: 100%;
+  }
+  .panel-controls > select,
+  .panel-controls > input,
+  .panel-controls > label {
+    min-width: 0;
+    width: 100%;
+  }
+  .panel-controls select,
+  .panel-controls input[type="number"] {
+    max-width: 100%;
+  }
+  .panel-controls input[type="range"] {
+    width: 100%;
+  }
+  .range-control-body input[type="range"] {
+    min-width: 80px;
+    width: 100%;
+  }
+  .shape-weight-controls {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 1180px) {
+  main {
+    grid-template-columns: 220px minmax(0, 1fr) 250px;
+  }
+  .title-block {
+    max-width: 280px;
+  }
+  .header-actions button {
+    padding: 5px 7px;
+  }
+  .track-feature-layout.has-chooser {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 @media (max-width: 900px) {
+  header {
+    height: auto;
+    min-height: 72px;
+    flex-wrap: wrap;
+  }
+  main {
+    height: auto;
+    min-height: calc(100vh - 72px);
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #controls,
+  #details {
+    max-height: 260px;
+  }
   .track-feature-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1894,7 +2015,15 @@ def write_viewer_js() -> Path:
         """const DATA = null;
 
 d3.json("data.json").then(data => {
-  const PANEL_HEIGHT_DEFAULT = 560;
+  function defaultPanelHeightForViewport() {
+    if (window.innerWidth > 1400) return 560;
+    return Math.max(400, Math.min(560, Math.round(window.innerHeight * 0.58)));
+  }
+  function defaultAnalysisGraphHeightForViewport() {
+    if (window.innerWidth > 1400) return 240;
+    return Math.max(170, Math.min(240, Math.round(window.innerHeight * 0.25)));
+  }
+  const PANEL_HEIGHT_DEFAULT = defaultPanelHeightForViewport();
   const ANALYSIS_PLOT_DEFAULT_COLOR = String(data?.meta?.analysis_plot_default_color || "#6b7280");
   const ANALYSIS_PLOT_SELECTED_COLOR = String(data?.meta?.analysis_plot_selected_color || "#ef4444");
   const ANALYSIS_PLOT_SELECTED_STROKE_COLOR = String(data?.meta?.analysis_plot_selected_stroke_color || "#991b1b");
@@ -2070,7 +2199,7 @@ d3.json("data.json").then(data => {
   const PAN_DRAG_THRESHOLD = 4;
   const PANEL_HEIGHT_MIN = 360;
   const PANEL_HEIGHT_MAX = 1400;
-  const INTERVAL_GRAPH_HEIGHT_DEFAULT = 240;
+  const INTERVAL_GRAPH_HEIGHT_DEFAULT = defaultAnalysisGraphHeightForViewport();
   const INTERVAL_GRAPH_HEIGHT_MIN = 160;
   const INTERVAL_GRAPH_HEIGHT_MAX = 680;
   const IMAGE_ZOOM_MIN = 0.03;
