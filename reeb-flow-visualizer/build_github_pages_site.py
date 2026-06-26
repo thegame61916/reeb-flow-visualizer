@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -237,16 +238,19 @@ def write_dataset_loader_index(output_dir: Path, manifest: list[dict[str, Any]])
       min-height: 100vh;
       display: flex;
       flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
     }}
     header {{
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 6px 14px;
-      border-bottom: 1px solid #dbe3ec;
       background: #ffffff;
+      border: 1px solid #dbe3ec;
+      border-radius: 8px;
       box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
-      z-index: 2;
     }}
     label {{
       display: inline-flex;
@@ -263,11 +267,10 @@ def write_dataset_loader_index(output_dir: Path, manifest: list[dict[str, Any]])
       color: #111827;
       padding: 0 8px;
     }}
-    iframe {{
-      flex: 1;
-      width: 100%;
-      border: 0;
-      background: #fff;
+    p {{
+      margin: 0;
+      font-size: 13px;
+      color: #64748b;
     }}
   </style>
 </head>
@@ -278,11 +281,10 @@ def write_dataset_loader_index(output_dir: Path, manifest: list[dict[str, Any]])
       <select id="datasetSelect"></select>
     </label>
   </header>
-  <iframe id="viewerFrame" title="Reeb Flow Visualizer"></iframe>
+  <p>Opening dataset viewer...</p>
   <script>
     const DATASETS = {manifest_json};
     const select = document.getElementById("datasetSelect");
-    const frame = document.getElementById("viewerFrame");
     const params = new URLSearchParams(window.location.search);
     const requested = params.get("dataset") || "{default_dataset}";
 
@@ -293,25 +295,122 @@ def write_dataset_loader_index(output_dir: Path, manifest: list[dict[str, Any]])
       select.appendChild(option);
     }}
 
-    function setDataset(id, pushState = true) {{
+    function openDataset(id) {{
       const dataset = DATASETS.find(item => item.id === id) || DATASETS[0];
       if (!dataset) return;
       select.value = dataset.id;
-      frame.src = `datasets/${{dataset.id}}/index.html`;
-      if (pushState) {{
-        const next = new URL(window.location.href);
-        next.searchParams.set("dataset", dataset.id);
-        history.replaceState(null, "", next);
-      }}
+      window.location.replace(`datasets/${{dataset.id}}/index.html`);
     }}
 
-    select.addEventListener("change", () => setDataset(select.value));
-    setDataset(requested, false);
+    select.addEventListener("change", () => openDataset(select.value));
+    openDataset(requested);
   </script>
 </body>
 </html>
 """
     (output_dir / "index.html").write_text(html, encoding="utf-8")
+
+
+def public_dataset_selector_markup(manifest: list[dict[str, Any]], current_id: str) -> str:
+    options = "\n".join(
+        f'          <option value="{item["id"]}"{" selected" if item["id"] == current_id else ""}>{item["label"]}</option>'
+        for item in manifest
+    )
+    return f"""<div class="dataset-switcher">
+        <label>
+          Dataset
+          <select id="datasetSelect">
+{options}
+          </select>
+        </label>
+      </div>"""
+
+
+def public_dataset_selector_script(manifest: list[dict[str, Any]], current_id: str) -> str:
+    manifest_json = json.dumps([
+        {"id": item["id"], "label": item["label"]}
+        for item in manifest
+    ], separators=(",", ":"))
+    return f"""  <script>
+    (() => {{
+      const DATASETS = {manifest_json};
+      const CURRENT_DATASET = {json.dumps(current_id)};
+      const select = document.getElementById("datasetSelect");
+      if (!select) return;
+      select.addEventListener("change", () => {{
+        const dataset = DATASETS.find(item => item.id === select.value);
+        if (!dataset || dataset.id === CURRENT_DATASET) return;
+        window.location.href = `../${{dataset.id}}/index.html`;
+      }});
+    }})();
+  </script>
+"""
+
+
+def inject_dataset_selector(dataset_dir: Path, manifest: list[dict[str, Any]], current_id: str) -> None:
+    index_path = dataset_dir / "index.html"
+    style_path = dataset_dir / "style.css"
+    html = index_path.read_text(encoding="utf-8")
+    selector = public_dataset_selector_markup(manifest, current_id)
+    script = public_dataset_selector_script(manifest, current_id)
+
+    html = html.replace("<body>", '<body class="public-page">', 1)
+    html = re.sub(
+        r"<header>\s*<div class=\"title-block\">.*?</div>",
+        f"<header class=\"public-header\">\n      {selector}",
+        html,
+        count=1,
+        flags=re.S,
+    )
+    html = html.replace("</body>", script + "</body>", 1)
+    index_path.write_text(html, encoding="utf-8")
+
+    public_css = """
+
+/* Public GitHub Pages dataset selector. */
+body.public-page header.public-header {
+  height: 44px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+}
+body.public-page main {
+  height: calc(100vh - 44px);
+}
+body.public-page .dataset-switcher {
+  grid-column: 2;
+  justify-self: center;
+}
+body.public-page .dataset-switcher label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  color: #111827;
+}
+body.public-page .dataset-switcher select {
+  height: 30px;
+  min-width: 110px;
+}
+body.public-page .header-actions {
+  grid-column: 3;
+  justify-self: end;
+  gap: 6px;
+}
+body.public-page .header-actions button {
+  padding: 5px 8px;
+  font-size: 12px;
+}
+"""
+    style_path.write_text(style_path.read_text(encoding="utf-8") + public_css, encoding="utf-8")
+
+
+def inject_dataset_selectors(output_dir: Path, manifest: list[dict[str, Any]]) -> None:
+    for item in manifest:
+        inject_dataset_selector(output_dir / "datasets" / item["id"], manifest, item["id"])
 
 
 def copy_dataset_viewer(dataset: DatasetSpec, output_dir: Path) -> dict[str, Any]:
@@ -391,6 +490,7 @@ def build_site(args: argparse.Namespace) -> None:
         print(f"Copying {dataset.dataset_id}...")
         manifest.append(copy_dataset_viewer(dataset, output_dir))
 
+    inject_dataset_selectors(output_dir, manifest)
     write_dataset_loader_index(output_dir, manifest)
     write_readme(output_dir, manifest)
     assert_no_local_paths(output_dir)
