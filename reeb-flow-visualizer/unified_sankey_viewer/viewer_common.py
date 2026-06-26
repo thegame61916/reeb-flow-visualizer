@@ -1058,10 +1058,11 @@ window.ReebViewerCommon.renderRangeBar = function(svg, opts) {
     .attr('width', width)
     .attr('height', height);
 
-  const pointerToIndex = event => {
+  const pointerToTime = event => {
     const [mx] = d3.pointer(event, svg.node());
-    return Math.max(0, Math.min(timestepMax, Math.round(x.invert(mx))));
+    return Math.max(0, Math.min(timestepMax, x.invert(mx)));
   };
+  const pointerToIndex = event => Math.round(pointerToTime(event));
 
   dragSurface.on('pointerdown', event => {
     if (event.button !== 0) return;
@@ -1093,12 +1094,12 @@ window.ReebViewerCommon.renderRangeBar = function(svg, opts) {
 
   ranges.forEach((range, index) => {
     const x0 = x(range.start);
-    const x1 = x(range.end + 1) - 1;
+    const x1 = x(range.end);
     g.append('rect')
       .attr('class', `range-selected${index === selectedRangeIndex ? ' selected' : ''}`)
-      .attr('x', x0)
+      .attr('x', Math.min(x0, x1))
       .attr('y', rangeY)
-      .attr('width', Math.max(2, x1 - x0))
+      .attr('width', Math.max(4, Math.abs(x1 - x0)))
       .attr('height', rangeHeight)
       .on('click', event => {
         event.stopPropagation();
@@ -1140,9 +1141,8 @@ window.ReebViewerCommon.renderRangeBar = function(svg, opts) {
       event.stopPropagation();
       event.preventDefault();
       viewportWindow.node().setPointerCapture(event.pointerId);
-      if (typeof opts.onViewportClick === 'function') {
-        opts.onViewportClick(pointerToIndex(event), event);
-      }
+      const startCenter = (low + high) / 2;
+      const grabOffset = startCenter - pointerToTime(event);
       if (typeof opts.onViewportDragStart === 'function') {
         opts.onViewportDragStart(pointerToIndex(event), event);
       }
@@ -1150,7 +1150,7 @@ window.ReebViewerCommon.renderRangeBar = function(svg, opts) {
       const onMove = moveEvent => {
         if (moveEvent.pointerId !== event.pointerId) return;
         if (typeof opts.onViewportDragMove === 'function') {
-          opts.onViewportDragMove(pointerToIndex(moveEvent), moveEvent);
+          opts.onViewportDragMove(pointerToTime(moveEvent) + grabOffset, moveEvent);
         }
         moveEvent.preventDefault();
       };
