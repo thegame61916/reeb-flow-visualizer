@@ -1573,10 +1573,35 @@ svg.summary-chart {
   justify-content: space-between;
   margin-bottom: 7px;
 }
+.analysis-toolbar .analysis-actions {
+  align-items: flex-end;
+}
 .analysis-actions label {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+}
+.panel-controls label.range-control,
+.analysis-actions label.range-control {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+.range-control-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: #000;
+  white-space: nowrap;
+}
+.range-control-body {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
 }
 .analysis-actions input[type="color"] {
   width: 34px;
@@ -2853,15 +2878,18 @@ d3.json("data.json").then(data => {
   function appendUnsupportedLinkTransparencyControl(controls, panel) {
     ensurePanelSupportFilters(panel);
     const label = controls.append("label")
+      .attr("class", "range-control")
       .attr("title", "Transparency for links rejected by the active support filter");
-    label.append("span").text("Unsupported link transparency ");
-    const slider = label.append("input")
+    const header = label.append("span").attr("class", "range-control-header");
+    header.append("span").text("Unsupported link transparency");
+    const body = label.append("span").attr("class", "range-control-body");
+    const slider = body.append("input")
       .attr("type", "range")
       .attr("min", 0)
       .attr("max", 100)
       .attr("step", 1)
       .property("value", panel.unsupportedLinkTransparency);
-    const valueLabel = label.append("span")
+    const valueLabel = body.append("span")
       .text(`${panel.unsupportedLinkTransparency}%`);
     slider.on("change", event => {
       panel.unsupportedLinkTransparency = clamp(Number(event.target.value) || 0, 0, 100);
@@ -5227,16 +5255,19 @@ d3.json("data.json").then(data => {
         scheduleRenderAll();
       });
 
-    const plotTransparencyLabel = actions.append("label");
-    plotTransparencyLabel.append("span").text("Plot transparency ");
-    const plotTransparency = plotTransparencyLabel.append("input")
+    const plotTransparencyLabel = actions.append("label")
+      .attr("class", "range-control")
+      .attr("title", "Transparency for unselected analysis points and edges");
+    const plotTransparencyHeader = plotTransparencyLabel.append("span").attr("class", "range-control-header");
+    plotTransparencyHeader.append("span").text("Plot transparency");
+    const plotTransparencyBody = plotTransparencyLabel.append("span").attr("class", "range-control-body");
+    const plotTransparency = plotTransparencyBody.append("input")
       .attr("type", "range")
       .attr("min", 0)
       .attr("max", 100)
       .attr("step", 1)
-      .attr("title", "Transparency for unselected analysis points and edges")
       .property("value", panel.analysis.deEmphasisTransparency);
-    const plotTransparencyValue = plotTransparencyLabel.append("span")
+    const plotTransparencyValue = plotTransparencyBody.append("span")
       .text(`${panel.analysis.deEmphasisTransparency}%`);
     plotTransparency.on("change", event => {
       panel.analysis.deEmphasisTransparency = clamp(Number(event.target.value) || 0, 0, 100);
@@ -7307,15 +7338,20 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       clearAnalysisSelectionsOnly(panel);
       renderAll();
     });
-    renderShapeWeightControls(controls, panel);
 
-    const thresholdRange = controls.append("input")
+    const thresholdLabel = controls.append("label")
+      .attr("class", "range-control")
+      .attr("title", "Hide links whose selected metric is below this percentage of the current metric maximum");
+    const thresholdHeader = thresholdLabel.append("span").attr("class", "range-control-header");
+    thresholdHeader.append("span").text("Link threshold");
+    const thresholdBody = thresholdLabel.append("span").attr("class", "range-control-body");
+    const thresholdRange = thresholdBody.append("input")
       .attr("type", "range")
       .attr("min", 0)
       .attr("max", 100)
       .attr("step", 0.5)
       .property("value", panel.threshold);
-    const thresholdBox = controls.append("input")
+    const thresholdBox = thresholdBody.append("input")
       .attr("type", "number")
       .attr("min", 0)
       .attr("max", 100)
@@ -7421,6 +7457,7 @@ L ${x1} ${bottom1} C ${x1 - c} ${bottom1}, ${x0 + c} ${bottom0}, ${x0} ${bottom0
       appendUnsupportedLinkTransparencyControl(controls, panel);
     }
 
+    renderShapeWeightControls(controls, panel);
 
 
     renderAnalysisPanel(container, panel);
