@@ -997,6 +997,9 @@ def write_style_css() -> Path:
     path = UNIFIED_VIEWER_DIR / "style.css"
     path.write_text(
         """* { box-sizing: border-box; }
+html {
+  zoom: 0.8;
+}
 body {
   margin: 0;
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
