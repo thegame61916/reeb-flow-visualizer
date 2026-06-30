@@ -2386,7 +2386,7 @@ d3.json("data.json").then(data => {
     const clickedItem = target.closest(".media-item");
     const mediaKind = target.dataset.mediaKind || clickedItem?.dataset.mediaKind || "";
     if (mediaKind) {
-      const title = mediaKind === "fiber" ? "Fiber surface images" : "Sheet images";
+      const title = mediaKind === "fiber" ? "Spatial context images" : "Sheet images";
       const images = Array.from(row.querySelectorAll(".media-stack")).map((item, index) => {
         const img = item.querySelector(`img.zoomable-image[data-media-kind="${mediaKind}"]`);
         if (!img) return null;
@@ -2402,7 +2402,7 @@ d3.json("data.json").then(data => {
     const mediaIndex = clickedStackImages.indexOf(target);
     if (mediaIndex < 0) return { images: [], title: "" };
 
-    const title = mediaIndex === 0 ? "Sheet images" : "Fiber surface images";
+    const title = mediaIndex === 0 ? "Sheet images" : "Spatial context images";
     const images = Array.from(row.querySelectorAll(".media-stack")).map((item, index) => {
       const img = item.querySelectorAll("img.zoomable-image")[mediaIndex];
       if (!img) return null;
@@ -6007,7 +6007,7 @@ d3.json("data.json").then(data => {
     const classAttr = imageClass ? ` class="${imageClass}"` : "";
     const includeMissingSlots = Boolean(thumbClass);
     const sheetLabel = nodeImageLabel(node, "Sheet image", linkedPair?.role || "");
-    const fiberLabel = nodeImageLabel(node, "Fiber surface", linkedPair?.role || "");
+    const fiberLabel = nodeImageLabel(node, "Spatial context", linkedPair?.role || "");
     const sheetPair = linkedPair ? {
       title: "Sheet images",
       leftSrc: linkedPair.left?.thumbnail || "",
@@ -6016,11 +6016,11 @@ d3.json("data.json").then(data => {
       rightLabel: nodeImageLabel(linkedPair.right, "Sheet image", "Target")
     } : null;
     const fiberPair = linkedPair ? {
-      title: "Fiber surface images",
+      title: "Spatial context images",
       leftSrc: linkedPair.left?.fiber_surface_image || "",
-      leftLabel: nodeImageLabel(linkedPair.left, "Fiber surface", "Source"),
+      leftLabel: nodeImageLabel(linkedPair.left, "Spatial context", "Source"),
       rightSrc: linkedPair.right?.fiber_surface_image || "",
-      rightLabel: nodeImageLabel(linkedPair.right, "Fiber surface", "Target")
+      rightLabel: nodeImageLabel(linkedPair.right, "Spatial context", "Target")
     } : null;
     const sheetImage = node.thumbnail
       ? `<img${classAttr} data-media-kind="sheet"${zoomDataAttributes(node.thumbnail, sheetLabel, sheetPair)} src="${escapeHtml(node.thumbnail)}" alt="${escapeHtml(sheetLabel)}">`
@@ -6030,10 +6030,10 @@ d3.json("data.json").then(data => {
     const fiberImage = node.fiber_surface_image
       ? `<img${classAttr} data-media-kind="fiber"${zoomDataAttributes(node.fiber_surface_image, fiberLabel, fiberPair)} src="${escapeHtml(node.fiber_surface_image)}" alt="${escapeHtml(fiberLabel)}">`
       : includeMissingSlots
-        ? `<div class="media-missing">No fiber surface image</div>`
+        ? `<div class="media-missing">No spatial context image</div>`
         : "";
     const sheetItem = sheetImage ? `<div class="media-item" data-media-kind="sheet"><div class="media-label">Sheet image</div>${sheetImage}</div>` : "";
-    const fiberItem = fiberImage ? `<div class="media-item" data-media-kind="fiber"><div class="media-label">Fiber surface</div>${fiberImage}</div>` : "";
+    const fiberItem = fiberImage ? `<div class="media-item" data-media-kind="fiber"><div class="media-label">Spatial context</div>${fiberImage}</div>` : "";
     if (!sheetItem && !fiberItem) return "";
     return `<div class="media-stack">${sheetItem}${fiberItem}</div>`;
   }

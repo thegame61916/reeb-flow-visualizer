@@ -1,0 +1,408 @@
+% Supplementary material for main_final.tex.
+
+\documentclass[review]{vgtc}
+
+\graphicspath{{figures/}{pictures/}{images/}{./}}
+
+\usepackage{times}
+\renewcommand*\ttdefault{txtt}
+\usepackage{mathptmx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage{enumitem}
+\usepackage{xspace}
+\usepackage{comment}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Domain}{\mathcal{M}}
+\newcommand{\Range}{\mathcal{R}}
+\newcommand{\Sheets}{\mathcal{S}}
+\newcommand{\Sheet}{S}
+\newcommand{\Score}{C}
+\newcommand{\placeholder}[2]{%
+  \begin{center}
+  \fbox{%
+    \begin{minipage}[c][#1][c]{0.92\linewidth}
+      \centering
+      #2
+    \end{minipage}}
+  \end{center}
+}
+\newcommand{\wideplaceholder}[2]{%
+  \begin{center}
+  \fbox{%
+    \begin{minipage}[c][#1][c]{0.96\textwidth}
+      \centering
+      #2
+    \end{minipage}}
+  \end{center}
+}
+\newcommand{\myparagraph}[1]{\vspace{1mm} \noindent \textbf{#1}}
+\newcommand{\ie}{i.e.,\xspace}
+\newcommand{\etal}{et al.\xspace}
+
+\onlineid{1011}
+\vgtccategory{Supplementary Material}
+\vgtcinsertpkg
+
+\title{Supplementary Material: Temporal Tracking of Reeb Space Sheets}
+
+%\author{Mohit Sharma\\ %
+ %       \scriptsize Link\"oping university}
+
+\begin{document}
+
+
+\maketitle
+
+\section{Abstract}
+
+This supplement provides additional material that supports the main paper and helps reviewers explore the accompanying \href{https://reebflowvisualizer.github.io}{online prototype}. The main paper defines the Reeb space sheet tracking framework, the primary range-space correspondence score $q_R$, the temporal graph, the event score summary, and the main results. Here, we focus on auxiliary details that are useful for interpreting the results and understanding the interactive views.
+
+The supplement is organized as follows. First, we define additional correspondence scores used for diagnostic and exploratory analysis, including alternative range-space measures and the optional domain score $q_D$. We then summarize the main interface controls available in the prototype. Next, we discuss domain-active tracking, which uses domain support as the active correspondence criterion and provides a complementary view of how spatial support is redistributed among sheets over time. Finally, we report sensitivity summaries and interaction performance.
+
+\section{Auxiliary Correspondence Scores}
+The visual interface provides additional scores for diagnostic and exploratory analysis. These scores are not used as the primary correspondence score in the main results, but they help inspect how alternative range-space or domain criteria affect the temporal graph.
+
+
+\subsection{Additional range-space scores}
+
+In addition to $q_R$, we compute several auxiliary range-space measures that emphasize specific geometric properties of sheet footprints. Let $A_\Sheet$ and $A_{\Sheet'}$ denote the range-space areas of two sheets. The area-ratio score is
+$$
+d_\mathrm{area}(\Sheet,\Sheet') =
+\frac{\min(A_\Sheet,A_{\Sheet'})}
+{\max(A_\Sheet,A_{\Sheet'})}
+$$
+This score is high when two sheets have comparable area, but it does not measure where the sheets are located in range space.
+
+Let $B_\Sheet$ and $B_{\Sheet'}$ denote the axis-aligned bounding boxes of the two sheet footprints. The bounding box overlap score is
+$$
+d_\mathrm{bbox}(\Sheet,\Sheet') =
+\frac{|B_\Sheet \cap B_{\Sheet'}|}
+{|B_\Sheet \cup B_{\Sheet'}|}
+$$
+This measure provides a coarse indication of positional and scale agreement in range space.
+
+Finally, let $c_\Sheet$ and $c_{\Sheet'}$ denote the centroids of the two sheet footprints, and let $D$ be the diagonal length of the common range-space bounds. We define a score based on centroid proximity as
+$$
+d_\mathrm{centroid}(\Sheet,\Sheet') =
+\exp\left(
+-\frac{|c_\Sheet-c_{\Sheet'}|}{D}
+\right)
+$$
+This score decreases as the centroid distance increases. It is useful as a weak positional cue, but it is not sufficiently descriptive on its own because sheets with different shapes can have nearby centroids.
+
+These auxiliary measures are useful for diagnostics because they isolate different aspects of range-space similarity: area consistency, coarse extent overlap, and centroid proximity.
+
+\begin{figure*}[t]
+\includegraphics[width=\textwidth]{figures/Interface_prototype.pdf}
+\caption{
+Prototype interface. The left control panel provides timestep range controls, top sheet selection, sampling, ordering, coloring, link appearance, and support filters. The central panel shows the selected temporal graph view, where sheets are represented as nodes and correspondences are represented as links. The right detail panel displays information and linked visual evidence for the selected sheet or correspondence, including sheet footprints, sheet-restricted isosurface renderings, and analysis summaries when available.
+}
+\label{fig:interface_prototype}
+\end{figure*}
+
+
+
+\subsection{Domain score}
+Let $\Omega_\Sheet$ and $\Omega_{\Sheet'}$ denote the domain supports of two sheets. In the discrete implementation, these supports are represented by the associated regular domain vertices. The raw domain overlap is
+$$
+O(\Sheet,\Sheet') =
+|\Omega_\Sheet \cap \Omega_{\Sheet'}|
+$$
+
+
+For optional domain-active exploration, the interface uses directional normalized overlap scores. These scores account for asymmetric continuity, where a small support may be largely retained inside a larger target support, or a larger support may shrink to a smaller target support. We define
+$$
+d_\mathrm{src}(\Sheet,\Sheet') =
+\begin{cases}
+\dfrac{O(\Sheet,\Sheet')}{|\Omega_\Sheet|}, & |\Omega_\Sheet|>0,\\
+0, & |\Omega_\Sheet|=0
+\end{cases}
+$$
+and
+$$
+d_\mathrm{tgt}(\Sheet,\Sheet') =
+\begin{cases}
+\dfrac{O(\Sheet,\Sheet')}{|\Omega_{\Sheet'}|}, & |\Omega_{\Sheet'}|>0,\\
+0, & |\Omega_{\Sheet'}|=0
+\end{cases}
+$$
+The score $d_\mathrm{src}$ measures the fraction of the source support retained in the target sheet, while $d_\mathrm{tgt}$ measures the fraction of the target support inherited from the source sheet.
+
+The domain-active score used in the interface is
+$$
+q_D(\Sheet,\Sheet') =
+\max\left(
+d_\mathrm{src}(\Sheet,\Sheet'),
+d_\mathrm{tgt}(\Sheet,\Sheet')
+\right)
+$$
+Thus, a correspondence is considered strong when either a large part of the source support continues into the target sheet, or a large part of the target support is explained by the source sheet. This makes $q_D$ useful for exploring retention, inheritance, growth, shrinkage, absorption, and redistribution of domain support.
+
+Raw shared vertex overlap is not used as the primary domain score because it measures absolute support rather than relative continuity. A small sheet may persist almost completely while sharing only a small number of vertices, while large sheets can dominate an absolute overlap score simply because they contain many vertices. The score $q_D$ is better suited for exploratory domain tracking because it measures relative overlap from both directions, including source retention and target inheritance.
+
+The interface also exposes $O$, $d_\mathrm{src}$, and $d_\mathrm{tgt}$ for visual inspection and for controlling visual encodings such as link thickness and opacity. The score $q_D$ is used only for optional domain-active analysis in the supplement and the prototype. It should not be confused with the raw overlap $O$, which is used in the main paper as auxiliary support for filtering and inspecting range-space correspondences.
+
+
+\begin{figure*}[!tbp]
+\includegraphics[width=\textwidth]{figures/torus/torus_domain_overlap.pdf}
+\caption{
+Bivariate torus: Domain-active temporal graph. Link thickness and opacity encode shared domain support.
+}
+\label{fig:torus-domain-overlap}
+\end{figure*}
+
+\begin{figure}[t]
+\includegraphics[width=\columnwidth]{figures/torus/torus_domain_analysis.pdf}
+\caption{
+Bivariate torus: event score plot computed using the domain score $q_D$. The plot highlights intervals where sheet continuations are weak or ambiguous in the domain. This behavior can differ from the range-space score $q_R$, since two sheets may have similar footprints in range space while sharing little domain support.
+}
+\label{fig:torus-domain-analysis}
+\end{figure}
+
+\begin{figure*}[t]
+\includegraphics[width=\textwidth]{figures/torus/torus_domain_overlap_simplified.pdf}
+\caption{
+Bivariate torus: Simplified domain-active graph after filtering by range support. The highlighted feature remains stable after filtering, indicating agreement between domain support and range-space similarity.
+}
+\label{fig:torus-domain-overlap-simplified}
+\end{figure*}
+
+
+
+
+\section{Prototype and Interface Controls}
+
+The \href{https://reebflowvisualizer.github.io}{online prototype} provides interactive access to the precomputed temporal graphs, sheet renderings, spatial context images, event score plots, and continuing feature summaries. It is intended to help reviewers explore the behavior shown in the paper and supplement. The prototype currently includes the torus dataset and two MVK electronic states, which can be selected from the dataset dropdown as \emph{torus}, \emph{MVK s1}, and \emph{MVK s2}. The \textit{cis}-stilbene dataset is not included in the online prototype because of its large size. However, the corresponding results and selected time intervals are reported in the paper and supplement.
+
+The prototype does not recompute Reeb spaces, sheet correspondences, or spatial context surfaces in the browser. Instead, it loads precomputed JSON and image artifacts and updates the visible layout, filtering, highlighting, and linked detail views interactively.
+
+The interface contains three main parts, as shown in \autoref{fig:interface_prototype}: a control panel, one or more temporal graph panels, and a detail panel. The control panel manages the visible timestep range, top sheet count, timestep sampling, node ordering, node coloring, link appearance, support filters, label visibility, and figure presets. The central view displays the selected temporal graph panels, while the detail panel shows metadata and visual evidence for the currently selected sheet or correspondence.
+
+\myparagraph{Timestep range and sampling.}
+The range controls allow the user to focus on selected intervals of a sequence. This is useful for long datasets such as \textit{cis}-stilbene, where displaying all $704$ timesteps at once can be visually dense. The user can restrict the visible timestep window without changing the underlying precomputed data. The timestep sampling control selects the stride $s$ for visible links: a link connects timestep $i$ to timestep $i+s$ when that stride is available in the precomputed data. Thus, range selection and sampling change only the displayed graph and do not recompute correspondences.
+
+\myparagraph{Temporal graph panels and active scores.}
+Each temporal graph panel has its own active score, threshold, support filter settings, and analysis state. Multiple panels can be shown together, making it possible to compare range-active and domain-active behavior over the same timestep window. In the range-active setting, the primary score is the range-space score $q_R$ used in the main paper. The prototype also exposes auxiliary range-space measures such as area ratio, bounding box overlap, and centroid proximity for diagnostic inspection. In the domain-active setting, the active score is the domain score $q_D$, with additional access to raw domain overlap $O$ and the directional quantities $d_\mathrm{src}$ and $d_\mathrm{tgt}$. The top sheet control determines how many sheets ranked by area are shown at each timestep.
+
+\myparagraph{Node height and link appearance.}
+Node height gives a relative visual cue for the domain support of a sheet, measured by the number of associated regular domain vertices. Since all visible sheets must remain selectable, node heights are rescaled within the current view and given a minimum size. They should therefore not be interpreted as exact quantitative bars.
+
+The active score is used for thresholding links and for continuing feature analysis. Before thresholding, it is normalized by its maximum value in the dataset:
+$$
+\widehat{q}(\Sheet,\Sheet') =
+\frac{q(\Sheet,\Sheet')}
+{\max_{\Sheet_a,\Sheet_b} q(\Sheet_a,\Sheet_b)}.
+$$
+Thus, the same threshold control filters range-space similarity in range-active views and domain continuity in domain-active views.
+
+Link thickness and opacity are only visual encodings. They usually show the active score, but in domain-active views they may instead show raw shared domain support $O$ to indicate how many vertices two sheets share. This choice affects only the appearance of links and does not change event scores or continuing feature analysis.
+
+
+
+
+\myparagraph{Support filters.}
+The prototype provides support filters that use the complementary evidence type without changing the active score. In a range-active panel, domain support can be used to suppress range-space links that share little domain support. In a domain-active panel, range support can be used to suppress domain-active links whose sheet footprints have little range-space overlap. The support filter can retain the strongest supported outgoing links, incoming links, or both. These filters are only visualization aids and do not impose a global one-to-one assignment.
+
+Unsupported links can either remain visible with reduced opacity or be removed from the graph. The unsupported link transparency control determines this behavior. When unsupported links are faded, they remain part of the displayed context. When they are removed, the visible graph becomes simpler and the node ordering is computed from the remaining links.
+
+\myparagraph{Sheet ordering, and coloring.}
+Sheets can be ordered by weighted crossing reduction, sheet area, or domain vertex count. Weighted crossing reduction uses the currently visible links and their weights to reduce crossings while preserving the left-to-right timestep structure. Nodes can be colored uniformly, by sheet area, by domain vertex count, or by sheet centroid. Centroid coloring uses common range-space bounds so that colors are comparable across timesteps.
+
+\myparagraph{Linked detail views.}
+Selecting a node opens a linked detail view containing sheet metadata, the rendered sheet footprint, available spatial context images, best incoming and outgoing continuations, and the longest continuing feature passing through the selected sheet under the current score and filtering settings. Selecting a link opens a side-by-side comparison of the source and target sheets, reports the active score value, and lists the available range-space and domain support measures. Image views support linked pan and zoom, allowing corresponding sheet or sheet-restricted isosurface renderings to be compared at the same scale.
+
+\myparagraph{Analysis views.}
+Each graph panel includes analysis views for event scores, continuing features, and sensitivity summaries. The event score view ranks timestep intervals using the active score and the selected threshold $\theta$. The continuing feature view follows long tracks above $\theta$. The sensitivity view summarizes how event rankings and feature lifetimes change over the tested threshold values. These analysis views are linked to the temporal graph, so selected intervals, sheets, and correspondences are highlighted directly in the graph.
+
+
+
+\begin{figure*}[t]
+\includegraphics[width=\textwidth]{figures/stilbene/stilbene_domain_tg.pdf}
+\caption{
+\textit{cis}-stilbene dataset: Domain-active temporal graph for selected timesteps, using $q_D$ as the active score and range-support filtering to suppress links with insufficient range-space overlap. A sheet near the bridge carbon atoms is selected at $0$~fs to inspect how its domain support evolves. The selected continuation starts with limited support, gains a larger number of associated vertices after approximately $98$~fs, and then gradually weakens until no strong continuation is found after $155.78$~fs. The corresponding sheet and spatial views are shown in \autoref{fig:stilbene-sheet_feature_pairs}.
+}
+\label{fig:stilbene-domain-tg}
+\end{figure*}
+
+\begin{figure*}[t]
+\includegraphics[width=\textwidth]{figures/stilbene/stilbene_sheet_feature_pairs.pdf}
+\caption{
+\textit{cis}-stilbene dataset: Sheet footprints and corresponding spatial support for selected timesteps along the domain supported continuing feature from \autoref{fig:stilbene-domain-tg}. The selected feature starts near the bridge carbon atoms connecting the two rings and changes little up to $2.42$~fs. By $98.69$~fs, the sheet footprint becomes more elongated in range space, and the associated spatial support begins to shift. From this point onward, the feature gains domain support, reaching about $24$K associated vertices, before decreasing again after $108.37$~fs. By $156.26$~fs, the associated spatial support is far from the initial bridge carbon region. This drift illustrates that a domain supported continuation can move across spatial regions when overlapping domain support is transferred through different sheets over time.
+}
+\label{fig:stilbene-sheet_feature_pairs}
+\end{figure*}
+
+\section{Domain-Active Tracking}
+
+The following examples use $q_D$ as the active correspondence score. This gives a complementary diagnostic view of how domain support is transferred across timesteps. Instead of asking whether two sheets have similar range-space footprints, domain-active tracking asks whether they are supported by overlapping regions of the domain.
+
+\emph{Parameter selection.} For domain-active exploration, the interface provides percentile thresholds for $q_D$, including Q25, Q50, Q75, and Q90. These thresholds are computed from the best domain continuations in the dataset and are useful because fixed numeric thresholds can be sensitive to mesh sampling, support size, and containment behavior.
+
+This view should be interpreted cautiously. The strongest domain-active continuation may follow the transfer of shared vertices rather than the visually most similar range-space sheet. Domain-active graphs can therefore appear more diffuse than range-active graphs, especially when the support of one sheet splits across several sheets or when several spatial regions contribute to a later sheet. We interpret these graphs as diagnostic views of domain support transfer, not as the primary correspondence view used in the main paper.
+
+In the examples below, link thickness and opacity show shared domain support. Filtering by range support can suppress domain-active links whose sheet footprints have weak overlap in range space. This helps identify correspondences supported by both domain continuity and range-space similarity.
+
+
+\subsection{Bivariate torus}
+
+We first use the bivariate torus dataset to illustrate this behavior in a controlled setting. As shown in \autoref{fig:torus-domain-overlap}, the domain-active graph preserves the expected temporal symmetry of the torus deformation. However, many links are faint because the associated domain vertices are distributed across multiple sheets. This differs from the range-active graph, where sheet footprint overlap in range space provides the primary evidence for correspondence.
+
+The corresponding event score plot in \autoref{fig:torus-domain-analysis} highlights intervals where continuations are weak or ambiguous in the domain. These intervals need not match the range-space event scores exactly, because the two scores measure different aspects of sheet evolution.
+
+\autoref{fig:torus-domain-overlap-simplified} shows the bivariate torus after applying filtering by range support. The major continuing feature remains visible after filtering, indicating agreement between domain support and range-space similarity.
+
+
+
+\subsection{\textit{cis}-stilbene}
+
+The \textit{cis}-stilbene dataset provides a longer and more complex example of domain-active tracking. In \autoref{fig:stilbene-domain-tg}, we select the sheet with the largest area at $0$~fs and follow its strongest continuation supported by domain overlap. Since the full sequence contains $704$ timesteps, only selected timesteps are shown.
+
+The selected continuation initially has limited domain support. After approximately $98$~fs, the links become thicker, indicating that more domain vertices are shared with the continuing sheet. The support then gradually weakens, and no strong continuation is found after approximately $155.78$~fs.
+
+The linked sheet and spatial views in \autoref{fig:stilbene-sheet_feature_pairs} show that the range-space footprint and the associated spatial support do not always evolve coherently. The selected sheet starts near the bridge carbon atoms, but at later timesteps the associated spatial support drifts away from this initial region. This can occur when domain overlap transfers support through a sequence of different sheets: the continuation follows shared vertices even as the corresponding spatial region changes. The example shows that domain-active tracking can reveal redistribution of spatial support, although chemical interpretation of such tracks requires further analysis.
+
+
+
+
+
+
+
+
+
+\section{Range-Sensitivity Summary}
+\label{sec:supp-range-sensitivity}
+
+The event score and continuing feature summaries depend on the correspondence threshold $\theta$. To check how the summaries vary with this parameter, we compute them for a set of tested values of $\theta$. In this section, the active correspondence score is the range-space score $q_R$.
+
+For each dataset and threshold, \autoref{tab:range-sensitivity-summary} reports the top interval, the mean event score, the maximum event score, the maximum continuing feature lifetime, and the median continuing feature lifetime. The mean event score is the average event score over all adjacent timestep pairs at the given threshold and summarizes the overall amount of temporal change or ambiguity across the trajectory. The maximum event score is the largest event score over all adjacent timestep pairs. The reported top interval is the interval where this strongest change or ambiguity occurs. The maximum lifetime is the length of the longest continuing feature track after thresholding links at $\theta$, while the median lifetime summarizes the typical persistence of continuing tracks. Because the event score is not normalized, its values should be compared within a dataset and threshold setting rather than interpreted as absolute scores across different datasets.
+
+
+\begin{table*}[t]
+\centering
+\caption{
+Range sensitivity summary for the tested correspondence thresholds. Event scores and continuing feature lifetimes are computed using the range-space correspondence score $q_R$. Values are intended for comparison within each dataset.
+}
+\label{tab:range-sensitivity-summary}
+\begin{tabular}{lllrrrr}
+    \toprule
+    Dataset & $\theta$ & Top interval & Mean event score & Max event score & Max lifetime & Median lifetime \\
+    \midrule
+    Torus & 0.3 & 50--51 & 48.27 & 53.08 & 100 & 1 \\
+    Torus & 0.4 & 50--51 & 48.27 & 53.08 & 100 & 1 \\
+    Torus & 0.5 & 50--51 & 48.31 & 53.08 & 100 & 1 \\
+    Torus & 0.6 & 50--51 & 48.31 & 53.08 & 100 & 1 \\
+    Torus & 0.7 & 50--51 & 48.31 & 53.08 & 100 & 1 \\
+    \midrule
+    MVK state 1 & 0.3 & 29.03--29.51 & 16.64 & 26.77 & 83 & 6 \\
+    MVK state 1 & 0.4 & 29.03--29.51 & 10.59 & 27.77 & 83 & 5 \\
+    MVK state 1 & 0.5 & 29.03--29.51 & 8.55 & 35.77 & 83 & 3 \\
+    MVK state 1 & 0.6 & 29.03--29.51 & 9.99 & 45.77 & 83 & 1 \\
+    MVK state 1 & 0.7 & 29.03--29.51 & 12.33 & 49.77 & 83 & 1 \\
+    \midrule
+    MVK state 2 & 0.3 & 28.06--28.54 & 18.28 & 35.21 & 82 & 3 \\
+    MVK state 2 & 0.4 & 28.06--28.54 & 12.43 & 31.21 & 82 & 2 \\
+    MVK state 2 & 0.5 & 27.58--28.06 & 11.58 & 37.21 & 82 & 2 \\
+    MVK state 2 & 0.6 & 27.58--28.06 & 13.62 & 45.21 & 58 & 1 \\
+    MVK state 2 & 0.7 & 27.58--28.06 & 17.30 & 47.21 & 57 & 1 \\
+    \midrule
+    \textit{cis}-stilbene & 0.3 & 243.82--244.31 & 30.76 & 45.53 & 494 & 28 \\
+    \textit{cis}-stilbene & 0.4 & 288.21--288.33 & 17.98 & 54.49 & 415 & 5 \\
+    \textit{cis}-stilbene & 0.5 & 288.21--288.33 & 12.02 & 54.49 & 163 & 3 \\
+    \textit{cis}-stilbene & 0.6 & 288.21--288.33 & 11.98 & 54.49 & 142 & 2 \\
+    \textit{cis}-stilbene & 0.7 & 288.21--288.33 & 14.67 & 54.49 & 101 & 1 \\
+    \bottomrule
+    \end{tabular}
+\end{table*}
+
+The sensitivity summary shows that the dominant intervals are stable for several datasets over the tested thresholds. For the torus and MVK state 1 datasets, the top interval remains unchanged across all tested values. For MVK state 2, the top interval shifts from $28.06$--$28.54$~fs to $27.58$--$28.06$~fs at higher thresholds. For \textit{cis}-stilbene, the top interval changes between $\theta=0.3$ and $\theta=0.4$, after which the same interval remains dominant for the remaining tested thresholds.
+
+The maximum continuing feature lifetime generally decreases as $\theta$ increases, because stricter thresholds remove weaker links and break long tracks into shorter ones. This behavior is most visible for \textit{cis}-stilbene, where the maximum lifetime decreases from $494$ at $\theta=0.3$ to $101$ at $\theta=0.7$. The median lifetime also decreases with increasing threshold, indicating that typical tracks become shorter as the continuation criterion becomes stricter. This trend is especially pronounced for \textit{cis}-stilbene, suggesting less stable range-space continuations under higher thresholds.
+
+\begin{comment}
+
+\section{Domain-Sensitivity Summary}
+\label{sec:supp-domain-sensitivity}
+
+We also summarize the sensitivity of the domain-active view. In this case, event scores and continuing feature lifetimes are computed using the domain-active score $q_D$, with the adaptive threshold values used by the prototype. These summaries should be interpreted more cautiously than the range-space summaries because a high-scoring interval indicates a timestep pair where domain supported continuations become weak or ambiguous, but it does not by itself identify the physical or chemical meaning of that change.
+
+\begin{table*}[t]
+\centering
+\caption{
+Domain-sensitivity summary for the adaptive thresholds used in the domain-active interface. Event scores and continuing feature lifetimes are computed using the domain-active score $q_D$. For each dataset and threshold $\theta$, the table reports the highest scoring adjacent interval, the mean event score over all adjacent intervals, the maximum event score, the maximum continuing feature lifetime, and the median continuing feature lifetime. Because the event score is not normalized, values are intended for within dataset comparison. The top intervals indicate where domain supported continuations are weakest or most ambiguous under the selected threshold, but further inspection is required to interpret the underlying spatial or chemical behavior.
+}
+\label{tab:domain-sensitivity-summary}
+  \begin{tabular}{lllrrrr}
+  \toprule
+  Dataset & $\theta$ & Top interval & Mean event score & Max event score & Max lifetime & Median lifetime \\
+  \midrule
+  Torus & 0 & 49--50 & 41.983 & 48.927 & 100 & 1 \\
+  Torus & 0.001 & 2--3 & 58.740 & 59.542 & 100 & 1 \\
+  Torus & 0.014 & 2--3 & 56.710 & 59.542 & 100 & 1 \\
+  Torus & 0.066 & 2--3 & 58.023 & 59.542 & 88 & 1 \\
+  \midrule
+  MVK state 1 & 0.013 & 19.83--20.32 & 54.150 & 58.139 & 83 & 22 \\
+  MVK state 1 & 0.035 & 23.71--24.19 & 53.187 & 57.192 & 83 & 1 \\
+  MVK state 1 & 0.132 & 5.32--5.81 & 55.028 & 57.840 & 83 & 1 \\
+  MVK state 1 & 0.363 & 23.71--24.19 & 55.016 & 56.192 & 83 & 1 \\
+  \midrule
+  MVK state 2 & 0.009 & 15.48--15.96 & 55.064 & 58.593 & 82 & 22 \\
+  MVK state 2 & 0.031 & 13.06--13.55 & 54.546 & 58.902 & 82 & 1 \\
+  MVK state 2 & 0.098 & 12.58--13.06 & 56.546 & 58.881 & 82 & 1 \\
+  MVK state 2 & 0.240 & 12.58--13.06 & 55.916 & 58.881 & 37 & 1 \\
+  \midrule
+  \textit{cis}-stilbene & 0.024 & 22.25--22.74 & 55.573 & 59.154 & 704 & 205 \\
+  \textit{cis}-stilbene & 0.053 & 207.06--207.54 & 54.709 & 58.912 & 704 & 1 \\
+  \textit{cis}-stilbene & 0.103 & 162.07--162.55 & 54.722 & 59.197 & 232 & 1 \\
+  \textit{cis}-stilbene & 0.165 & 24.19--24.67 & 55.911 & 59.216 & 90 & 1 \\
+  \bottomrule
+  \end{tabular}
+\end{table*}
+
+The domain-sensitivity table shows that the strongest domain-active intervals can change with the adaptive threshold. For the torus dataset, the top interval changes from $49$--$50$ at the lowest threshold to $2$--$3$ for the remaining adaptive thresholds. For MVK state 1, the top interval alternates among $19.83$--$20.32$~fs, $23.71$--$24.19$~fs, and $5.32$--$5.81$~fs. For MVK state 2, the top interval shifts toward earlier intervals as the threshold increases, ending at $12.58$--$13.06$~fs for the two highest adaptive thresholds. For \textit{cis}-stilbene, the top interval varies across thresholds, suggesting that the strongest changes in domain supported continuity occur in different temporal regions depending on the strictness of the domain criterion.
+
+The lifetime summaries provide additional context. At lower adaptive thresholds, at least one long domain supported track can persist through most or all of the sequence. At stricter thresholds, these long tracks can break substantially; for example, the maximum lifetime for \textit{cis}-stilbene decreases from $704$ to $90$, and for MVK state 2 it decreases from $82$ to $37$ at the highest threshold. The median lifetime is often much smaller than the maximum lifetime, frequently dropping to $1$ at stricter thresholds. This indicates that although one long track may survive, typical domain supported tracks are short. This behavior is consistent with the challenges of domain-active tracking, where domain vertices can be redistributed among sheets across adjacent timesteps.
+\end{comment}
+
+\section{Interaction performance}
+\label{sec:supp-browser-scale}
+
+\begin{table*}[t]
+\centering
+\caption{
+Interaction performance details for full sequence views. Link counts are adjacent range-overlap links at timestep sampling $s=1$. The reported update time is for switching to weighted crossing reduced ordering.
+}
+\label{tab:browser-interaction-scale}
+\begin{tabular}{lrrrr}
+\toprule
+Dataset/view & Top sheets & Nodes & Links & Weighted crossing update \\
+\midrule
+\textit{cis}-stilbene & 10 & 7040 & $6.7{\times}10^4$ & $5$--$7$ s \\
+\textit{cis}-stilbene & 20 & 14080 & $2.36{\times}10^5$ & $\sim30$ s \\
+MVK state 1 & 20 & 1660 & $2.15{\times}10^4$ & interactive \\
+MVK state 2 & 20 & 1640 & $1.97{\times}10^4$ & interactive \\
+Torus & 20 & 2000 & $1.09{\times}10^4$ & interactive \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\autoref{tab:browser-interaction-scale} summarizes the interaction performance for the full sequence views. The MVK and torus views remain interactive for the tested settings. The \textit{cis}-stilbene dataset is substantially larger because it contains $704$ timesteps. With the top $10$ sheets per timestep, switching to weighted crossing reduced ordering takes approximately $5$--$7$ seconds. With the top $20$ sheets per timestep, the number of visible nodes and links roughly doubles or more, and the corresponding update takes approximately $30$ seconds.
+
+These timings refer only to layout updates, not to Reeb space computation or sheet extraction. The most expensive preprocessing stages are naturally parallelizable. Reeb space extraction can be run independently for each timestep, range-space matching can be parallelized over timestep pairs, and sheet or spatial context image rendering can be parallelized over timesteps, sheets, and selected isovalues.
+
+
+
+
+
+
+
+%\bibliographystyle{abbrv-doi}
+%\bibliography{bib}
+
+\end{document}
