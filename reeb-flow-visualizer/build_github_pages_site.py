@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,6 @@ DEFAULT_DATASET_ROOT = Path("/home/mohit/Desktop/postdoc/timeVaryingReebSpace/hp
 DEFAULT_DATASETS = ("torus", "MVK_s1", "MVK_s2")
 TEXT_FILE_SUFFIXES = {".html", ".css", ".js", ".json", ".md", ".txt"}
 LOCAL_PATH_MARKERS = ("/home/mohit", "/Desktop/postdoc", "timeVaryingReebSpace")
-PUBLIC_CSS_VERSION = "pages-adaptive-v1"
 
 
 @dataclass(frozen=True)
@@ -348,7 +348,12 @@ def public_dataset_selector_script(manifest: list[dict[str, Any]], current_id: s
 """
 
 
-def inject_dataset_selector(dataset_dir: Path, manifest: list[dict[str, Any]], current_id: str) -> None:
+def inject_dataset_selector(
+    dataset_dir: Path,
+    manifest: list[dict[str, Any]],
+    current_id: str,
+    css_version: str,
+) -> None:
     index_path = dataset_dir / "index.html"
     style_path = dataset_dir / "style.css"
     html = index_path.read_text(encoding="utf-8")
@@ -357,7 +362,7 @@ def inject_dataset_selector(dataset_dir: Path, manifest: list[dict[str, Any]], c
 
     html = re.sub(
         r'href="style\.css(?:\?v=[^"]*)?"',
-        f'href="style.css?v={PUBLIC_CSS_VERSION}"',
+        f'href="style.css?v={css_version}"',
         html,
         count=1,
     )
@@ -401,9 +406,9 @@ body.public-page .dataset-switcher select {
     style_path.write_text(style_path.read_text(encoding="utf-8") + public_css, encoding="utf-8")
 
 
-def inject_dataset_selectors(output_dir: Path, manifest: list[dict[str, Any]]) -> None:
+def inject_dataset_selectors(output_dir: Path, manifest: list[dict[str, Any]], css_version: str) -> None:
     for item in manifest:
-        inject_dataset_selector(output_dir / "datasets" / item["id"], manifest, item["id"])
+        inject_dataset_selector(output_dir / "datasets" / item["id"], manifest, item["id"], css_version)
 
 
 def copy_dataset_viewer(dataset: DatasetSpec, output_dir: Path) -> dict[str, Any]:
@@ -483,7 +488,7 @@ def build_site(args: argparse.Namespace) -> None:
         print(f"Copying {dataset.dataset_id}...")
         manifest.append(copy_dataset_viewer(dataset, output_dir))
 
-    inject_dataset_selectors(output_dir, manifest)
+    inject_dataset_selectors(output_dir, manifest, f"pages-{int(time.time())}")
     write_dataset_loader_index(output_dir, manifest)
     write_readme(output_dir, manifest)
     assert_no_local_paths(output_dir)
