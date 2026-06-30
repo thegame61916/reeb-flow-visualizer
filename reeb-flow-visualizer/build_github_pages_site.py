@@ -402,6 +402,9 @@ body.public-page .dataset-switcher select {
   height: 30px;
   min-width: 110px;
 }
+body.public-page #saveFigurePreset {
+  display: none;
+}
 """
     style_path.write_text(style_path.read_text(encoding="utf-8") + public_css, encoding="utf-8")
 
