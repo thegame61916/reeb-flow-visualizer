@@ -12,10 +12,13 @@ For each input `downsampledGrids/*.vtu`, the worker writes:
 - `compareSheetShapesCache/cache/vtp/<step>.sheets.vtp`
 - `sheetFiberSurfaces/labeled/<step>/{f_pos,g_pos,f_neg,g_neg}.vtp`
 - `sheetFiberSurfaces/labeled/<step>/labeled_fiber_surfaces_manifest.json`
+- if perturbation recovery succeeds, a perturbed copy under
+  `downsampledGrids/<step>.vtu`
 - logs and a tab-separated status file under `sankey/`
 
 The worker is resumable. With `REBUILD=0` it skips timesteps where all expected
-artifacts already exist.
+artifacts already exist. It also skips entries recorded in
+`sankey/hpc_completed_stems.txt` when `SKIP_COMPLETED_STEMS=1`.
 
 Default remote paths:
 
@@ -53,6 +56,13 @@ REBUILD=1 hpc/submit_fv99_stage1_dataset.sh MVK_s1 8
 # Disable fiber-surface generation if you only want .rs/.rsi/sheet VTP.
 RUN_FIBERS=0 hpc/submit_fv99_stage1_dataset.sh MVK_s1 8
 
+# Disable the one-shot perturbation retry.
+PERTURB_ON_FAIL=0 hpc/submit_fv99_stage1_dataset.sh MVK_s1 8
+
+# Override range fields or fixed fiber isovalues.
+F_NAME=orb00 G_NAME=orb01 F_ISO=0.05 G_ISO=0.05 \
+hpc/submit_fv99_stage1_dataset.sh stilbene 16
+
 # Use a different fv99, input root, or output root.
 FV99=/path/to/fv99 \
 DATASETS_ROOT=/path/to/input/datasets \
@@ -73,9 +83,12 @@ Each successful timestep is recorded in:
 $OUTPUT_DATASETS_ROOT/<dataset>/sankey/hpc_completed_stems.txt
 ```
 
-This file is small and is used to avoid recomputing timesteps after bulky
-artifacts have been copied away and removed from Tetralith. Preserve the
-`hpc_completed_stems.txt` file if you clean output directories.
+New entries are written as `stem<TAB>run_fibers=<0-or-1>` so runs with and
+without fiber artifacts can be distinguished; legacy files containing only
+bare stems are still accepted. This file is small and is used to avoid
+recomputing timesteps after bulky artifacts have been copied away and removed
+from Tetralith. Preserve the `hpc_completed_stems.txt` file if you clean output
+directories.
 
 A safe cleanup after copying a dataset locally is to remove bulky artifact
 folders but keep `sankey/hpc_completed_stems.txt`, for example:
@@ -135,6 +148,13 @@ from the local copied artifact set.
 
 
 ## Perturbation Python
+
+When primary `.rs`, `.rsi`, and sheet VTP outputs are missing after the first
+`fv99` run, the worker perturbs the VTU once by default
+(`PERTURB_ON_FAIL=1`, `PERTURB_EPSILON=0.00001`) and retries. With
+`REPLACE_ORIGINAL_ON_PERTURB=1`, the successful perturbed VTU is stored in the
+output dataset's `downsampledGrids/` folder and used for subsequent fiber
+surface generation.
 
 `perturb.py` imports NumPy. The worker uses `PERTURB_PYTHON` to run it; the
 default is `python3`. On Tetralith, first load or create a Python environment

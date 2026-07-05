@@ -481,10 +481,22 @@ window.ReebViewerCommon.createTooltipEngine = function(nodeOrSelection, opts) {
     node.style.display = hidden ? 'none' : 'block';
   };
 
+  const parseZoom = value => {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+  };
+
+  const effectiveCssZoom = () => {
+    const htmlZoom = parseZoom(window.getComputedStyle(document.documentElement).zoom);
+    const bodyZoom = document.body ? parseZoom(window.getComputedStyle(document.body).zoom) : 1;
+    return htmlZoom * bodyZoom;
+  };
+
   const showAt = (html, x, y) => {
     node.innerHTML = html ?? '';
     setHidden(false);
     const rect = node.getBoundingClientRect();
+    const cssZoom = effectiveCssZoom();
     const left = Math.min(
       Math.max(edgePad, (Number(x) || 0) + offsetX),
       Math.max(edgePad, window.innerWidth - rect.width - edgePad)
@@ -493,8 +505,8 @@ window.ReebViewerCommon.createTooltipEngine = function(nodeOrSelection, opts) {
       Math.max(edgePad, (Number(y) || 0) + offsetY),
       Math.max(edgePad, window.innerHeight - rect.height - edgePad)
     );
-    node.style.left = `${left}px`;
-    node.style.top = `${top}px`;
+    node.style.left = `${left / cssZoom}px`;
+    node.style.top = `${top / cssZoom}px`;
   };
 
   const showFromEvent = (event, html) => {

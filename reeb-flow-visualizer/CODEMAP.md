@@ -18,18 +18,25 @@ Then open `http://localhost:8000`.
 
 `run_pipeline.py` controls the active stages:
 
-1. `stage_01_run_fv99.py` optionally generates `.rs` and `.rsi` from `.vtu`.
+1. `stage_01_run_fv99.py` optionally generates `.rs`, `.rsi`, sheet VTP, and
+   fixed labeled fiber-surface artifacts from `.vtu`.
 2. `stage_02_build_sankey_data.py` converts `.rsi` files into per-timestep
    `.rsijson` files containing top sheets and their domain vertices.
 3A. `compareSheetShapes/compare_sheet_shapes.py` computes cached sheet-shape
-    descriptors and adjacent-timestep shape-match scores.
-3B. `stage_03_compute_sheet_overlaps.py` computes adjacent-timestep domain
-    vertex overlaps and attaches available shape/range metrics to overlap links.
+    descriptors and stride-aware shape-match scores.
+3B. `stage_03_compute_sheet_overlaps.py` computes stride-aware domain vertex
+    overlaps and attaches available shape/range metrics to overlap links.
 4A. `SheetRenderer/render_rs_directory_orbital_colours.py` renders sheet PNGs.
 4B. `stage_04_compute_sheet_fiber_surfaces.py` renders top-sheet fiber-surface
-    images.
-5. `unified_sankey_viewer/stage_07_unified_sankey_viewer.py` writes the
-   self-contained browser viewer.
+    images from fixed isovalues.
+4C. `stage_04c_compute_adaptive_fiber_surfaces.py` renders adaptive `f`
+    fiber-surface images for datasets configured with adaptive fiber mode.
+5A. `unified_sankey_viewer/stage_07_unified_sankey_viewer.py` builds
+    `sankey/tracking_data.json`.
+5B. `stage_06_analyze_tracking_results.py` builds CSV/plot diagnostics and
+    `sankey/tracking_analysis/viewer_analysis.json`.
+5C. `unified_sankey_viewer/stage_07_unified_sankey_viewer.py` writes the
+    self-contained browser viewer.
 
 The old Plotly Sankey output and old dashboard shell have been removed from the
 active code path.
@@ -45,7 +52,10 @@ active code path.
 - `OUTPUT_DIR`
 - `RSI_JSON_DIR`
 - `UNIFIED_VIEWER_DIR`
+- `TRACKING_DATA_FILE`
+- `TRACKING_ANALYSIS_DIR`
 - `SHEET_IMAGE_DIR`
+- `FIBER_SURFACE_IMAGE_DIR`
 - `OVERLAP_FILE`
 - `FV99`
 - `EPSILON`
@@ -53,6 +63,7 @@ active code path.
 - `RESERVE_CORES`
 - `TOP_N_SHEETS`
 - `VIEWER_DEFAULT_TOP_SHEETS`
+- `SANKEY_TIMESTEP_STRIDE_MAX`
 - `SHAPE_SCORE_DEFAULT_WEIGHTS`
 - `RANGE_SCORE_DEFAULT_WEIGHTS`
 
@@ -66,15 +77,18 @@ Runtime library paths are also derived here for VTK/TTK/FV99.
 
 - `.rs` files to `RS_DIR`
 - `.rsi` files to `RSI_DIR`
+- sheet geometry VTP files to `SHEET_VTP_CACHE_DIR`
+- fixed labeled fiber-surface VTP files to `FIBER_SURFACE_LABELED_DIR`, unless
+  the dataset uses adaptive fiber mode
 
 `fv99` is run with `OMP_NUM_THREADS` set from `FV99_OMP_THREADS` in
 `common.py`. The default is `1` to avoid OpenMP races in the arrangement code.
 
-On `main`, stage 1 does not retry failed files with perturbation. If `fv99`
-returns a non-zero code and does not produce both `.rs` and `.rsi`, that
-timestep is logged and downstream stages will not include it because they only
-discover timesteps with matching `.rs`/`.rsi` inputs. The perturbation-retry
-workflow is kept on the `perturbation-degenerate-cases` branch.
+If `fv99` returns a non-zero code and does not produce the primary `.rs`,
+`.rsi`, and sheet VTP outputs, Stage 1 perturbs the input VTU once with
+`FV99_PERTURB_SCRIPT` and retries. A successful local retry replaces the input
+VTU with the perturbed copy and logs the recovery. Failed, partial, and
+recovered timesteps are written to the Stage 1 log files under `OUTPUT_DIR`.
 
 This stage is disabled by default because the Reeb-space outputs are usually
 already computed.
@@ -90,9 +104,14 @@ Each top sheet stores:
 - `rank`
 - `area`
 - `num_vertices`
+- `num_vertices_before_low_scalar_filter`
+- `num_low_scalar_filtered_vertices`
 - `vertices`
 
 `TOP_N_SHEETS` controls how many sheets are preprocessed per timestep.
+When `EXCLUDE_LOW_SCALAR_VALUES_NEAR_ORIGIN` is enabled, Stage 2 filters
+regular vertices whose configured `(f, g)` scalar pair lies close to the range
+origin and records the filter metadata in each `.rsijson`.
 
 ### Stage 3A: Shape Matching
 
@@ -107,32 +126,40 @@ Important outputs:
 
 - `results/sheet_shape_matches.json`
 - `results/sheet_shape_summary.json`
+- `cache/global_bounds.json`
+- `cache/manifest.json`
 - `cache/timesteps/*.json`
 - `cache/timesteps/*.npz`
 - `cache/matches/*.json`
 - `cache/vtp/*.sheets.vtp`
 
-Range matching exports sheet geometry by running `fv99 --headless` through
-`SheetRenderer/render_rs_sheets.py`. That export also sets `OMP_NUM_THREADS`
+Range matching reads cached sheet geometry from `SHEET_VTP_CACHE_DIR`. If a VTP
+is missing, it can export one by running `fv99 --headless` through
+`SheetRenderer/render_rs_sheets.py`; that export also sets `OMP_NUM_THREADS`
 from `FV99_OMP_THREADS`, matching stage 1. If a timestep cannot export a VTP,
-the cache build fails for that timestep; `main` does not synthesize fallback
+the timestep is skipped for shape matching; `main` does not synthesize fallback
 range metrics from `.rsi` alone.
 
 Per-link range metrics include:
 
 - `final_score`
 - `shape_iou`
-- `support_jaccard`
+- `geometry_iou`
 - `area_ratio`
 - `bbox_iou`
 - `centroid_similarity`
 
+`SANKEY_TIMESTEP_STRIDE_MAX` controls which direct timestep strides are
+precomputed. The match file contains stride-one compatibility data in
+`pairwise_matches` and all configured strides in `pairwise_matches_by_stride`.
+
 ### Stage 3B: Domain Overlaps
 
 `stage_03_compute_sheet_overlaps.py` reads all `.rsijson` files and computes
-adjacent-timestep sheet overlaps.
+sheet overlaps for strides `1..SANKEY_TIMESTEP_STRIDE_MAX`.
 
-For every source sheet at timestep `t` and target sheet at `t + 1`, it computes:
+For every source sheet at timestep `t` and target sheet at `t + stride`, it
+computes:
 
 `overlap_vertices = |source_vertices intersection target_vertices|`
 
@@ -148,9 +175,10 @@ matching sheet pair exists.
 `SheetRenderer/render_rs_directory_orbital_colours.py` renders the full sheet
 view and top-sheet PNGs into `SHEET_IMAGE_DIR`.
 
-The stage reuses cached VTP geometry by default. `SHEET_RENDERER_REBUILD_CACHE`
-and `SHEET_RENDERER_CLEAN_CACHE` in `common.py` control explicit cache rebuilds
-or cache cleanup.
+The stage reads the Stage 1-owned sheet VTP cache from `SHEET_VTP_CACHE_DIR`.
+The `--rebuild-cache` and `--clean-cache` CLI flags are retained for
+compatibility but are intentionally ignored; rerun Stage 1 to regenerate sheet
+VTP geometry.
 
 With `SHEET_RENDERER_USE_GLOBAL_BOUNDS = True`, the stage first computes one
 global 2D sheet-space extent across all timesteps, expands it to the configured
@@ -163,10 +191,44 @@ timesteps.
 `stage_04_compute_sheet_fiber_surfaces.py` renders top-sheet fiber-surface
 images into `FIBER_SURFACE_IMAGE_DIR`.
 
-The stage uses the fiber-surface isovalues, ParaView state file, and render
-retry settings from `common.py`.
+The stage uses the fixed fiber-surface isovalues, ParaView state file, render
+retry settings, and Stage 1 labeled fiber-surface VTP artifacts from
+`common.py`.
 
-### Stage 5: Unified Viewer
+### Stage 4C: Adaptive Fiber Surfaces
+
+`stage_04c_compute_adaptive_fiber_surfaces.py` is enabled when
+`FIBER_SURFACE_MODE == "adaptive_f_range_change"`.
+
+It uses stride-one shape matches and cached sheet descriptors to choose one
+adaptive `f` value per top sheet, generates labeled fiber surfaces for those
+values, thresholds them by sheet id, and renders the result into
+`FIBER_SURFACE_IMAGE_DIR`.
+
+### Stage 5A: Unified Tracking Data
+
+`build_unified_sankey_data_stage()` prepares the full tracking payload and
+writes:
+
+- `BASE_DIR/sankey/tracking_data.json`
+
+This file keeps rich per-match metadata for analysis and paper exports.
+
+### Stage 5B: Tracking Analysis
+
+`stage_06_analyze_tracking_results.py` reads tracking/viewer data and writes:
+
+- `metric_summary.csv`
+- `best_target_agreement.csv`
+- `event_scores.csv`
+- `sheet_lifetimes.csv`
+- `interesting_intervals.json`
+- `viewer_analysis.json`
+- plot PNG/PDF files
+
+The viewer embeds `viewer_analysis.json` when it exists.
+
+### Stage 5C: Unified Viewer
 
 `unified_sankey_viewer/stage_07_unified_sankey_viewer.py` writes:
 
@@ -193,21 +255,27 @@ The unified viewer supports:
 - multiple Sankey panels
 - range selection and range deletion
 - synchronized top range bar
+- timestep stride selection
 - mouse pan and wheel zoom
 - panel resizing
 - threshold controls
+- support filters
 - top sheet count control
-- node coloring by solid color, sheet area, or vertex count
+- node coloring by solid color, sheet area, vertex count, or sheet centroid
 - hide nodes with no visible links
 - strongest outgoing link per node
+- hide sheet labels
 - link darkness control
-- sheet image hover/click details
+- sheet and fiber-surface image hover/click details
+- image zoom overlays
+- tracking-analysis interval, track, and sensitivity views
+- figure preset export for paper screenshots
 
 The backend still computes and stores some diagnostics that are intentionally
 not exposed in the current viewer UI: Sheet geometry IoU, best-supported
-range/domain intervals, and domain/range complementarity. The JS runtime keeps the
-corresponding data paths so these can be re-enabled without rerunning earlier
-pipeline stages.
+range/domain intervals, domain-stability summaries, and domain/range
+complementarity. The JS runtime keeps the corresponding data paths so these can
+be re-enabled without rerunning earlier pipeline stages.
 
 ## Generated Parent Directory
 
@@ -215,6 +283,9 @@ pipeline stages.
 
 - `sheet_overlaps.json`
 - `rsi_json/`
+- `tracking_data.json`
+- `tracking_analysis/`
+- `paper_exports/`
 - warning logs
 
 The browser entry point is the generated `unified_sankey_viewer/` directory
